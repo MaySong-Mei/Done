@@ -6,7 +6,7 @@
 //  set to (`WristSnapshot.language`), falling back to the watch's locale.
 //
 
-import Foundation
+import SwiftUI
 
 struct WristStrings {
     let isChinese: Bool
@@ -18,24 +18,22 @@ struct WristStrings {
         locale = Locale(identifier: isChinese ? "zh_CN" : "en_US")
     }
 
-    var appTitle: String { "Done" }
     var noPhoneData: String { isChinese ? "在 iPhone 上打开 Done,同步一次" : "Open Done on iPhone once to sync" }
     var noTypes: String { isChinese ? "iPhone 上还没有类型" : "No types on iPhone yet" }
     var finish: String { isChinese ? "结束" : "Finish" }
     var extend: String { "+15" }
     var editOnPhone: String { isChinese ? "重复事件请在 iPhone 上调整" : "Adjust repeating events on iPhone" }
     var sending: String { isChinese ? "发送中…" : "Sending…" }
+    /// The names step's last row: the block named after its type alone.
+    func justType(_ type: String) -> String { isChinese ? "仅「\(type)」" : "Just \(type)" }
 
-    func sinceLastRecord(_ interval: TimeInterval) -> String {
-        let minutes = max(0, Int(interval / 60))
-        let hours = minutes / 60
-        let rest = minutes % 60
-        if isChinese {
-            let span = hours > 0 ? (rest > 0 ? "\(hours) 小时 \(rest) 分钟" : "\(hours) 小时") : "\(minutes) 分钟"
-            return "距上次记录 \(span)"
-        }
-        let span = hours > 0 ? (rest > 0 ? "\(hours)h \(rest)m" : "\(hours)h") : "\(minutes) min"
-        return "\(span) since last record"
+    /// The record page's clock row: "距上次 2小时16分" / "2h16m since last",
+    /// the time in white.
+    func sinceLastHeader(hours: Double) -> Text {
+        let span = Text(compactDuration(hours: hours)).foregroundStyle(.white)
+        return isChinese
+            ? Text("距上次 ").foregroundStyle(.secondary) + span
+            : span + Text(" since last").foregroundStyle(.secondary)
     }
 
     func endsAt(_ date: Date) -> String {
@@ -47,30 +45,39 @@ struct WristStrings {
         return isChinese ? "到 \(time)" : "until \(time)"
     }
 
-    var todayTitle: String { isChinese ? "今天" : "Today" }
-    var weekTitle: String { isChinese ? "本周" : "This week" }
-    var recordTitle: String { isChinese ? "记录" : "Record" }
-    var statsTitle: String { isChinese ? "统计" : "Stats" }
+    /// "10:15–11:00": a drawn block's range, on the block and over the
+    /// type picker.
+    func timeRange(_ start: Date, _ end: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.dateFormat = "HH:mm"
+        return "\(formatter.string(from: start))–\(formatter.string(from: end))"
+    }
+
+    func periodLabel(_ period: WristStatsPeriod) -> String {
+        switch period {
+        case .today: return isChinese ? "今天" : "Today"
+        case .threeDays: return isChinese ? "近 3 天" : "Last 3 Days"
+        case .sevenDays: return isChinese ? "近 7 天" : "Last 7 Days"
+        case .thirtyDays: return isChinese ? "近 30 天" : "Last 30 Days"
+        }
+    }
+
     var unlogged: String { isChinese ? "未记录" : "Unlogged" }
     var others: String { isChinese ? "其他" : "Other" }
     var statsNoData: String { isChinese ? "打开 iPhone 上的 Done 更新统计" : "Open Done on iPhone to update stats" }
     var statsStale: String { isChinese ? "统计数据较旧,打开 iPhone 上的 Done 更新" : "Stats are out of date — open Done on iPhone" }
+    var statsLeftOut: String { isChinese ? "这一段还没同步到手表,请在 iPhone 上查看" : "Not on the watch yet — see it on iPhone" }
     var nothingLogged: String { isChinese ? "还没有记录" : "Nothing logged yet" }
 
-    /// "2h 15m" / "2 小时 15 分"; minutes alone under an hour.
-    func duration(hours: Double) -> String {
+    /// "21h34m" / "21小时34分" — no spaces, for the clock row.
+    func compactDuration(hours: Double) -> String {
         let minutes = max(0, Int((hours * 60).rounded()))
         let h = minutes / 60, m = minutes % 60
         if isChinese {
-            return h > 0 ? (m > 0 ? "\(h) 小时 \(m) 分" : "\(h) 小时") : "\(m) 分钟"
+            return h > 0 ? (m > 0 ? "\(h)小时\(m)分" : "\(h)小时") : "\(m)分钟"
         }
-        return h > 0 ? (m > 0 ? "\(h)h \(m)m" : "\(h)h") : "\(m)m"
-    }
-
-    func dayHeader(logged: Double, rate: Int?) -> String {
-        let span = duration(hours: logged)
-        guard let rate else { return isChinese ? "已记录 \(span)" : "\(span) logged" }
-        return isChinese ? "已记录 \(span) · \(rate)%" : "\(span) logged · \(rate)%"
+        return h > 0 ? (m > 0 ? "\(h)h\(m)m" : "\(h)h") : "\(m)m"
     }
 
     func hourLabel(_ hour: Int) -> String { String(format: "%02d", hour) }

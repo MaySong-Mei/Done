@@ -8,8 +8,8 @@
 -- STATUS: APPLIED to staging 2026-10-26 01:41Z (supabase-staging.yml run
 -- 40255421366, dispatched on king ff93997; key registry loaded, 41 rows;
 -- a Debug simulator upload landed one daily_rollup row under qa-a).
--- NOT APPLIED to production: it lands there when main next receives this
--- file (supabase.yml). Verified on the local stack by
+-- APPLIED to production 2026-10-26 02:55Z (supabase.yml run 40261489127 on
+-- main 8a19754; key registry loaded, 41 rows). Verified on the local stack by
 -- done-mcp/supabase/tests/run_checks.sh (db reset, then sync_feed_checks.sql,
 -- telemetry_checks.sql, telemetry_wire_conformance.sql).
 --

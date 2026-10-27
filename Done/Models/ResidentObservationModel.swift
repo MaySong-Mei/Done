@@ -709,6 +709,8 @@ struct FixVerdict: Equatable {
     /// Release dailies.
     let alarm: Bool
     let readouts: [FixMetricReadout]
+    /// Distinct civil days among the Release dailies: one day on two
+    /// devices, or a day re-minted on consent, counts once (review P1-3).
     let releaseDayCount: Int
     /// Debug (or unattributed) records — displayed separately, NEVER
     /// feeding a verdict (R-F4.1).
@@ -727,6 +729,18 @@ enum FixWatchVerdictEvaluator {
 
     static func isRelease(_ run: SpikeRun) -> Bool {
         run.buildConfiguration == "release"
+    }
+
+    /// A record's civil day: the key it was minted with, or — a line older
+    /// than that stamp — the day its start falls on in `calendar`, which is
+    /// what the uploader sends for such a line.
+    static func dayKey(of run: SpikeRun, calendar: Calendar = .current) -> String {
+        if let dayKey = run.dayKey { return dayKey }
+        return TelemetryClaimKey.dayKey(forDayStart: calendar.startOfDay(for: run.startedAt), calendar: calendar).dayKey
+    }
+
+    static func distinctDayCount(_ runs: [SpikeRun]) -> Int {
+        Set(runs.map { dayKey(of: $0) }).count
     }
 
     static func partition(_ runs: [SpikeRun]) -> (release: [SpikeRun], nonReleaseCount: Int) {
@@ -874,7 +888,7 @@ enum FixWatchVerdictEvaluator {
             state: state(for: criteria, hasAnyReleaseData: hasData),
             alarm: false,
             readouts: criteria + reportOnly,
-            releaseDayCount: releaseDailies.count,
+            releaseDayCount: distinctDayCount(releaseDailies),
             nonReleaseCount: nonReleaseDailies + nonReleaseWindows,
             notes: notes + (cleanWindows.count < releaseWindows.count
                 ? ["\(releaseWindows.count - cleanWindows.count) 个窗口因外部写入污染被排除"]
@@ -926,7 +940,7 @@ enum FixWatchVerdictEvaluator {
                     passing: nil
                 ),
             ],
-            releaseDayCount: releaseDailies.count,
+            releaseDayCount: distinctDayCount(releaseDailies),
             nonReleaseCount: nonReleaseCount,
             notes: ["仅检测答错 visible: 的调用点;硬编码 visible: true 只计入 liveness、永不触发本 tripwire(该绕过只有 review 能抓);对 RootTabVisibility.isVisible 本身的腐坏不可见(R-F7)"]
         )
@@ -946,7 +960,7 @@ enum FixWatchVerdictEvaluator {
             state: state(for: criteria, hasAnyReleaseData: !releaseDailies.isEmpty),
             alarm: false,
             readouts: criteria,
-            releaseDayCount: releaseDailies.count,
+            releaseDayCount: distinctDayCount(releaseDailies),
             nonReleaseCount: nonReleaseCount,
             notes: ["逐手势计数(tap 臂),drag 不参与判定;修复前中位 72–208ms"]
         )

@@ -17,6 +17,9 @@ nonisolated enum CategoryTimeAccounting {
     struct Contributions {
         var categories: [String]
         var intervals: [[Event.TimeRange]]
+        /// Each occurrence's own range, uncut: what the watch's "latest
+        /// start" order reads (`WristForeground`).
+        var ranges: [Event.TimeRange] = []
     }
 
     /// The bucket an event's time goes to: its type, "Other" when it has none.
@@ -43,6 +46,7 @@ nonisolated enum CategoryTimeAccounting {
             guard !intervals.isEmpty else { continue }
             result.categories.append(category(of: occurrence.event))
             result.intervals.append(intervals)
+            result.ranges.append(occurrence.range)
         }
         return result
     }
@@ -78,15 +82,16 @@ nonisolated enum CategoryTimeAccounting {
 /// Pure: the caller supplies the clock, the calendar and the colours, as it
 /// does for `WidgetSnapshotBuilder`.
 nonisolated enum CategoryStatsBuilder {
-    /// The days written: from the earlier of this week's and this month's
-    /// start — the furthest back any period that includes `now` reaches —
-    /// to the end of the occurrence snapshots' window, so the widget can keep
-    /// answering for as long as it can keep showing events.
+    /// The days written: from the earliest start of any period that
+    /// includes `now` — this week's, this month's, or the watch's last N
+    /// days (`WristStatsPeriod`) — to the end of the
+    /// occurrence snapshots' window, so the widget can keep answering for as
+    /// long as it can keep showing events.
     static func coverage(now: Date, calendar: Calendar) -> (start: Date, end: Date) {
-        let week = CategoryStats.range(of: .week, containing: now, calendar: calendar)
-        let month = CategoryStats.range(of: .month, containing: now, calendar: calendar)
+        let starts = [CategoryStatsPeriod.week, .month].map { CategoryStats.range(of: $0, containing: now, calendar: calendar).start }
+            + WristStatsPeriod.allCases.map { $0.span(asOf: now, calendar: calendar).start }
         let end = WidgetSnapshotBuilder.window(now: now, calendar: calendar).end
-        return (min(week.start, month.start), end)
+        return (starts.min() ?? now, end)
     }
 
     /// The events as `payload` gets them off the main actor: the same
@@ -116,6 +121,9 @@ nonisolated enum CategoryStatsBuilder {
         var end: Date
         var n: Int
         var counts: [String: Int]
+        /// `WristForeground.winner` of the covering occurrences; nil when
+        /// one category covers the slice.
+        var winner: String? = nil
     }
 
     /// Every day `previous` covers, by its start, with the slices it holds
@@ -144,7 +152,12 @@ nonisolated enum CategoryStatsBuilder {
                     guard categories.indices.contains(index), let name = categories[index].name else { return [:] }
                     counts[name, default: 0] += count
                 }
-                slices.append(NamedSlice(start: start, end: end, n: n, counts: counts))
+                // The winner leads the list (`CategoryStatsPayload.winners`).
+                var winner: String?
+                if counts.count > 1, let first = slice.categoryIndices?.first {
+                    winner = categories[first].name
+                }
+                slices.append(NamedSlice(start: start, end: end, n: n, counts: counts, winner: winner))
             }
             result[dayStart] = slices
         }
@@ -157,7 +170,11 @@ nonisolated enum CategoryStatsBuilder {
         guard let previous, previous.version == CategoryStatsPayload.currentVersion,
               previous.calendar == CategoryStatsPayload.frame(of: calendar),
               let start = previous.coverageStart, let end = previous.coverageEnd,
-              previous.categories != nil, previous.days != nil else { return [] }
+              previous.categories != nil, previous.days != nil,
+              // A payload from before the winners is rebuilt whole once, so
+              // the watch's "latest start" rule has them everywhere.
+              previous.winners == true
+        else { return [] }
         return Set(CategoryStats.days(from: start, to: end, calendar: calendar).map { calendar.startOfDay(for: $0) })
     }
 
@@ -209,10 +226,22 @@ nonisolated enum CategoryStatsBuilder {
             for slice in Event.overlapSlices(contributions: contributions.intervals) {
                 var counts: [String: Int] = [:]
                 for index in slice.covering { counts[contributions.categories[index], default: 0] += 1 }
-                let named = NamedSlice(start: slice.start, end: slice.end, n: slice.covering.count, counts: counts)
-                // Adjacent slices that credit the same shares are one slice:
-                // cut anywhere, the merged slice gives what the two did.
-                if let last = slices.last, last.end == named.start, last.n == named.n, last.counts == named.counts {
+                let winner = counts.count > 1
+                    ? WristForeground.winner(slice.covering.map { index in
+                        WristForeground.Candidate(
+                            category: contributions.categories[index],
+                            start: contributions.ranges[index].start, end: contributions.ranges[index].end
+                        )
+                    })
+                    : nil
+                let named = NamedSlice(
+                    start: slice.start, end: slice.end, n: slice.covering.count, counts: counts, winner: winner
+                )
+                // Adjacent slices that credit the same shares, to the same
+                // winner, are one slice: cut anywhere, the merged slice gives
+                // what the two did.
+                if let last = slices.last, last.end == named.start, last.n == named.n, last.counts == named.counts,
+                   last.winner == named.winner {
                     slices[slices.count - 1].end = named.end
                 } else {
                     slices.append(named)
@@ -232,14 +261,19 @@ nonisolated enum CategoryStatsBuilder {
             categories: names.map { CategoryStatsPayload.Category(name: $0, colorHex: colorHex($0)) },
             days: namedDays.map { day in
                 CategoryStatsPayload.Day(start: day.start, slices: day.slices.map { slice in
-                    let ordered = slice.counts.keys.compactMap { indexOf[$0] }.sorted()
+                    // Index order, but the winner first: the watch reads it
+                    // there (`CategoryStatsPayload.winners`).
+                    let winner = slice.winner.flatMap { indexOf[$0] }
+                    let ordered = slice.counts.keys.compactMap { indexOf[$0] }
+                        .sorted { ($0 == winner ? -1 : $0) < ($1 == winner ? -1 : $1) }
                     return CategoryStatsPayload.Slice(
                         start: slice.start, end: slice.end, n: slice.n,
                         categoryIndices: ordered,
                         counts: ordered.map { slice.counts[names[$0]] ?? 0 }
                     )
                 })
-            }
+            },
+            winners: true
         )
     }
 }

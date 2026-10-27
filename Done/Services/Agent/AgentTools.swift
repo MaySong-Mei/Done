@@ -312,7 +312,7 @@ enum AgentToolRunner {
         event.type = args["type"] as? String ?? ""
         event.tags = args["tags"] as? [String] ?? []
         event = EventLogTemplateAdvisor().applySuggestion(to: event)
-        store.addCalendarEvent(event)
+        store.addCalendarEvent(event, creationMotion: .local)
         return jsonResult(success: true, message: "Created calendar event '\(title)' from \(displayDateTime.string(from: startTime)) to \(displayDateTime.string(from: endTime))", data: ["id": event.id.uuidString])
     }
 

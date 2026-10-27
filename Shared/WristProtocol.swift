@@ -155,6 +155,14 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
     /// watch's stats page reads it with the widget's own arithmetic
     /// (`CategoryStats.summary`), cutting running slices at its own clock.
     var stats: CategoryStatsPayload?
+    /// Settings → Apple Watch on the phone: what the stats page counts and
+    /// opens on. Missing (a phone before the section) reads as `.standard`,
+    /// the page as it always was.
+    var statsSettings: WristStatsSettings
+    /// Names the user gives each start-grid type, keyed by the type's title,
+    /// for the watch to offer when naming a new block (`WristTitles.swift`).
+    /// Empty from a phone before the field: the watch offers none.
+    var titleHints: [String: [WristTitleHint]]
 
     init(
         version: Int = WristSnapshot.currentVersion,
@@ -163,7 +171,9 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
         types: [WristType],
         occurrences: [WristOccurrence],
         receipts: [WristReceipt],
-        stats: CategoryStatsPayload? = nil
+        stats: CategoryStatsPayload? = nil,
+        statsSettings: WristStatsSettings = .standard,
+        titleHints: [String: [WristTitleHint]] = [:]
     ) {
         self.version = version
         self.generatedAt = generatedAt
@@ -172,10 +182,12 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
         self.occurrences = occurrences
         self.receipts = receipts
         self.stats = stats
+        self.statsSettings = statsSettings
+        self.titleHints = titleHints
     }
 
     private enum CodingKeys: String, CodingKey {
-        case version, generatedAt, language, types, occurrences, receipts, stats
+        case version, generatedAt, language, types, occurrences, receipts, stats, statsSettings, titleHints
     }
 
     init(from decoder: Decoder) throws {
@@ -187,6 +199,33 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
         occurrences = try container.decodeIfPresent([WristOccurrence].self, forKey: .occurrences) ?? []
         receipts = try container.decodeIfPresent([WristReceipt].self, forKey: .receipts) ?? []
         stats = try? container.decodeIfPresent(CategoryStatsPayload.self, forKey: .stats)
+        statsSettings = (try? container.decodeIfPresent(WristStatsSettings.self, forKey: .statsSettings))
+            .flatMap { $0 } ?? .standard
+        titleHints = (try? container.decodeIfPresent([String: [WristTitleHint]].self, forKey: .titleHints))
+            .flatMap { $0 } ?? [:]
+    }
+
+    /// No hints, no key: a snapshot that drops them to fit is byte for byte
+    /// the one a phone without them would send.
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(version, forKey: .version)
+        try container.encode(generatedAt, forKey: .generatedAt)
+        try container.encodeIfPresent(language, forKey: .language)
+        try container.encode(types, forKey: .types)
+        try container.encode(occurrences, forKey: .occurrences)
+        try container.encode(receipts, forKey: .receipts)
+        try container.encodeIfPresent(stats, forKey: .stats)
+        try container.encode(statsSettings, forKey: .statsSettings)
+        if !titleHints.isEmpty {
+            try container.encode(titleHints, forKey: .titleHints)
+        }
+    }
+
+    /// The stats as the watch's pages read them: with the types the
+    /// settings leave out marked.
+    var wristStats: CategoryStatsPayload? {
+        stats?.markingLeftOut(statsSettings)
     }
 
     /// Equality that ignores `generatedAt` — what the phone uses to skip a
@@ -198,6 +237,8 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
             && occurrences == other.occurrences
             && receipts == other.receipts
             && stats?.withoutWriteStamp == other.stats?.withoutWriteStamp
+            && statsSettings == other.statsSettings
+            && titleHints == other.titleHints
     }
 }
 
@@ -208,9 +249,14 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
 /// `rangeStart` names the time range of a multi-range event the user was
 /// looking at — the phone edits that range, not range 0. Nil means "the
 /// event's only range".
+///
+/// A start's `title` is a name picked on the watch; nil names the event
+/// after its type. It is optional so a phone that predates it still decodes
+/// the start (an unknown key is ignored) and stores the type as the title,
+/// and a start queued by an older watch still decodes here.
 nonisolated struct WristCommand: Codable, Hashable, Identifiable, Sendable {
     enum Kind: Codable, Hashable, Sendable {
-        case start(eventID: UUID, typeTitle: String, start: Date, end: Date)
+        case start(eventID: UUID, typeTitle: String, start: Date, end: Date, title: String? = nil)
         case finish(eventID: UUID, rangeStart: Date?, at: Date)
         case extend(eventID: UUID, rangeStart: Date?, by: TimeInterval)
     }
@@ -221,14 +267,20 @@ nonisolated struct WristCommand: Codable, Hashable, Identifiable, Sendable {
 
     var eventID: UUID {
         switch kind {
-        case .start(let eventID, _, _, _), .finish(let eventID, _, _), .extend(let eventID, _, _):
+        case .start(let eventID, _, _, _, _), .finish(let eventID, _, _), .extend(let eventID, _, _):
             return eventID
         }
     }
 
+    /// The title a start stores: the picked name, else the type.
+    static func storedTitle(typeTitle: String, title: String?) -> String {
+        let picked = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return picked.isEmpty ? typeTitle.trimmingCharacters(in: .whitespacesAndNewlines) : picked
+    }
+
     var rangeStart: Date? {
         switch kind {
-        case .start(_, _, let start, _): return start
+        case .start(_, _, let start, _, _): return start
         case .finish(_, let rangeStart, _), .extend(_, let rangeStart, _): return rangeStart
         }
     }

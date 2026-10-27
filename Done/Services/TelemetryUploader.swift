@@ -26,7 +26,8 @@
 //  center already pays for on main.
 //
 //  Gates, every batch, in this order (design §7.4 / §8.2): the telemetry
-//  switch; `SupabaseSyncService.uploadsBlockedByBuild` — the SAME property
+//  switch — and, for a switch the TestFlight default turned on, this
+//  launch's "TestFlight" answer (review P1-1); `SupabaseSyncService.uploadsBlockedByBuild` — the SAME property
 //  the sync engine asks, through a closure, never a second `#if DEBUG`
 //  (B·F38; a source-scan test keeps this file free of one); the consent
 //  watermark; a signed-in account with a token. Then the pool → collapse →
@@ -37,6 +38,7 @@
 
 import Combine
 import Foundation
+import StoreKit
 import SwiftUI
 import UIKit
 
@@ -56,6 +58,176 @@ enum TelemetryConsentStore {
     /// watermark forward again).
     static func recordGrant(_ defaults: UserDefaults, at date: Date) {
         defaults.set(date, forKey: AppSettingsKeys.telemetryConsentAt)
+    }
+
+    /// §16: the user has ruled on the switch. True once they flipped it
+    /// (`telemetryUserDecided`), and also for any stored switch the default
+    /// did not write — build 17's ON as much as its OFF (review P1-1): the
+    /// key is not registered and the erase removes it, so a stored value
+    /// without the by-default bit can only be the user's.
+    static func userHasDecided(_ defaults: UserDefaults) -> Bool {
+        if defaults.bool(forKey: AppSettingsKeys.telemetryUserDecided) { return true }
+        return defaults.object(forKey: AppSettingsKeys.telemetryUploadsEnabled) != nil && !isEnabledByDefault(defaults)
+    }
+
+    /// The user's own flip: from now on nothing but the user moves the
+    /// switch, and it is no longer the default's.
+    static func recordDecision(_ defaults: UserDefaults) {
+        defaults.set(true, forKey: AppSettingsKeys.telemetryUserDecided)
+        defaults.removeObject(forKey: AppSettingsKeys.telemetryEnabledByDefault)
+    }
+
+    static func isEnabledByDefault(_ defaults: UserDefaults) -> Bool {
+        defaults.bool(forKey: AppSettingsKeys.telemetryEnabledByDefault)
+    }
+
+    /// A definite App Store answer on a switch the default turned on: back to
+    /// "never ruled" — the switch and the bit REMOVED, not written false (a
+    /// stored false would read as the user's own OFF) — and the note
+    /// sub-consent withdrawn with it (Q5). The consent moment is kept, as on
+    /// any ON → OFF.
+    static func withdrawDefault(_ defaults: UserDefaults) {
+        defaults.removeObject(forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        defaults.removeObject(forKey: AppSettingsKeys.telemetryEnabledByDefault)
+        defaults.set(false, forKey: AppSettingsKeys.telemetryNoteUploadsEnabled)
+    }
+}
+
+// MARK: - The settings switch's edge
+
+/// What the statistics switch does when the USER flips it (Fix Watch's
+/// toggle binding, §16 rule 1) — one function, so the integration test
+/// drives the REAL sequence rather than a hand-copied one (device bug,
+/// build 17: every earlier end-to-end run pre-wrote consent into the plist
+/// and never exercised this path). Records that the user has ruled (§16:
+/// no default turns it on again), then OFF → ON writes consent at `now`
+/// (the one write point, review P2-4) and only then tells the uploader,
+/// which re-mints the day's record; ON → OFF withdraws the note
+/// sub-consent with it (Q5). A programmatic write of the switch (the
+/// TestFlight default) does not come through here — that is why the view
+/// binds the toggle to this instead of observing the stored value.
+@MainActor
+enum TelemetrySwitchEdge {
+    static func apply(from wasOn: Bool, to isOn: Bool, defaults: UserDefaults, now: Date, uploader: TelemetryUploader?) {
+        TelemetryConsentStore.recordDecision(defaults)
+        if !wasOn, isOn {
+            TelemetryConsentStore.recordGrant(defaults, at: now)
+        } else if wasOn, !isOn {
+            defaults.set(false, forKey: AppSettingsKeys.telemetryNoteUploadsEnabled)
+        }
+        uploader?.switchDidChange(from: wasOn, to: isOn)
+    }
+}
+
+// MARK: - Distribution (design §16 rule 2, review P1-2)
+
+/// Where this install came from. A build carrying `embedded.mobileprovision`
+/// — Xcode, devicectl, ad hoc — is `.development` and StoreKit is never
+/// asked (a development install talks to the sandbox too, and may prompt
+/// for a sandbox sign-in). Otherwise StoreKit 2's VERIFIED app transaction
+/// decides: `.sandbox` is TestFlight, `.production` the App Store, `.xcode`
+/// development; an unverified one or an error is `.unknown`, which never
+/// turns the default on. Cached for the process once asked.
+@MainActor
+enum TelemetryDistributionDetector {
+    /// StoreKit's answer, reduced to what the rule reads (a test cannot
+    /// build a `VerificationResult<AppTransaction>`).
+    enum StoreKitAnswer: Equatable {
+        case verified(environment: String)
+        case unverified
+        case failed(reason: String)
+    }
+
+    private static var cached: TelemetryDistribution?
+
+    static func live() async -> TelemetryDistribution {
+        if let cached { return cached }
+        let answer = await classify(
+            hasProvisioningProfile: Bundle.main.path(forResource: "embedded", ofType: "mobileprovision") != nil,
+            storeKit: storeKitAnswer
+        )
+        cached = answer
+        return answer
+    }
+
+    static func classify(hasProvisioningProfile: Bool,
+                         storeKit: @MainActor () async -> StoreKitAnswer) async -> TelemetryDistribution {
+        if hasProvisioningProfile { return .development }
+        switch await storeKit() {
+        case .verified(let environment):
+            switch environment {
+            case AppStore.Environment.sandbox.rawValue: return .testFlight
+            case AppStore.Environment.production.rawValue: return .appStore
+            case AppStore.Environment.xcode.rawValue: return .development
+            default: return .unknown(reason: "environment_\(environment)")
+            }
+        case .unverified:
+            return .unknown(reason: "unverified")
+        case .failed(let reason):
+            return .unknown(reason: reason)
+        }
+    }
+
+    static func storeKitAnswer() async -> StoreKitAnswer {
+        do {
+            switch try await AppTransaction.shared {
+            case .verified(let transaction): return .verified(environment: transaction.environment.rawValue)
+            case .unverified: return .unverified
+            }
+        } catch {
+            let ns = error as NSError
+            return .failed(reason: "\(ns.domain)#\(ns.code)")
+        }
+    }
+}
+
+// MARK: - Observatory cloud read (design §16 rule 3)
+
+/// One page of this account's observatory rows (server view
+/// `v_my_spike_runs`, RLS: own rows only, release rows only), on or after
+/// `sinceDayKey` (review P1-3: the deck's window, not the account's
+/// lifetime). `SupabaseREST` is the production conformance.
+@MainActor
+protocol TelemetryCloudReading: AnyObject {
+    func fetchMySpikeRunsPage(spikeIDs: [String], sinceDayKey: String, limit: Int, offset: Int) async throws -> [[String: Any]]
+}
+
+extension SupabaseREST: TelemetryCloudReading {}
+
+enum TelemetryCloudPager {
+    /// Below any plausible PostgREST `max_rows` (1000 locally and by
+    /// default), so a page that comes back short really is the last one —
+    /// never a server cap read as the end.
+    static let pageSize = 500
+    static let maxPages = 40
+
+    /// Every row, walked with `limit`/`offset` over the view's STABLE order
+    /// (`day_key.desc, run_id.asc` — total, `run_id` being unique per user).
+    /// Rows are only ever inserted or updated in place (no client delete),
+    /// so a row added mid-walk can only push later rows DOWN: the next page
+    /// repeats one, it never skips one. Repeats collapse by run id, keeping
+    /// the higher `revision`.
+    static func fetchAll(from source: TelemetryCloudReading, spikeIDs: [String], sinceDayKey: String,
+                         pageSize: Int = pageSize) async throws -> [[String: Any]] {
+        var byID: [String: [String: Any]] = [:]
+        var order: [String] = []
+        for page in 0..<maxPages {
+            let rows = try await source.fetchMySpikeRunsPage(spikeIDs: spikeIDs, sinceDayKey: sinceDayKey,
+                                                             limit: pageSize, offset: page * pageSize)
+            for row in rows {
+                guard let id = (row["run_id"] as? String)?.lowercased() else { continue }
+                if let held = byID[id] {
+                    let heldRevision = (held["revision"] as? NSNumber)?.intValue ?? 0
+                    let incoming = (row["revision"] as? NSNumber)?.intValue ?? 0
+                    if incoming > heldRevision { byID[id] = row }
+                } else {
+                    byID[id] = row
+                    order.append(id)
+                }
+            }
+            if rows.count < pageSize { break }
+        }
+        return order.compactMap { byID[$0] }
     }
 }
 
@@ -96,6 +268,9 @@ final class TelemetryBackgroundAssertion: TelemetryKeepAlive {
 
 enum TelemetryUploadOutcome: Equatable {
     case switchOff
+    /// The switch is ON by the TestFlight default and this launch has not
+    /// heard "TestFlight" (yet, or at all): nothing is sent (review P1-1).
+    case defaultNotConfirmed
     case notAttached
     case blockedByBuild
     case noConsent
@@ -117,6 +292,7 @@ enum TelemetryUploadOutcome: Equatable {
     var gateLabel: String? {
         switch self {
         case .switchOff: return "switch_off"
+        case .defaultNotConfirmed: return "default_not_confirmed"
         case .notAttached: return "not_attached"
         case .blockedByBuild: return "blocked_by_build"
         case .noConsent: return "no_consent"
@@ -141,6 +317,9 @@ final class TelemetryUploader: ObservableObject {
         let isBlockedByBuild: () -> Bool
         let currentUserID: () -> String?
         let isSignedIn: () -> Bool
+        /// The observatory's read of this account's cloud rows (§16 rule 3);
+        /// nil where there is none (tests that only upload).
+        var cloudReader: TelemetryCloudReading? = nil
     }
 
     struct Dependencies {
@@ -160,6 +339,9 @@ final class TelemetryUploader: ObservableObject {
         /// at launch even though `AuthService` lives further down the view
         /// tree (nil under test and when nothing is persisted).
         var bootstrapOwner: () -> String? = { nil }
+        /// §16 rule 2: where this install came from (review P1-2). The
+        /// provisioning check and StoreKit in the app; tests hand in an answer.
+        var distribution: @MainActor () async -> TelemetryDistribution = { await TelemetryDistributionDetector.live() }
     }
 
     let dependencies: Dependencies
@@ -170,6 +352,11 @@ final class TelemetryUploader: ObservableObject {
     /// get a record whose `startedAt` is at or after the watermark instead
     /// of staying behind the pre-consent id for the rest of the day.
     var onConsentGranted: (() -> Void)?
+    /// Called by `uploadNow` before it schedules (device fix, build 17): the
+    /// app wires it to `ResidentObservationCenter.flushForManualUpload()`, so
+    /// counts made since the last flush edge are on disk when the manual
+    /// batch reads it. nil (no resident, most tests) reads what is on disk.
+    var flushBeforeManualUpload: (@MainActor () -> Void)?
     private weak var authService: AuthService?
     private weak var syncService: SupabaseSyncService?
 
@@ -199,6 +386,16 @@ final class TelemetryUploader: ObservableObject {
     /// 15-minute throttle. In memory only: a relaunch's own launch batch
     /// sends the daily anyway.
     private var lastDailyUploadAt: Date?
+    /// Rows the running trigger has landed so far — what the status row
+    /// counts ("the trigger, not its last batch").
+    private var landedThisTrigger = 0
+    /// Where this install came from (§16), learned once at activation
+    /// (`refreshDistribution`). nil until then: a batch that runs first
+    /// filters by the stored consent (the App Store rule) — and sends
+    /// nothing at all if the switch is the default's — and what it leaves
+    /// stays pending for the next batch: late, never lost.
+    private(set) var distribution: TelemetryDistribution?
+    var isTestFlightInstall: Bool? { distribution.map { $0 == .testFlight } }
     private var lifecycleObserver: NSObjectProtocol?
     private var launchBatchArmed = false
     private var bootstrapOwnerCache: String??
@@ -208,6 +405,10 @@ final class TelemetryUploader: ObservableObject {
         let cursor = SpikeRunStore.loadUploadCursor(location: dependencies.location)
         totalAcknowledged = cursor.totalAcknowledged
         quarantinedCount = cursor.quarantined.count
+        if let status = SpikeRunStore.loadLastUploadStatus(location: dependencies.location) {
+            lastUploadAt = status.at
+            lastBatchCount = status.rows
+        }
         if let sample = SpikeRunStore.loadLastUploadSample(location: dependencies.location) {
             lastRequestBodyPreview = String(data: sample, encoding: .utf8)
         }
@@ -222,10 +423,21 @@ final class TelemetryUploader: ObservableObject {
     // MARK: Live wiring
 
     /// The app's uploader: standard defaults, the production pool, the
-    /// persisted session as the pre-attach owner.
-    static func live() -> TelemetryUploader {
+    /// persisted session as the pre-attach owner. `isTestFlight`, when
+    /// given, replaces the distribution answer (`true` TestFlight, `false`
+    /// App Store) and says so on the trail; DoneApp passes the DEBUG-only
+    /// `TELEMETRY_FAKE_TESTFLIGHT` launch variable, and no other build has
+    /// anything to pass (QA, §16).
+    static func live(isTestFlight: Bool? = nil) -> TelemetryUploader {
         var deps = Dependencies()
         deps.bootstrapOwner = { Self.persistedSessionOwner() }
+        if let isTestFlight {
+            let faked: TelemetryDistribution = isTestFlight ? .testFlight : .appStore
+            deps.distribution = {
+                DiagnosticTrail.record("Telemetry", "environment.faked_by_launch_variable value=\(isTestFlight ? 1 : 0)")
+                return faked
+            }
+        }
         return TelemetryUploader(dependencies: deps)
     }
 
@@ -253,13 +465,26 @@ final class TelemetryUploader: ObservableObject {
         if attachment != nil, self.authService === authService, self.syncService === syncService { return }
         self.authService = authService
         self.syncService = syncService
+        let rest = SupabaseREST(url: SupabaseSyncConfig.url, projectAPIKey: SupabaseSyncConfig.publishableKey,
+                                authService: authService)
         attach(Attachment(
-            gateway: SupabaseREST(url: SupabaseSyncConfig.url, projectAPIKey: SupabaseSyncConfig.publishableKey,
-                                  authService: authService),
+            gateway: rest,
             isBlockedByBuild: { [weak syncService] in syncService?.uploadsBlockedByBuild ?? true },
             currentUserID: { [weak authService] in authService?.userId },
-            isSignedIn: { [weak authService] in authService?.isSignedIn ?? false }
+            isSignedIn: { [weak authService] in authService?.isSignedIn ?? false },
+            cloudReader: rest
         ))
+    }
+
+    /// The app's wiring of the resident to this uploader, in ONE place so the
+    /// tests run exactly what DoneApp runs (review P2-2 — a hand-copied
+    /// wiring let the "Upload now" flush go unwired with every test green):
+    /// the center's flush edges schedule batches, the consent edge re-mints
+    /// the day's record, and "Upload now" writes the counts so far first.
+    func connect(center: ResidentObservationCenter) {
+        center.onUploadTrigger = { [weak self] trigger in self?.schedule(trigger) }
+        onConsentGranted = { [weak center] in center?.remintDailyForConsent() }
+        flushBeforeManualUpload = { [weak center] in center?.flushForManualUpload() }
     }
 
     func attach(_ attachment: Attachment) {
@@ -283,6 +508,91 @@ final class TelemetryUploader: ObservableObject {
         }
         if UIApplication.shared.applicationState == .active {
             armLaunchBatch()
+        }
+        Task { [weak self] in await self?.applyTestFlightDefaultIfNeeded() }
+    }
+
+    /// Asks the detector once per uploader, remembers the answer — for
+    /// every install, decided or not: in TestFlight the answer sets the
+    /// watermark of ANY consent (decision 2026-10-27 ①) — and writes it to
+    /// the trail, one `Telemetry environment=` line per launch (review P1-2:
+    /// the answer must be visible on a device, whatever it is).
+    @discardableResult
+    func refreshDistribution() async -> TelemetryDistribution {
+        if let known = distribution { return known }
+        let answer = await dependencies.distribution()
+        distribution = answer
+        DiagnosticTrail.record("Telemetry", "environment=\(answer.traceLabel)")
+        return answer
+    }
+
+    /// §16 rule 2, once StoreKit has answered:
+    /// - App Store, switch ON by the default (a TestFlight install updated
+    ///   to, or restored onto, the App Store build): withdrawn — switch and
+    ///   bit removed, nothing sent (review P1-1).
+    /// - TestFlight, user has not ruled: ON, with the by-default bit. The
+    ///   consent moment written is NOW, and one already stored is kept; the
+    ///   backfill comes from the watermark rule alone, never from the stored
+    ///   value. Never touches the note sub-switch, never sets "decided", so
+    ///   it re-asserts itself — idempotently — each launch until the user
+    ///   flips the switch either way.
+    /// - TestFlight with the switch ON, the default's or the user's own: a
+    ///   batch is scheduled now, so history a batch before the answer left
+    ///   behind goes up without waiting for another trigger (①).
+    /// Returns whether it is on by default after the call.
+    @discardableResult
+    func applyTestFlightDefaultIfNeeded() async -> Bool {
+        let defaults = dependencies.defaults
+        let distribution = await refreshDistribution()
+        // Read after the await: the user may have flipped the switch while
+        // StoreKit answered.
+        let wasOn = defaults.bool(forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        if TelemetryDefaultPolicy.withdrawsDefault(distribution: distribution,
+                                                   enabledByDefault: TelemetryConsentStore.isEnabledByDefault(defaults)) {
+            TelemetryConsentStore.withdrawDefault(defaults)
+            queued = nil
+            DiagnosticTrail.record("Telemetry", "default.withdrawn environment=\(distribution.traceLabel) was_on=\(wasOn)")
+            return false
+        }
+        var onByDefault = false
+        if TelemetryDefaultPolicy.autoEnables(distribution: distribution,
+                                              userHasDecided: TelemetryConsentStore.userHasDecided(defaults)) {
+            let keptConsent = TelemetryConsentStore.consentAt(defaults) != nil
+            if !keptConsent {
+                TelemetryConsentStore.recordGrant(defaults, at: dependencies.now())
+            }
+            defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+            defaults.set(true, forKey: AppSettingsKeys.telemetryEnabledByDefault)
+            if !wasOn {
+                DiagnosticTrail.record("Telemetry", "default.testflight_on consent=\(keptConsent ? "kept" : "now")")
+            }
+            onByDefault = true
+        }
+        if distribution == .testFlight, defaults.bool(forKey: AppSettingsKeys.telemetryUploadsEnabled) {
+            schedule(.launch)
+        }
+        return onByDefault
+    }
+
+    // MARK: Observatory
+
+    /// This account's observatory rows from the cloud (§16 rule 3),
+    /// decoded; nil when there is no cloud to ask — not attached, signed
+    /// out, no reader, or the read failed — so the deck falls back to this
+    /// device and says so. Reading one's own rows needs no consent switch.
+    func fetchObservatoryCloudRuns(sinceDayKey: String) async -> [SpikeRun]? {
+        guard let attachment, let reader = attachment.cloudReader, attachment.isSignedIn() else { return nil }
+        do {
+            let rows = try await TelemetryCloudPager.fetchAll(
+                from: reader,
+                spikeIDs: [FixObservationRegistry.residentDailySpikeID, FixObservationRegistry.effortPathFixID],
+                sinceDayKey: sinceDayKey
+            )
+            return rows.compactMap(TelemetryWire.run(fromRow:))
+        } catch {
+            let failure = SyncWriteFailure.classify(error)
+            DiagnosticTrail.record("Telemetry", "observatory.cloud_unavailable kind=\(failure.kind) code=\(failure.code)")
+            return nil
         }
     }
 
@@ -309,6 +619,7 @@ final class TelemetryUploader: ObservableObject {
     func forgetAfterErase() {
         lastUploadAt = nil
         lastBatchCount = 0
+        landedThisTrigger = 0
         totalAcknowledged = 0
         quarantinedCount = 0
         lastRequestBodyPreview = nil
@@ -320,9 +631,9 @@ final class TelemetryUploader: ObservableObject {
 
     // MARK: Switch edges
 
-    /// The settings toggle's edges. Consent itself is written by the view
-    /// (`DataPrivacySettingsView`'s `onChange`, the ONE place — review
-    /// P2-4) before this is called. OFF → ON then re-mints the day's record
+    /// The settings toggle's edges. Consent itself is written by
+    /// `TelemetrySwitchEdge.apply` (the ONE place — review P2-4) before
+    /// this is called. OFF → ON then re-mints the day's record
     /// (`onConsentGranted`) and tries once at once (B·F29); ON → OFF drops
     /// anything queued — an in-flight request finishes (its rows were
     /// consented), nothing follows it.
@@ -369,6 +680,10 @@ final class TelemetryUploader: ObservableObject {
     /// queue to drain, and reports the LAST batch's outcome.
     @discardableResult
     func uploadNow(trigger: TelemetryTrigger = .deckOpen) async -> TelemetryUploadOutcome {
+        // The button is the device checklist's probe: what it sends must
+        // include what was counted a moment ago, not only what the last
+        // background edge happened to write.
+        flushBeforeManualUpload?()
         schedule(trigger)
         await drain()
         return lastOutcome ?? .nothingPending
@@ -397,7 +712,7 @@ final class TelemetryUploader: ObservableObject {
         }
         inFlight = Task(priority: .utility) { [weak self] in
             guard let self else { return }
-            let outcome = await self.runBatch(trigger: trigger)
+            let outcome = await self.runUntilDrained(trigger: trigger)
             // One line per CHANGE of gate outcome, not per batch: a device
             // stuck at a gate shows the gate once, not a line per edge.
             if let gate = outcome.gateLabel, outcome != self.lastOutcome {
@@ -413,11 +728,58 @@ final class TelemetryUploader: ObservableObject {
         }
     }
 
+    // MARK: One trigger: batches until drained (design §16 rule 2)
+
+    /// A ceiling on one trigger's batches (2048 rows): a backfill larger
+    /// than that finishes on the next trigger.
+    static let maxBatchesPerTrigger = 64
+
+    /// One trigger sends batches until nothing is pending — a TestFlight
+    /// device's backfill is hundreds of rows, a batch is ≤32. It stops at
+    /// the first batch that moves nothing: a gate, an empty selection, a
+    /// failure, an erase — so a failure waits for the next trigger like any
+    /// other. The daily throttle is judged ONCE, at the trigger: an edge
+    /// that may send dailies sends all of them, not only the first batch's.
+    /// The loop runs inside the single in-flight task, so the keep-alive
+    /// covers all of it.
+    private func runUntilDrained(trigger: TelemetryTrigger) async -> TelemetryUploadOutcome {
+        let dailyClockAtTrigger = lastDailyUploadAt
+        landedThisTrigger = 0
+        var sent = 0
+        var parked = 0
+        var last: TelemetryUploadOutcome = .nothingPending
+        batches: for _ in 0..<Self.maxBatchesPerTrigger {
+            last = await runBatch(trigger: trigger, lastDailyUploadAt: dailyClockAtTrigger)
+            switch last {
+            case .uploaded(let rows):
+                sent += rows
+            case .partial(let uploaded, let quarantined) where uploaded + quarantined > 0:
+                sent += uploaded
+                parked += quarantined
+            default:
+                break batches
+            }
+        }
+        switch last {
+        case .uploaded, .partial, .nothingPending:
+            // Drained (or at the ceiling): report what the trigger moved.
+            if parked > 0 { return .partial(uploaded: sent, quarantined: parked) }
+            if sent > 0 { return .uploaded(rows: sent) }
+            return last
+        default:
+            // Stopped by a failure, a gate or an erase: that is the news;
+            // the status line already shows the rows that did land.
+            return last
+        }
+    }
+
     // MARK: One batch
 
-    private func runBatch(trigger: TelemetryTrigger) async -> TelemetryUploadOutcome {
+    private func runBatch(trigger: TelemetryTrigger, lastDailyUploadAt: Date?) async -> TelemetryUploadOutcome {
         let defaults = dependencies.defaults
         guard defaults.bool(forKey: AppSettingsKeys.telemetryUploadsEnabled) else { return .switchOff }
+        guard TelemetryDefaultPolicy.mayUpload(enabledByDefault: TelemetryConsentStore.isEnabledByDefault(defaults),
+                                               distribution: distribution) else { return .defaultNotConfirmed }
         guard let attachment else { return .notAttached }
         guard !attachment.isBlockedByBuild() else { return .blockedByBuild }
         guard let consentAt = TelemetryConsentStore.consentAt(defaults) else { return .noConsent }
@@ -435,7 +797,10 @@ final class TelemetryUploader: ObservableObject {
         for spikeID in SpikeRunStore.spikeIDsOnDisk(location: location) {
             records.append(contentsOf: SpikeRunStore.loadRuns(spikeID: spikeID, location: location))
         }
-        let consented = TelemetryConsent.filter(records, consentAt: consentAt, currentOwner: userID)
+        // In TestFlight every consent backfills (①): the stored moment is the
+        // App Store's watermark only.
+        let watermark = TelemetryDefaultPolicy.watermark(consentAt: consentAt, isTestFlight: isTestFlightInstall == true)
+        let consented = TelemetryConsent.filter(records, consentAt: watermark, currentOwner: userID)
         let pending = cursor.pending(consented, id: \.id, revision: \.revision)
         let batch = TelemetryTrigger.selectBatch(pending, trigger: trigger, lastDailyUploadAt: lastDailyUploadAt, now: now)
         guard !batch.isEmpty else { return .nothingPending }
@@ -564,8 +929,12 @@ final class TelemetryUploader: ObservableObject {
             lastDailyUploadAt = now
         }
         if !landed.isEmpty {
+            landedThisTrigger += landed.count
             lastUploadAt = now
-            lastBatchCount = landed.count
+            lastBatchCount = landedThisTrigger
+            // Beside the cursor, under the same erase check: a relaunch shows
+            // the last upload instead of "never" (QA).
+            SpikeRunStore.saveLastUploadStatus(TelemetryUploadStatus(at: now, rows: landedThisTrigger), location: location)
         }
         totalAcknowledged = cursor.totalAcknowledged
         quarantinedCount = cursor.quarantined.count

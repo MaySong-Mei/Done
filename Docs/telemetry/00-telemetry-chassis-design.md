@@ -177,7 +177,7 @@ acceptance?:修复验收方向(键、方向、阈值)— 本期不实现字段,�
 
 ### 8.2 同意
 - 开关「分享性能与使用统计(不含内容)」默认关,放 Data & Privacy。
-- 打开记 `consent_at`(只在设置页的 OFF→ON 边沿写一次);只上传 `startedAt ≥ consent_at` 的记录;观察站历史不外流。本地记录照旧(它是本机功能,有界、不出设备)。
+- 打开记 `consent_at`(只在设置页的 OFF→ON 边沿写一次);只上传 `startedAt ≥ floor(consent_at 到整秒)` 的记录(本地存储把 `startedAt` 截到整秒,不取整的话同意后几毫秒铸出的记录会读成早于同意、被挡一整天——真机 build 17 的事故,2026-10-27);代价是同一秒内、同意之前开始的记录也会上传,上限不到一秒的计数,接受。观察站历史不外流(TestFlight 包例外,见 §16)。本地记录照旧(它是本机功能,有界、不出设备)。
 - **首日不沉默**(review P2-3):OFF→ON 视为认领变化,观察站关掉当日旧 daily(其 startedAt < consent,自然不传)、`resetForNewDay`、以 now 铸新 id;当日 consent 之后的计数当天就能上传。副作用:窗口预算随之归零,同意日理论上多一轮 12 窗口,与换账号同形,接受。
 - 关闭:立即停止上传,游标保留;已上传的行不删(RLS 不许 delete),文案明说「已上传的统计随账号删除一并删除」。
 - `note` 第二开关「附带手动 Spike 备注(文字)」默认关;主开关 ON→OFF 时一并置 OFF(子同意随主同意撤销)。
@@ -237,7 +237,7 @@ RLS:authenticated `select / insert / update` 自己的行(`user_id = (select aut
 3. **游标只在 2xx 后前进**:假服务器分别 500 / URLError / 2xx → 前两者游标不动;落盘游标后新建上传器 → 零请求(B·F36)。
 4. **Debug→生产被挡**:上传器只问 `uploadsBlockedByBuild`;源扫描遥测文件内无 `#if DEBUG`。
 5. **自由文本不外流**:夹具在 `note`、`abortReason`、一个 `.string` metric 各放 UUID 哨兵;opt-out 时所有外发请求体字节不含任一哨兵;opt-in 后只有 `note` 哨兵出现(B·F37)。
-6. **同意水位**:开关关经 3 个生命周期循环 → 零请求;开于 t → 首批无 `startedAt < t` 的记录;正对照:关掉水位检查 → 红(C·§1.9-5)。
+6. **同意水位**:开关关经 3 个生命周期循环 → 零请求;开于 t → 首批无 `startedAt < floor(t)` 的记录,且同意那一秒铸出的 daily 必须被选中(小数部分 <0.5 与 ≥0.5 各一例);正对照:关掉水位检查 → 红(C·§1.9-5)。
 7. **擦除**:调真实入口 `LocalDataEraser.resetAllLocalData` 后 `.upload-cursor.json` / `.install-id` 不存在,首个请求体带新 installID(B·F39)。
 8. **键注册表**:Swift 导出 == 迁移行;死键红;tripwire 无 liveness 红;发未知 id → 一切不动且 `unknownKeyDrops == 1`(B·F40)。
 9. **认领键**:同日 build 10→11 → 两条 daily;同日 qa-a→qa-b → 两条且 owner 各异;LA→东京 → dayKey 不变。
@@ -272,6 +272,8 @@ RLS:authenticated `select / insert / update` 自己的行(`user_id = (select aut
 - 服务端定时删除:量级不需要。
 - `PrivacyInfo.xcprivacy`:仓库里没有(`project.pbxproj` 无引用),上架前必须补;遥测新增「Performance Data / Crash Data / Product Interaction / Other Diagnostic Data,linked,not tracking」四项披露;已在用的 required-reason API:UserDefaults(CA92.1)、文件修改时间(C617.1)、systemUptime(35F9.1)。独立待办。
 - 015 迁移文件头仍写 `DRAFT — NOT APPLIED`,与现场不一致(A·#38):顺手修(已改)。
+- **上架 App Store 前必须做(§16 review P1-2a)**:苹果审核机跑的 App Store 提交包同样返回 StoreKit `.sandbox`,与 TestFlight 是同一个二进制,运行时无法区分 → 会被判成 TestFlight 而默认开、补传历史。需要一个只有 TestFlight 分发才带的构建期标记(如 archive 脚本为 TestFlight 上传写入的 Info.plist 键,App Store 提交用另一次 archive 不写),或上架前把 TF 默认开整体关掉。同时补 `PrivacyInfo.xcprivacy` 与隐私标签。
+- 英文文案「1 rows」在状态行已改;「partial」「set aside」两行仍可能出现「1 rows」(待改)。
 - `note` 90 天置 null 的定时任务:未实现;等 staging 有真实 note 行再加(pg_cron 或每周手工 SQL 同 checks 一起跑)。
 - 擦除本机数据后上传器内存状态(样本、计数)的清空:终审 P1-2,已在合并前修。
 - 观察站三条目 `reviewBy` 2026-10-17 已过期(A·#5):等现场判定到了再处置。
@@ -279,6 +281,43 @@ RLS:authenticated `select / insert / update` 自己的行(`user_id = (select aut
 - `key_registry_load.sql` 不在 migrations 里(注册表随构建变,不是一次性迁移):部署流程要多一步,见 `done-mcp/supabase/ops/README.md`。
 - 首批 `since_build = 5` 全为占位,第 3 片 Swift 导出时按枚举修正(`slotWritesCalendarCheckpoints` / `dragMemo*` 很可能晚于 build 5)。
 - 手动 spike 的 owner 由 store 盖戳后才会上传(第 2 片修正轮);此前写的手动 run 无 owner,永不上传。
+
+## 15. Spike 与观察站:两个板块,一条生命周期(2026-10-26 用户补充)
+
+**两个板块,职责不同**
+- **Spike**:每个 spike 是一个待定的 feature(变体开关 `spike.<id>.enabled / .variant`)。它**自带一段观察**:性能、报错等探针只在这个 spike 存活期间跟着它跑,目的只有一个——让用户看完数据后点**留存**或**丢弃**。
+- **观察站(ob)**:常驻的几个探针(今天是 `resident-daily` 的 18 个键、修复条目的判定),不随任何 feature 来去,一直在。它回答的是「app 整体现在怎样」,不是「这个 feature 要不要」。
+
+**生命周期(spike)**
+1. 立项:注册表加条目(id、变体、要看的键、判据),探针与变体开关一起进代码。
+2. 测量:TestFlight 上跑;spike 的 `manual_run` / 变体标记随遥测上传;用户在 Spike 板块看按 **spike × 变体** 汇总的性能与报错。
+3. 决定:用户点「留存」或「丢弃」。这个点击本身要落成一条记录(`kind = spike_decision`:spike_id、variant、verdict、时刻),随遥测上传,这样决定能到仓库这边被执行,而不是留在一台手机里。
+4. 执行(代码变更,不是运行时按钮):
+   - **留存** → 被选变体直接成为默认行为(删开关、删分支),spike 的探针与变体开关一并移除,注册表条目填 `retired_build`(退役不删条目,沿用 R-F11);
+   - **丢弃** → feature 与探针一起删,条目同样填 `retired_build`。
+   两种结局都不会把 spike 的探针并进观察站:要常驻观察一个东西,得单独在 ob 立项。
+5. 守卫:源扫描保证已退役 spike 在 `Done/` 里没有存活的 emit 站点和开关读取(否则是死线,服务端会把 0 读成「没人用」);已退役键在视图里对 `app_build ≥ retired_build` 读 NULL。
+
+**底盘已经有的**:记录类型分开(spike 的 `manual_run` 带 `variantID`;ob 的 `daily_rollup` / `verdict_snapshot`);注册表 `retired_build`;修复条目的 `FixObservationLifecycle.active / retired`。
+**缺的(归第 3/4 片)**:`v_spike_variant_summary`(spike_id × variant → 性能与报错计数,只看 release 行);`spike_decision` 记录类型(契约 §2 的 `kind` 加值,服务端 check 同步);退役 spike 的源扫描测试;Spike 板块里的「留存 / 丢弃」按钮与按变体汇总的展示。
+
+**两处待拍**(建议附后)
+- 「留存」点击落在哪里:**在 app 的 Spike 板块**(建议,和「我来点击」一致),决定作为记录上传;GitHub 票只做执行记录。
+- 「直接部署」的含义:**下一个构建里删开关、把被选变体写死**(建议;本 app 没有远程开关,也不该为此加一个);不是远程翻 flag。
+
+## 16. 观察站就是数据收集(2026-10-27 用户拍板,改 §8 的部分决定)
+
+用户原话:「观察站本质就是数据收集的一部分」;选 1+2+3;「肯定还是分用户的,但是数据收集和分析可以聚合分析」。
+
+**规则**
+1. **一个入口**:开关、上传状态(上次上传 / 条数 / 累计)、「立即上传」、「查看样本」从「数据与隐私」挪到**观察站页面顶部**;「数据与隐私」只留一句说明和指向观察站的链接。
+2. **默认上传(仅 TestFlight 包)**:TestFlight 包首次运行这一版时默认开,**补传本机保留的全部历史**(用户 2026-10-27:「可以补传吧,至少目前对我来说更方便」;TF 下同意水位取 `.distantPast`)。补传只覆盖带账号的记录(build 13 起写的);遥测上线前写的旧记录(无 `revision` / `ownerUID`)**不认领、不上传**——用户 2026-10-27:「我的观察站的数据我之后单独处理」;签出期写的记录仍不传。一次触发循环发批直到清空(每批 ≤32)。用户仍可在观察站页面关掉,关掉即停。App Store 包保持默认关,上架前补 `PrivacyInfo.xcprivacy` 与隐私标签后再定。备注开关(note)不随之默认开。**这改掉 #197(2026-08-26)「默认关」的拍板,仅对 TestFlight。**
+3. **观察站读云端、按用户**:观察站卡片的判定与计数改读服务端里**本账号**所有设备的行(RLS 本来就允许 select 自己的行),本机数据作为离线回退与「尚未上传」的补足;「Release 天数」等变成本账号全部设备合计,卡片注明来源(云端 · N 台设备 / 仅本机)。
+4. **数据按用户存,分析可聚合**:行仍以 `user_id` 为键;跨用户聚合只在开发者侧的 SQL 视图里做,不进 app,也不对 authenticated 开放。
+
+**服务端**:新迁移给 authenticated 一组 `security_invoker` 的「我的」视图(只能看到自己的行),供观察站读;既有共享视图保持 revoke。
+**TestFlight 判定**:StoreKit 2 `AppTransaction.environment == .sandbox`(或回退 sandbox receipt),结果缓存;判定失败按「非 TestFlight」处理(默认关)。
+**测试**:默认开只在 TestFlight 判定为真时生效;首启写入的同意起点之前的记录不传;观察站在离线 / 未登录 / 云端为空时回退本机且标注来源;「我的」视图对另一个用户返回空(SQL checks)。
 
 ## 附录:参考文件
 

@@ -84,7 +84,8 @@ final class SpikeRegistryTests: XCTestCase {
     /// Fix Watch migration boundary, pinned as a positive AND a negative:
     /// exactly the two measurement spikes migrated; the three feature
     /// spikes (#165/#192/#198) stayed on the spike branch. The one
-    /// `.featureToggle` entry is the delete-motion spike born on king.
+    /// `.featureToggle` entries are the delete- and create-motion spikes
+    /// born on king.
     func testTheRegistryCarriesExactlyTheTwoMigratedMeasurementSpikes() {
         let measurement = SpikeRegistry.all.filter { $0.kind == .measurement }
         XCTAssertEqual(measurement.map(\.id), ["detail-perf-195", "effort-tap-201"])
@@ -92,7 +93,7 @@ final class SpikeRegistryTests: XCTestCase {
                       "the #201 experiment variants were deliberately not migrated")
         XCTAssertEqual(
             SpikeRegistry.all.filter { $0.kind == .featureToggle }.map(\.id),
-            [EventDeletionMotionFlag.spikeID]
+            [EventDeletionMotionFlag.spikeID, EventCreationMotionFlag.spikeID, EventResizeTweenFlag.spikeID]
         )
     }
 

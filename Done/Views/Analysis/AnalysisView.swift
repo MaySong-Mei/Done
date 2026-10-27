@@ -302,7 +302,7 @@ struct AnalysisContentView: View {
             timeRanges: [Event.TimeRange(start: start, end: end)],
             type: suggested.type
         )
-        store.addCalendarEvent(event)
+        store.addCalendarEvent(event, creationMotion: .local)
     }
 }
 

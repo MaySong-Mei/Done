@@ -174,46 +174,86 @@ final class WristSnapshotBuilderTests: XCTestCase {
         CategoryStatsBuilder.payload(events: events, now: now, calendar: calendar, colorHex: { "#\($0)" })
     }
 
-    func testStatsAreTheWidgetPayloadTrimmedToTheWeek() {
+    func testStatsAreTheWidgetPayloadTrimmedToTheReach() {
         let events = [
-            event("last week", type: "Old", start: day(-8, hour: 9), end: day(-8, hour: 10)),
+            event("last month", type: "Old", start: day(-40, hour: 9), end: day(-40, hour: 10)),
+            event("two days ago", type: "Study", start: day(-2, hour: 20), end: day(-2, hour: 21)),
             event("today", type: "Work", start: day(0, hour: 8), end: day(0, hour: 9, minute: 30)),
         ]
         let full = widgetPayload(events)
         let frame = full.resolvedCalendar()
-        let week = CategoryStats.range(of: .week, containing: now, calendar: frame)
-        let dayBefore = frame.date(byAdding: .day, value: -1, to: week.start)!
-        let trimmed = try! XCTUnwrap(WristSnapshotBuilder.weekOnly(full, now: now))
-        XCTAssertEqual(trimmed.coverageStart, dayBefore, "the week and one day of margin")
         let horizon = frame.date(byAdding: .day, value: 3, to: frame.startOfDay(for: now))!
-        XCTAssertEqual(trimmed.coverageEnd, horizon, "through the day after tomorrow, like the occurrences")
-        XCTAssertTrue((trimmed.days ?? []).allSatisfy { ($0.start ?? .distantPast) >= dayBefore && ($0.start ?? .distantFuture) < horizon })
-        // Read on the last kept day, the trimmed payload still answers like the full one.
-        let later = horizon.addingTimeInterval(-60)
-        XCTAssertEqual(CategoryStats.summary(of: trimmed, period: .today, asOf: later),
-                       CategoryStats.summary(of: full, period: .today, asOf: later))
-        XCTAssertLessThan(trimmed.days?.count ?? 0, full.days?.count ?? 0, "older days are dropped")
-        let todayOnly = try! XCTUnwrap(WristSnapshotBuilder.weekOnly(full, now: now, todayOnly: true))
-        XCTAssertEqual(CategoryStats.summary(of: todayOnly, period: .today, asOf: now),
-                       CategoryStats.summary(of: full, period: .today, asOf: now))
-        if frame.startOfDay(for: now) > CategoryStats.range(of: .week, containing: now, calendar: frame).start.addingTimeInterval(86_400) {
-            XCTAssertEqual(CategoryStats.summary(of: todayOnly, period: .week, asOf: now).status, .stale,
-                           "the today-only fallback says the week is out of reach")
+        for reach in WristSnapshotBuilder.StatsReach.allCases {
+            let trimmed = try! XCTUnwrap(WristSnapshotBuilder.trimmed(full, now: now, reach: reach))
+            let reachStart = reach.periods.map { $0.span(asOf: now, calendar: frame).start }.min()!
+            let dayBefore = frame.date(byAdding: .day, value: -1, to: reachStart)!
+            XCTAssertEqual(trimmed.coverageStart, max(full.coverageStart!, dayBefore), "\(reach): its periods and a day of margin")
+            XCTAssertEqual(trimmed.coverageEnd, horizon, "through the day after tomorrow, like the occurrences")
+            XCTAssertTrue((trimmed.days ?? []).allSatisfy {
+                ($0.start ?? .distantPast) >= trimmed.coverageStart! && ($0.start ?? .distantFuture) < horizon
+            })
+            for period in WristStatsPeriod.allCases {
+                let figures = WristStatsFigures.of(trimmed, period: period, asOf: now)
+                if period.span(asOf: now, calendar: frame).start >= trimmed.coverageStart! {
+                    XCTAssertEqual(figures, WristStatsFigures.of(full, period: period, asOf: now),
+                                   "\(reach) answers \(period) like the whole payload")
+                } else {
+                    XCTAssertEqual(figures.status, .stale, "\(reach) leaves \(period) out and says so")
+                    XCTAssertTrue(figures.leftOutToFit, "current stats, trimmed: not 'out of date'")
+                }
+                if reach.periods.contains(period) { XCTAssertEqual(figures.status, .ok, "\(reach) keeps \(period)") }
+            }
+            if reach == .threeDays {
+                XCTAssertEqual(WristStatsFigures.of(trimmed, period: .thirtyDays, asOf: now).status, .stale,
+                               "positive control: the shortest reach does leave thirty days out")
+            }
         }
-        for period in [CategoryStatsPeriod.today, .week] {
-            XCTAssertEqual(CategoryStats.summary(of: trimmed, period: period, asOf: now),
-                           CategoryStats.summary(of: full, period: period, asOf: now),
-                           "same figures as the widget for \(period)")
-        }
-        XCTAssertEqual(CategoryStats.summary(of: trimmed, period: .today, asOf: now).totalHours, 1.5)
-        XCTAssertEqual(CategoryStats.summary(of: trimmed, period: .month, asOf: now).status, .stale,
-                       "the month is out of reach and says so")
+        let month = WristStatsFigures.of(full, period: .thirtyDays, asOf: now)
+        let threeDays = WristStatsFigures.of(full, period: .threeDays, asOf: now)
+        let today = WristStatsFigures.of(full, period: .today, asOf: now)
+        XCTAssertEqual(today.totalHours, 1.5)
+        XCTAssertEqual(threeDays.totalHours, 2.5, "today and the evening two days ago")
+        XCTAssertGreaterThanOrEqual(month.totalHours, today.totalHours)
+        XCTAssertFalse(month.categories.contains { $0.name == "Old" }, "forty days ago is not in the last thirty")
+        // The full snapshot carries thirty days.
+        let snapshot = WristSnapshotBuilder.snapshot(
+            events: events, templates: [], now: now, calendar: calendar, language: nil, receipts: [], stats: full,
+            colorHex: { _ in "#000000" }
+        )
+        XCTAssertEqual(WristStatsFigures.of(snapshot.stats, period: .thirtyDays, asOf: now), month)
     }
 
-    func testStatsThatDoNotReachThisWeekAreLeftOut() {
+    /// 2026-11-01 is a Sunday — the first day of a Sunday week and of a
+    /// month — and the day Los Angeles leaves daylight time (25 hours). The
+    /// rolling periods reach back past both calendar starts.
+    func testThreeDaysReachBehindAWeekAndAMonthThatBothStartToday() {
+        var la = Calendar(identifier: .gregorian)
+        la.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        la.firstWeekday = 1
+        let noon = la.date(from: DateComponents(year: 2026, month: 11, day: 1, hour: 12))!
+        let friday = la.date(from: DateComponents(year: 2026, month: 10, day: 30, hour: 20))!
+        let events = [event("friday", type: "Study", start: friday, end: friday.addingTimeInterval(3600))]
+        let full = CategoryStatsBuilder.payload(events: events, now: noon, calendar: la, colorHex: { "#\($0)" })
+        XCTAssertEqual(full.coverageStart, la.date(from: DateComponents(year: 2026, month: 10, day: 3)),
+                       "the phone writes the days the watch's thirty-day period needs")
+        let figures = WristStatsFigures.of(full, period: .threeDays, asOf: noon)
+        XCTAssertEqual(figures.status, .ok)
+        XCTAssertEqual(figures.totalHours, 1)
+        XCTAssertEqual(figures.elapsedHours, 61, "two whole days and the 13 hours to noon on a 25-hour day")
+        XCTAssertEqual(WristStatsFigures.of(full, period: .sevenDays, asOf: noon).totalHours, 1, "seven days is not the calendar week")
+        XCTAssertEqual(CategoryStats.summary(of: full, period: .week, asOf: noon, basis: .elapsed).totalHours, 0,
+                       "positive control: the calendar week has not seen Friday")
+        let recent = try! XCTUnwrap(WristSnapshotBuilder.trimmed(full, now: noon, reach: .threeDays))
+        XCTAssertEqual(WristStatsFigures.of(recent, period: .threeDays, asOf: noon), figures)
+    }
+
+    func testStatsThatDoNotReachTheirPeriodsAreLeftOut() {
         var old = widgetPayload([event("x", type: "Work", start: day(0, hour: 8), end: day(0, hour: 9))])
         old.coverageEnd = day(-1, hour: 0)
-        XCTAssertNil(WristSnapshotBuilder.weekOnly(old, now: now))
+        XCTAssertFalse(WristStatsFigures.of(old, period: .today, asOf: now).leftOutToFit, "old stats are out of date, not trimmed")
+        for reach in WristSnapshotBuilder.StatsReach.allCases {
+            XCTAssertNil(WristSnapshotBuilder.trimmed(old, now: now, reach: reach))
+        }
     }
 
     func testSnapshotEqualityIgnoresTheStatsWriteStamp() {

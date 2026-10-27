@@ -381,6 +381,14 @@ struct SettingsHomeView: View {
                 .buttonStyle(SettingsRowButtonStyle())
 
                 NavigationLink {
+                    WatchSettingsView()
+                        .environmentObject(store)
+                } label: {
+                    settingsLinkRow(title: L(.watchSettings))
+                }
+                .buttonStyle(SettingsRowButtonStyle())
+
+                NavigationLink {
                     ConnectionsView()
                         .environmentObject(authService)
                 } label: {
@@ -700,12 +708,11 @@ struct DataPrivacySettingsView: View {
     /// object on this view comes from.
     @EnvironmentObject private var calendarState: CalendarViewState
     @AppStorage(AppSettingsKeys.syncUploadsEnabled) private var syncUploadsEnabled = true
-    /// gh#273 design §8.2: default OFF, per device, independent of the sync
-    /// switch above. OFF → ON records the consent watermark.
+    /// gh#273: read for the privacy hint only — the switch itself lives on
+    /// Fix Watch (§16 rule 1).
     @AppStorage(AppSettingsKeys.telemetryUploadsEnabled) private var telemetryUploadsEnabled = false
-    @AppStorage(AppSettingsKeys.telemetryNoteUploadsEnabled) private var telemetryNoteUploadsEnabled = false
-    /// nil under XCTest and before the app created one — the card then
-    /// shows the switches without the status row.
+    /// nil under XCTest and before the app created one; handed to the erase
+    /// so the uploader forgets the previous owner's status.
     @Environment(\.telemetryUploader) private var telemetryUploader
     @State private var isConfirmingSkillClear = false
     @State private var isConfirmingInferenceClear = false
@@ -714,7 +721,6 @@ struct DataPrivacySettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var isPresentingRestoreSheet = false
     @State private var isPresentingPreviewSheet = false
-    @State private var isPresentingTelemetrySample = false
     /// Design §10.7 (b): opened from the "this account no longer exists"
     /// prompt with the reset confirmation already up, so "Erase this phone"
     /// is the one existing erase and nothing else.
@@ -734,40 +740,26 @@ struct DataPrivacySettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            // gh#273 design §8.2 / §8.3: the statistics switch, its note
-            // sub-switch, and the visible feedback that answers "did it
-            // upload, and what" — the sample sheet shows a formatted copy
-            // of the same redacted content the most recent ATTEMPT sent
-            // (review P2-5: same rows after the Redactor, not the wire bytes).
-            settingsCard(L(.telemetryCardTitle), spacing: 14) {
-                Toggle(isOn: $telemetryUploadsEnabled) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(L(.telemetryShareToggle))
+            // gh#273 §16 rule 1: one entrance. The switch, the upload status
+            // and the request sample live on Fix Watch, beside the data they
+            // describe; this page says so and points there.
+            settingsCard(L(.telemetryCardTitle), spacing: 10) {
+                settingsHintText(L(.telemetryMovedHint))
+                NavigationLink {
+                    FixWatchView()
+                } label: {
+                    HStack(alignment: .center, spacing: 8) {
+                        Text(L(.telemetryOpenFixWatch))
                             .font(.subheadline.weight(.medium))
-                        Text(L(.telemetryShareHint))
+                            .foregroundStyle(.primary)
+                        Spacer(minLength: 8)
+                        Image(systemName: "chevron.right")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                            .foregroundStyle(.tertiary)
                     }
+                    .contentShape(Rectangle())
                 }
-                Toggle(isOn: $telemetryNoteUploadsEnabled) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(L(.telemetryNoteToggle))
-                            .font(.subheadline.weight(.medium))
-                        Text(L(.telemetryNoteHint))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                .disabled(!telemetryUploadsEnabled)
-                if let telemetryUploader {
-                    TelemetryStatusRows(uploader: telemetryUploader, isEnabled: telemetryUploadsEnabled,
-                                        isPresentingSample: $isPresentingTelemetrySample)
-                }
-                if !telemetryUploadsEnabled {
-                    settingsHintText(L(.telemetryOffRetentionHint))
-                }
+                .buttonStyle(SettingsRowButtonStyle())
             }
 
             settingsCard("Sync", spacing: 14) {
@@ -893,24 +885,6 @@ struct DataPrivacySettingsView: View {
             RestoreSheet(previewOnly: true)
                 .environmentObject(restoreCoordinator)
                 .environmentObject(imageBackupCoordinator)
-        }
-        .sheet(isPresented: $isPresentingTelemetrySample) {
-            if let telemetryUploader {
-                TelemetrySampleSheet(uploader: telemetryUploader)
-            }
-        }
-        .onChange(of: telemetryUploadsEnabled) { oldValue, newValue in
-            // OFF → ON is the consent moment (design §8.2): the watermark is
-            // written HERE and only here (review P2-4), even when no uploader
-            // exists, so a later one cannot read "consented" as "consented
-            // since forever". ON → OFF withdraws the note sub-consent with it
-            // (Q5): the sub-switch is not left armed for the next ON.
-            if !oldValue, newValue {
-                TelemetryConsentStore.recordGrant(UserDefaults.standard, at: Date())
-            } else if oldValue, !newValue {
-                telemetryNoteUploadsEnabled = false
-            }
-            telemetryUploader?.switchDidChange(from: oldValue, to: newValue)
         }
         .onChange(of: syncUploadsEnabled) { oldValue, newValue in
             // OFF → ON: catch the cloud up with everything that accumulated
@@ -1070,38 +1044,61 @@ enum TelemetrySettingsCopy {
         sharing ? L(.hintLocalDataSharing) : L(.hintLocalData)
     }
 
-    static func statusLine(uploader: TelemetryUploader, now: Date) -> String {
-        guard let lastUploadAt = uploader.lastUploadAt else { return L(.telemetryStatusNever) }
-        let when = RelativeDateTimeFormatter.telemetryShort.localizedString(for: lastUploadAt, relativeTo: now)
+    static func statusLine(uploader: TelemetryUploader, now: Date, language: AppLanguage = .current) -> String {
+        guard let lastUploadAt = uploader.lastUploadAt else { return LKey.telemetryStatusNever.text(for: language) }
         let build = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "?"
-        return String(format: L(.telemetryStatusFormat), when, "\(uploader.lastBatchCount)", "\(uploader.totalAcknowledged)", build)
+        return statusLine(when: relativeWhen(lastUploadAt, now: now, language: language), rows: uploader.lastBatchCount,
+                          total: uploader.totalAcknowledged, build: build, language: language)
+    }
+
+    /// Under a second ago — or ahead of `now`, a clock that stepped back
+    /// since — reads "just now", never "in 0 sec." (QA).
+    static func relativeWhen(_ date: Date, now: Date, language: AppLanguage) -> String {
+        guard now.timeIntervalSince(date) >= 1 else { return LKey.telemetryJustNow.text(for: language) }
+        return RelativeDateTimeFormatter.telemetryShort.localizedString(for: date, relativeTo: now)
+    }
+
+    /// "1 row", not "1 rows" (English has a singular; Chinese spells both
+    /// the same).
+    static func statusLine(when: String, rows: Int, total: Int, build: String, language: AppLanguage) -> String {
+        let format = (rows == 1 ? LKey.telemetryStatusFormatOne : .telemetryStatusFormat).text(for: language)
+        return String(format: format, when, "\(rows)", "\(total)", build)
     }
 
     /// What the most recent attempt concluded, for EVERY outcome (review
     /// P2-2): the manual button is the device checklist's probe, and
     /// "nothing to send" must read differently from "stopped at a gate".
     /// nil for a plain success — the status line above already says it.
-    static func outcomeLine(_ outcome: TelemetryUploadOutcome?) -> String? {
+    static func outcomeLine(_ outcome: TelemetryUploadOutcome?, language: AppLanguage = .current) -> String? {
+        func text(_ key: LKey) -> String { key.text(for: language) }
         switch outcome {
         case nil, .uploaded?: return nil
-        case .switchOff?: return L(.telemetryOutcomeSwitchOff)
-        case .notAttached?: return L(.telemetryOutcomeNotAttached)
-        case .blockedByBuild?: return L(.telemetryOutcomeBlockedByBuild)
-        case .noConsent?: return L(.telemetryOutcomeNoConsent)
-        case .signedOut?: return L(.telemetryOutcomeSignedOut)
-        case .nothingPending?: return L(.telemetryOutcomeNothingPending)
-        case .staleAfterErase?: return L(.telemetryOutcomeStale)
+        case .switchOff?: return text(.telemetryOutcomeSwitchOff)
+        case .defaultNotConfirmed?: return text(.telemetryOutcomeDefaultNotConfirmed)
+        case .notAttached?: return text(.telemetryOutcomeNotAttached)
+        case .blockedByBuild?: return text(.telemetryOutcomeBlockedByBuild)
+        case .noConsent?: return text(.telemetryOutcomeNoConsent)
+        case .signedOut?: return text(.telemetryOutcomeSignedOut)
+        case .nothingPending?: return text(.telemetryOutcomeNothingPending)
+        case .staleAfterErase?: return text(.telemetryOutcomeStale)
         case .partial(let uploaded, let quarantined)?:
-            return String(format: L(.telemetryOutcomePartialFormat), "\(uploaded)", "\(quarantined)")
+            return String(format: text(.telemetryOutcomePartialFormat),
+                          rows(uploaded, language: language), rows(quarantined, language: language))
         case .failed(let kind, let code)?:
-            return String(format: L(.telemetryLastFailureFormat), "\(kind) \(code)")
+            return String(format: text(.telemetryLastFailureFormat), "\(kind) \(code)")
         }
     }
 
+    /// "1 row" / "3 rows" (Chinese: "1 条" / "3 条").
+    static func rows(_ count: Int, language: AppLanguage) -> String {
+        String(format: (count == 1 ? LKey.telemetryRowsOne : .telemetryRowsMany).text(for: language), "\(count)")
+    }
+
     /// Rows the server refused and the cursor parked, when any.
-    static func quarantinedLine(count: Int) -> String? {
+    static func quarantinedLine(count: Int, language: AppLanguage = .current) -> String? {
         guard count > 0 else { return nil }
-        return String(format: L(.telemetryQuarantinedFormat), "\(count)")
+        let format = (count == 1 ? LKey.telemetryQuarantinedOne : .telemetryQuarantinedFormat).text(for: language)
+        return String(format: format, "\(count)")
     }
 
     /// A failed or partial attempt is shown in orange; a gate or an empty

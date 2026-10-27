@@ -182,6 +182,15 @@ struct TelemetryClaimKey: Equatable {
     }
 }
 
+// MARK: - Last upload (the status row)
+
+/// When the last batch landed and how many rows its trigger moved — what
+/// the status row says, kept across relaunches (QA).
+struct TelemetryUploadStatus: Codable, Equatable {
+    let at: Date
+    let rows: Int
+}
+
 // MARK: - Upload cursor (design §7.2, B·F9/F36)
 
 /// `run_id → highest revision the server has acknowledged`. Advances only
@@ -298,9 +307,19 @@ enum TelemetryConsent {
     /// and only the current account's. No consent, or no account, means
     /// nothing — a nil owner is the signed-out partition and never equals
     /// "whoever is signed in now".
+    ///
+    /// The watermark is compared at WHOLE-SECOND granularity — the consent
+    /// second itself counts as consented. Records come back from disk at
+    /// whole seconds (`SpikeRunStore` writes dates with the `.iso8601`
+    /// strategy, which drops fractions) while the consent moment is a
+    /// full-precision `Date`, so a record minted a few milliseconds AFTER
+    /// consent read back as before it (device bug, build 17: the consent
+    /// re-mint was filtered out for the rest of the day). Whole seconds are
+    /// also the Lean model's instants, so the fixtures are unaffected.
     static func filter(_ records: [SpikeRun], consentAt: Date?, currentOwner: String?) -> [SpikeRun] {
         guard let consentAt, let currentOwner else { return [] }
-        return records.filter { $0.startedAt >= consentAt && $0.ownerUID == currentOwner }
+        let watermark = Date(timeIntervalSince1970: consentAt.timeIntervalSince1970.rounded(.down))
+        return records.filter { $0.startedAt >= watermark && $0.ownerUID == currentOwner }
     }
 }
 
@@ -563,5 +582,166 @@ enum TelemetryRedactor {
             out["app_commit"] = commit
         }
         return out
+    }
+}
+
+// MARK: - TestFlight default (design §16 rule 2)
+
+/// When a build may switch statistics on by itself: a TestFlight install
+/// whose user has never flipped the switch. Its watermark is the distant
+/// past — the user asked for the history this device keeps to go up too
+/// ("可以补传") — which still leaves out what §16 does not adopt: records
+/// with no account (signed-out stretches never match the current owner)
+/// and lines older than the chassis (no `revision`, never pending).
+/// Where this install came from, as far as the statistics default cares
+/// (§16 rule 2, review P1-2).
+enum TelemetryDistribution: Equatable {
+    case testFlight
+    case appStore
+    /// Signed with a provisioning profile (Xcode, devicectl, ad hoc), or
+    /// StoreKit's `.xcode`.
+    case development
+    /// StoreKit could not say: offline, an error, an unverified transaction.
+    case unknown(reason: String)
+
+    /// The token on the launch's `Telemetry environment=` trail line.
+    var traceLabel: String {
+        switch self {
+        case .testFlight: return "testflight"
+        case .appStore: return "appstore"
+        case .development: return "development"
+        case .unknown(let reason): return "unknown(\(reason))"
+        }
+    }
+}
+
+enum TelemetryDefaultPolicy {
+    static let testFlightWatermark = Date.distantPast
+
+    static func autoEnables(distribution: TelemetryDistribution, userHasDecided: Bool) -> Bool {
+        distribution == .testFlight && !userHasDecided
+    }
+
+    /// Only a DEFINITE App Store answer withdraws a switch the default turned
+    /// on (review P1-1): `unknown` leaves it alone, so an offline TestFlight
+    /// launch cannot flip it off and on again.
+    static func withdrawsDefault(distribution: TelemetryDistribution, enabledByDefault: Bool) -> Bool {
+        distribution == .appStore && enabledByDefault
+    }
+
+    /// Whether an ON switch may upload: one the user turned on, always; one
+    /// the default turned on, only once this launch has heard "TestFlight" —
+    /// a batch that runs before StoreKit answers, or on any other answer,
+    /// sends nothing.
+    static func mayUpload(enabledByDefault: Bool, distribution: TelemetryDistribution?) -> Bool {
+        !enabledByDefault || distribution == .testFlight
+    }
+
+    /// The watermark a batch filters against (decision 2026-10-27 ①): in
+    /// TestFlight EVERY consent backfills — the default's and the user's own
+    /// ON alike, build 17's included — so it is the distant past whatever
+    /// moment is stored; elsewhere it is the stored consent moment, which
+    /// is always a real one (review P1-1).
+    static func watermark(consentAt: Date, isTestFlight: Bool) -> Date {
+        isTestFlight ? testFlightWatermark : consentAt
+    }
+}
+
+// MARK: - Wire row → record (design §16 rule 3: the observatory reads the cloud)
+
+extension TelemetryWire {
+    private static let fractionalTimestamp: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    private static let wholeSecondTimestamp: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
+    /// PostgREST renders `timestamptz` as `…:48.813127+00:00` or, on a whole
+    /// second, `…:48+00:00`; each needs its own formatter.
+    static func parseTimestamp(_ text: String) -> Date? {
+        fractionalTimestamp.date(from: text) ?? wholeSecondTimestamp.date(from: text)
+    }
+
+    /// A `v_my_spike_runs` row (the `spike_runs` columns minus `note` and
+    /// the server's two upload stamps) as the record the evaluator reads.
+    /// What the wire never carries — zone, locale, note — comes back empty;
+    /// the owner is the row's `user_id`. nil when a column the evaluator or
+    /// the merge depends on is missing or malformed: an unreadable row is
+    /// left out, never guessed at.
+    static func run(fromRow row: [String: Any]) -> SpikeRun? {
+        guard let id = (row["run_id"] as? String).flatMap(UUID.init(uuidString:)),
+              let spikeID = row["spike_id"] as? String,
+              let scenarioID = row["scenario_id"] as? String,
+              let startedAt = (row["started_at"] as? String).flatMap(parseTimestamp),
+              let appVersion = row["app_version"] as? String,
+              let appBuild = (row["app_build"] as? NSNumber)?.intValue,
+              let deviceModel = row["device_model"] as? String,
+              let osVersion = row["os_version"] as? String
+        else { return nil }
+        var metrics: [String: SpikeMetricValue] = [:]
+        for (key, value) in row["metrics"] as? [String: Any] ?? [:] {
+            if let number = value as? NSNumber {
+                metrics[key] = CFGetTypeID(number) == CFBooleanGetTypeID() ? .bool(number.boolValue) : .number(number.doubleValue)
+            } else if let text = value as? String {
+                metrics[key] = .string(text)
+            }
+        }
+        let context = row["context"] as? [String: Any] ?? [:]
+        var run = SpikeRun(
+            id: id, spikeID: spikeID, scenarioID: scenarioID,
+            variantID: context["variant_id"] as? String,
+            startedAt: startedAt,
+            endedAt: (row["ended_at"] as? String).flatMap(parseTimestamp),
+            appVersion: appVersion, appBuild: String(appBuild),
+            appCommit: context["app_commit"] as? String,
+            deviceModel: deviceModel, osVersion: osVersion,
+            timeZoneIdentifier: "", localeIdentifier: "",
+            buildConfiguration: row["build_configuration"] as? String,
+            coActiveSpikeIDs: context["co_active_spike_ids"] as? [String],
+            metrics: metrics, note: nil,
+            outcome: (row["outcome"] as? String).flatMap(SpikeRunOutcome.init(rawValue:)),
+            abortReason: (context["abort_reason"] as? String).map(SpikeAbortReason.init(storedText:))
+        )
+        run.installID = (row["install_id"] as? String).flatMap(UUID.init(uuidString:))
+        run.ownerUID = row["user_id"] as? String
+        run.dayKey = row["day_key"] as? String
+        run.dayTZOffsetMin = (row["day_tz_offset_min"] as? NSNumber)?.intValue
+        run.revision = (row["revision"] as? NSNumber)?.intValue
+        run.kind = (row["kind"] as? String).flatMap(TelemetryRecordKind.init(rawValue:))
+        return run
+    }
+}
+
+// MARK: - Observatory merge (design §16 rule 3)
+
+enum TelemetryObservatoryMerge {
+    /// This device's records and this account's cloud rows as ONE set, one
+    /// record per run id: the higher `revision` wins, and a tie goes to the
+    /// local copy, which carries what the wire does not (zone, locale,
+    /// note). Ordered by `startedAt`, then id — the evaluator does not care,
+    /// a stable order keeps the deck from shuffling between reads.
+    static func merge(local: [SpikeRun], cloud: [SpikeRun]) -> [SpikeRun] {
+        var byID: [UUID: SpikeRun] = [:]
+        for run in local {
+            if let held = byID[run.id], (held.revision ?? 0) >= (run.revision ?? 0) { continue }
+            byID[run.id] = run
+        }
+        for run in cloud {
+            if let held = byID[run.id], (held.revision ?? 0) >= (run.revision ?? 0) { continue }
+            byID[run.id] = run
+        }
+        return byID.values.sorted { ($0.startedAt, $0.id.uuidString) < ($1.startedAt, $1.id.uuidString) }
+    }
+
+    /// Installs behind a set of records; a local line written before the
+    /// `installID` stamp existed is this install's.
+    static func installCount(_ runs: [SpikeRun], localInstall: UUID) -> Int {
+        Set(runs.map { $0.installID ?? localInstall }).count
     }
 }

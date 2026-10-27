@@ -671,7 +671,18 @@ struct DoneApp: App {
     /// resident's flush edges are wired to it in `onAppear`; the settings
     /// card reads it through `\.telemetryUploader`.
     @State private var telemetryUploader: TelemetryUploader? =
-        EventStorageLocation.isRunningUnderXCTest ? nil : TelemetryUploader.live()
+        EventStorageLocation.isRunningUnderXCTest ? nil : DoneApp.makeTelemetryUploader()
+
+    /// gh#273 QA: in a DEBUG build the `TELEMETRY_FAKE_TESTFLIGHT` launch
+    /// variable stands in for StoreKit's answer; no other build can read it
+    /// (`TelemetryFakeTestFlight` exists only under DEBUG).
+    private static func makeTelemetryUploader() -> TelemetryUploader {
+        #if DEBUG
+        return TelemetryUploader.live(isTestFlight: TelemetryFakeTestFlight.launchValue)
+        #else
+        return TelemetryUploader.live()
+        #endif
+    }
     /// Auto-enter focus mode when device rotates to landscape. Default off:
     /// users opt in. Manual entry via the calendar header focus button is
     /// always available regardless of this flag.
@@ -761,8 +772,7 @@ struct DoneApp: App {
                 if residentObservation == nil, !EventStorageLocation.isRunningUnderXCTest, let uploader = telemetryUploader {
                     let center = ResidentObservationCenter(coordinator: spikeSession, store: store,
                                                            ownerUID: { [weak uploader] in uploader?.ownerUID })
-                    center.onUploadTrigger = { [weak uploader] trigger in uploader?.schedule(trigger) }
-                    uploader.onConsentGranted = { [weak center] in center?.remintDailyForConsent() }
+                    uploader.connect(center: center)
                     center.activate()
                     uploader.activate()
                     residentObservation = center
@@ -901,7 +911,7 @@ struct DoneApp: App {
             timeRanges: [Event.TimeRange(start: start, end: end)],
             type: template.title
         )
-        store.addCalendarEvent(event)
+        store.addCalendarEvent(event, creationMotion: .local)
     }
 
     /// Mutates the first time range of `event` by adding `delta` to its end.

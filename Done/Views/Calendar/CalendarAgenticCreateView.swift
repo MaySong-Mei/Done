@@ -128,7 +128,7 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
             agenticIntake: intake
         )
 
-        store.addCalendarEvent(placeholderEvent)
+        store.addCalendarEvent(placeholderEvent, creationMotion: .local)
         inFlightEventIDs.insert(placeholderID)
         inFlightSources[placeholderID] = pendingCreate.source
         if pendingCreate.source == .quickAdd {
