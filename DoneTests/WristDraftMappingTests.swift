@@ -20,7 +20,7 @@ final class WristDraftMappingTests: XCTestCase {
             id: "b\(start)", eventID: UUID(), title: "B", type: "B", colorHex: "#0A84FF",
             start: at(start), end: at(end), isInterrupt: false, quickActionsEnabled: true
         )
-        return WristDayBlock(id: occurrence.id, occurrence: occurrence, start: at(start), end: at(end), lane: 0, lanes: 1, isCurrent: false)
+        return WristDayBlock(id: occurrence.id, occurrence: occurrence, start: at(start), end: at(end), slot: .full, parentID: nil, isCurrent: false, motionKey: occurrence.id)
     }
 
     // MARK: Points

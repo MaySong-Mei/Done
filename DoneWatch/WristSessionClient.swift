@@ -95,6 +95,18 @@ final class WristSessionClient: NSObject, ObservableObject {
         if ProcessInfo.processInfo.arguments.contains("-wristStatsFixture") {
             snapshot = Self.statsFixture(now: Date())
         }
+        if ProcessInfo.processInfo.arguments.contains("-wristParallelFixture") {
+            snapshot = Self.parallelFixture(now: Date(), step: 0)
+            pending = []
+            dismissed = []
+            if ProcessInfo.processInfo.arguments.contains("-wristMotionDemo") {
+                for step in 1...3 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.5 * Double(step) + 2) { [weak self] in
+                        self?.snapshot = Self.parallelFixture(now: Date(), step: step)
+                    }
+                }
+            }
+        }
 #endif
         if activates {
             activate()
@@ -134,14 +146,27 @@ final class WristSessionClient: NSObject, ObservableObject {
     /// A block drawn on the today page: a start with the drawn range, past
     /// or future — the phone stores whatever range a start names — and the
     /// name picked for it, if any.
-    func create(_ type: WristType, title: String? = nil, start: Date, end: Date, now: Date = Date()) {
-        guard end > start else { return }
+    /// Returns the new event's id, nil when the range is empty.
+    @discardableResult
+    func create(_ type: WristType, title: String? = nil, start: Date, end: Date, now: Date = Date()) -> UUID? {
+        guard end > start else { return nil }
+        let eventID = UUID()
         send(
             WristCommand(
                 id: UUID(), issuedAt: now,
-                kind: .start(eventID: UUID(), typeTitle: type.title, start: start, end: end, title: title)
+                kind: .start(eventID: eventID, typeTitle: type.title, start: start, end: end, title: title)
             )
         )
+        return eventID
+    }
+
+    /// Events this watch started whose start the phone has not reflected
+    /// yet: their blocks are this watch's own.
+    var localCreates: Set<UUID> {
+        Set(pending.compactMap { entry in
+            if case .start(let eventID, _, _, _, _) = entry.command.kind { return eventID }
+            return nil
+        })
     }
 
     func finish(_ occurrence: WristOccurrence, now: Date = Date()) {
@@ -323,6 +348,10 @@ final class WristSessionClient: NSObject, ObservableObject {
 
     private func adopt(snapshotData: Data?) {
         guard let snapshotData else { return }
+#if DEBUG
+        // The fixture stands in for the phone.
+        if ProcessInfo.processInfo.arguments.contains("-wristParallelFixture") { return }
+#endif
         do {
             snapshot = try WristWire.decode(WristSnapshot.self, from: snapshotData)
         } catch {
@@ -391,6 +420,59 @@ final class WristSessionClient: NSObject, ObservableObject {
             statsSettings: WristStatsSettings(
                 excludesBackground: arguments.contains("-wristExcludeBackground"), defaultPeriod: .threeDays
             )
+        )
+    }
+
+    /// `-wristParallelFixture`: today with every kind of parallel block —
+    /// a parent with an embedded interrupt and a block beside it, a chain,
+    /// identical twins, a quarter hour inside a long block, a pair, one
+    /// running in from last night, and two running now — with the phone's
+    /// motions on. `-wristMotionDemo` then steps it: Review is deleted,
+    /// Lunch grows half an hour, and Coffee arrives from the phone.
+    static func parallelFixture(now: Date, step: Int) -> WristSnapshot {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: now)
+        func at(_ hours: Double) -> Date { today.addingTimeInterval(hours * 3600) }
+        func id(_ n: Int) -> UUID { UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", n))! }
+        let colors = ["Work": "#0A84FF", "Call": "#FF453A", "Meeting": "#FF9F0A", "Gym": "#30D158",
+                      "Lunch": "#FFD60A", "Read": "#BF5AF2", "Plan": "#64D2FF", "Sleep": "#5E5CE6", "Coffee": "#AC8E68"]
+        var order = 0
+        func occ(_ n: Int, _ title: String, _ type: String, _ from: Date, _ to: Date, parent: Int? = nil) -> WristOccurrence {
+            order += 1
+            return WristOccurrence(
+                id: "fx-\(n)-\(from.timeIntervalSince1970)-\(to.timeIntervalSince1970)", eventID: id(n), title: title, type: type,
+                colorHex: colors[type] ?? "#8E8E93", start: from, end: to, isInterrupt: parent != nil,
+                quickActionsEnabled: true, createdAt: today.addingTimeInterval(-86_400 + Double(order)),
+                interruptParentID: parent.map(id)
+            )
+        }
+        let quarter = (now.timeIntervalSince(today) / 900).rounded(.down) * 900
+        var list: [WristOccurrence] = [
+            occ(1, "Sleep", "Sleep", at(-1), at(7)),
+            occ(2, "Wake up", "Read", at(6.5), at(8)),
+            occ(3, "Deep work", "Work", at(9), at(11)),
+            occ(4, "Phone rang", "Call", at(9.5), at(9.75), parent: 3),
+            occ(5, "Review", "Meeting", at(10), at(10.5)),
+            occ(6, "Gym", "Gym", at(12), at(13)),
+            occ(7, "Lunch", "Lunch", at(12.5), at(step >= 2 ? 14 : 13.5)),
+            occ(8, "Read", "Read", at(13), at(14)),
+            occ(9, "Plan A", "Plan", at(15), at(16)),
+            occ(10, "Plan B", "Plan", at(15), at(16)),
+            occ(11, "Writing", "Work", at(16.5), at(19)),
+            occ(12, "Standup", "Meeting", at(17), at(17.25)),
+            occ(13, "Focus", "Work", today.addingTimeInterval(quarter - 3600), today.addingTimeInterval(quarter + 1800)),
+            occ(14, "Music", "Read", today.addingTimeInterval(quarter - 1200), today.addingTimeInterval(quarter + 3600)),
+            occ(15, "Pair X", "Gym", at(20), at(21)),
+            occ(16, "Pair Y", "Lunch", at(20.5), at(21.5)),
+        ]
+        if step >= 1 { list.removeAll { $0.title == "Review" } }
+        if step >= 3 { list.append(occ(17, "Coffee", "Coffee", at(10), at(10.5))) }
+        let types = ["Work", "Meeting", "Read", "Gym"].enumerated().map {
+            WristType(id: id(100 + $0.offset), title: $0.element, colorHex: colors[$0.element]!)
+        }
+        return WristSnapshot(
+            generatedAt: now, types: types, occurrences: list, receipts: [],
+            motions: WristMotionSettings(create: .assemble, delete: .dissolve, resize: .standard)
         )
     }
 

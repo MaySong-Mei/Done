@@ -175,42 +175,33 @@ final class WristDayViewQATests: XCTestCase {
                               now: now ?? dayStart.addingTimeInterval(15 * 3600), currentID: nil)
     }
 
+    /// The layout itself is the phone's (`WristOverlapParityTests`); here,
+    /// what any layout must hold: inside the day's width, and two blocks at
+    /// the same level that share time never share width.
     func testC3LayoutPropertiesOver600RandomDays() {
         var rng = SplitMix(state: 0xC3)
-        var overlapViolations = 0, laneCountViolations = 0, laneRange = 0, schedules = 0, blocksSeen = 0, multiLane = 0
+        var overlapViolations = 0, rangeViolations = 0, schedules = 0, blocksSeen = 0, split = 0, peeked = 0
         for _ in 0..<600 {
             schedules += 1
-            let blocks = layout(randomDay(&rng)).filter { !$0.occurrence.isInterrupt }
+            let blocks = layout(randomDay(&rng))
             blocksSeen += blocks.count
-            for b in blocks where !(0..<b.lanes).contains(b.lane) { laneRange += 1 }
+            for b in blocks where b.slot.x < -1e-9 || b.slot.width <= 0 || b.slot.x + b.slot.width > 1 + 1e-9 {
+                rangeViolations += 1
+            }
+            for b in blocks where b.slot.width < 1 { split += 1 }
+            for b in blocks where b.slot.depth > 0 { peeked += 1 }
             for (i, a) in blocks.enumerated() {
-                for b in blocks[(i + 1)...] where a.lane == b.lane && a.start < b.end && b.start < a.end {
+                for b in blocks[(i + 1)...] where a.slot.zIndex == b.slot.zIndex && a.start < b.end && b.start < a.end
+                    && a.slot.x < b.slot.x + b.slot.width - 1e-9 && b.slot.x < a.slot.x + a.slot.width - 1e-9 {
                     overlapViolations += 1
                 }
             }
-            // Independent clustering: start-sorted sweep, touching does not join.
-            let sorted = blocks.sorted { $0.start < $1.start }
-            var clusters: [[WristDayBlock]] = []
-            var end = Date.distantPast
-            for b in sorted {
-                if clusters.isEmpty || b.start >= end { clusters.append([b]); end = b.end }
-                else { clusters[clusters.count - 1].append(b); end = max(end, b.end) }
-            }
-            for c in clusters {
-                var events: [(Date, Int)] = []
-                for b in c { events.append((b.start, 1)); events.append((b.end, -1)) }
-                events.sort { $0.0 == $1.0 ? $0.1 < $1.1 : $0.0 < $1.0 }   // ends before starts at a tie
-                var cur = 0, peak = 0
-                for e in events { cur += e.1; peak = max(peak, cur) }
-                if peak > 1 { multiLane += 1 }
-                for b in c where b.lanes != peak { laneCountViolations += 1 }
-            }
         }
-        print("QA-C3 schedules=\(schedules) blocks=\(blocksSeen) multiLaneClusters=\(multiLane) overlap=\(overlapViolations) lanes!=peak=\(laneCountViolations) laneOutOfRange=\(laneRange)")
+        print("QA-C3 schedules=\(schedules) blocks=\(blocksSeen) split=\(split) peeked=\(peeked) overlap=\(overlapViolations) range=\(rangeViolations)")
         XCTAssertEqual(overlapViolations, 0)
-        XCTAssertEqual(laneCountViolations, 0)
-        XCTAssertEqual(laneRange, 0)
-        XCTAssertGreaterThan(multiLane, 300, "positive control: overlaps actually occur")
+        XCTAssertEqual(rangeViolations, 0)
+        XCTAssertGreaterThan(split, 300, "positive control: overlaps actually occur")
+        XCTAssertGreaterThan(peeked, 30, "positive control: stack-peek occurs")
     }
 
     func testC3TouchingBlocksAreSeparateClusters() {
@@ -218,9 +209,11 @@ final class WristDayViewQATests: XCTestCase {
         let b = occ(2, start: dayStart.addingTimeInterval(7200), end: dayStart.addingTimeInterval(10800))
         let c = occ(3, start: dayStart.addingTimeInterval(9000), end: dayStart.addingTimeInterval(9900))
         let blocks = Dictionary(uniqueKeysWithValues: layout([c, b, a]).map { ($0.id, $0) })
-        XCTAssertEqual(blocks["o1"]?.lanes, 1, "A touches B end-to-start: not in B's cluster")
-        XCTAssertEqual(blocks["o2"]?.lanes, 2)
-        XCTAssertEqual(blocks["o3"]?.lanes, 2)
+        XCTAssertEqual(blocks["o1"]?.slot, .full, "A touches B end-to-start: not in B's cluster")
+        // B (1h) is 4× C (15 min): B hosts at full width, C in the right half.
+        XCTAssertEqual(blocks["o2"]?.slot.width, 1)
+        XCTAssertEqual(blocks["o3"]?.slot.x, 0.5)
+        XCTAssertEqual(blocks["o3"]?.slot.width, 0.5)
     }
 
     func testC3OutputIsIndependentOfInputOrder() {
@@ -233,8 +226,8 @@ final class WristDayViewQATests: XCTestCase {
             for _ in 0..<4 {
                 trials += 1
                 let other = layout(day.shuffled(using: &rng))
-                let m1 = Dictionary(uniqueKeysWithValues: base.map { ($0.id, [$0.lane, $0.lanes]) })
-                let m2 = Dictionary(uniqueKeysWithValues: other.map { ($0.id, [$0.lane, $0.lanes]) })
+                let m1 = Dictionary(uniqueKeysWithValues: base.map { ($0.id, $0.slot) })
+                let m2 = Dictionary(uniqueKeysWithValues: other.map { ($0.id, $0.slot) })
                 if m1 != m2 {
                     laneDiffs += 1
                     if example.isEmpty {
@@ -246,8 +239,8 @@ final class WristDayViewQATests: XCTestCase {
                 if base.map(\.id) != other.map(\.id) { orderDiffs += 1 }
             }
         }
-        print("QA-C3 order trials=\(trials) laneAssignmentDiffs=\(laneDiffs) drawOrderDiffs=\(orderDiffs) example: \(example)")
-        XCTAssertEqual(laneDiffs, 0, "lane assignment depends on input order: \(example)")
+        print("QA-C3 order trials=\(trials) slotDiffs=\(laneDiffs) drawOrderDiffs=\(orderDiffs) example: \(example)")
+        XCTAssertEqual(laneDiffs, 0, "placement depends on input order: \(example)")
         XCTAssertEqual(orderDiffs, 0, "draw order depends on input order")
     }
 

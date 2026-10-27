@@ -120,13 +120,21 @@ final class WristSnapshotBuilderTests: XCTestCase {
         XCTAssertEqual(result[0].end, day(0, hour: 8))
     }
 
-    func testOccurrencesAreSortedByStartAcrossDays() {
+    /// The store's order — focus mode's — across days, and an event's own
+    /// occurrences by start.
+    func testOccurrencesAreInStoreOrderAcrossDays() {
+        var daily = event("daily", type: "T", start: day(-5, hour: 12), end: day(-5, hour: 13))
+        daily.repeatUnit = .day
         let events = [
             event("late today", type: "T", start: day(0, hour: 22), end: day(0, hour: 23)),
+            daily,
             event("early tomorrow", type: "T", start: day(1, hour: 1), end: day(1, hour: 2)),
             event("early today", type: "T", start: day(0, hour: 1), end: day(0, hour: 2)),
         ]
-        XCTAssertEqual(occurrences(events).map(\.title), ["early today", "late today", "early tomorrow"])
+        let result = occurrences(events)
+        XCTAssertEqual(result.map(\.title), ["late today"] + Array(repeating: "daily", count: 4) + ["early tomorrow", "early today"])
+        let dailyStarts = result.filter { $0.title == "daily" }.map(\.start)
+        XCTAssertEqual(dailyStarts, dailyStarts.sorted())
     }
 
     func testRecurringOccurrencesExpandAndRefuseQuickActions() {
