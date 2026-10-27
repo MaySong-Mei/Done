@@ -37,6 +37,7 @@
 
 import Combine
 import Foundation
+import StoreKit
 import SwiftUI
 import UIKit
 
@@ -57,26 +58,120 @@ enum TelemetryConsentStore {
     static func recordGrant(_ defaults: UserDefaults, at date: Date) {
         defaults.set(date, forKey: AppSettingsKeys.telemetryConsentAt)
     }
+
+    /// §16: the user has ruled on the switch. True once they flipped it
+    /// (`telemetryUserDecided`), and also for a switch a build before this
+    /// one left stored as explicitly OFF — the key is not registered, so a
+    /// stored `false` can only be the user's (the erase removes the key).
+    static func userHasDecided(_ defaults: UserDefaults) -> Bool {
+        if defaults.bool(forKey: AppSettingsKeys.telemetryUserDecided) { return true }
+        return (defaults.object(forKey: AppSettingsKeys.telemetryUploadsEnabled) as? Bool) == false
+    }
+
+    static func recordDecision(_ defaults: UserDefaults) {
+        defaults.set(true, forKey: AppSettingsKeys.telemetryUserDecided)
+    }
 }
 
 // MARK: - The settings switch's edge
 
-/// What `DataPrivacySettingsView`'s `onChange` does when the statistics
-/// switch flips — one function, so the integration test drives the REAL
-/// sequence rather than a hand-copied one (device bug, build 17: every
-/// earlier end-to-end run pre-wrote consent into the plist and never
-/// exercised this path). OFF → ON writes consent at `now` (the one write
-/// point, review P2-4) and only then tells the uploader, which re-mints the
-/// day's record; ON → OFF withdraws the note sub-consent with it (Q5).
+/// What the statistics switch does when the USER flips it (Fix Watch's
+/// toggle binding, §16 rule 1) — one function, so the integration test
+/// drives the REAL sequence rather than a hand-copied one (device bug,
+/// build 17: every earlier end-to-end run pre-wrote consent into the plist
+/// and never exercised this path). Records that the user has ruled (§16:
+/// no default turns it on again), then OFF → ON writes consent at `now`
+/// (the one write point, review P2-4) and only then tells the uploader,
+/// which re-mints the day's record; ON → OFF withdraws the note
+/// sub-consent with it (Q5). A programmatic write of the switch (the
+/// TestFlight default) does not come through here — that is why the view
+/// binds the toggle to this instead of observing the stored value.
 @MainActor
 enum TelemetrySwitchEdge {
     static func apply(from wasOn: Bool, to isOn: Bool, defaults: UserDefaults, now: Date, uploader: TelemetryUploader?) {
+        TelemetryConsentStore.recordDecision(defaults)
         if !wasOn, isOn {
             TelemetryConsentStore.recordGrant(defaults, at: now)
         } else if wasOn, !isOn {
             defaults.set(false, forKey: AppSettingsKeys.telemetryNoteUploadsEnabled)
         }
         uploader?.switchDidChange(from: wasOn, to: isOn)
+    }
+}
+
+// MARK: - TestFlight (design §16 rule 2)
+
+/// StoreKit 2's own word on where this install came from: a TestFlight
+/// install carries a `.sandbox` app transaction, the App Store `.production`,
+/// Xcode and the simulator `.xcode`. Only a VERIFIED sandbox transaction
+/// counts; anything else — an unverified one, an error, no network — is
+/// "not TestFlight", which leaves the App Store default (off) in place.
+/// Cached for the process once asked.
+@MainActor
+enum TestFlightDetector {
+    private static var cached: Bool?
+
+    static func isTestFlight() async -> Bool {
+        if let cached { return cached }
+        let answer: Bool
+        do {
+            if case .verified(let transaction) = try await AppTransaction.shared {
+                answer = transaction.environment == .sandbox
+            } else {
+                answer = false
+            }
+        } catch {
+            answer = false
+        }
+        cached = answer
+        return answer
+    }
+}
+
+// MARK: - Observatory cloud read (design §16 rule 3)
+
+/// One page of this account's observatory rows (server view
+/// `v_my_spike_runs`, RLS: own rows only, release rows only).
+/// `SupabaseREST` is the production conformance.
+@MainActor
+protocol TelemetryCloudReading: AnyObject {
+    func fetchMySpikeRunsPage(spikeIDs: [String], limit: Int, offset: Int) async throws -> [[String: Any]]
+}
+
+extension SupabaseREST: TelemetryCloudReading {}
+
+enum TelemetryCloudPager {
+    /// Below any plausible PostgREST `max_rows` (1000 locally and by
+    /// default), so a page that comes back short really is the last one —
+    /// never a server cap read as the end.
+    static let pageSize = 500
+    static let maxPages = 40
+
+    /// Every row, walked with `limit`/`offset` over the view's STABLE order
+    /// (`day_key.desc, run_id.asc` — total, `run_id` being unique per user).
+    /// Rows are only ever inserted or updated in place (no client delete),
+    /// so a row added mid-walk can only push later rows DOWN: the next page
+    /// repeats one, it never skips one. Repeats collapse by run id, keeping
+    /// the higher `revision`.
+    static func fetchAll(from source: TelemetryCloudReading, spikeIDs: [String], pageSize: Int = pageSize) async throws -> [[String: Any]] {
+        var byID: [String: [String: Any]] = [:]
+        var order: [String] = []
+        for page in 0..<maxPages {
+            let rows = try await source.fetchMySpikeRunsPage(spikeIDs: spikeIDs, limit: pageSize, offset: page * pageSize)
+            for row in rows {
+                guard let id = (row["run_id"] as? String)?.lowercased() else { continue }
+                if let held = byID[id] {
+                    let heldRevision = (held["revision"] as? NSNumber)?.intValue ?? 0
+                    let incoming = (row["revision"] as? NSNumber)?.intValue ?? 0
+                    if incoming > heldRevision { byID[id] = row }
+                } else {
+                    byID[id] = row
+                    order.append(id)
+                }
+            }
+            if rows.count < pageSize { break }
+        }
+        return order.compactMap { byID[$0] }
     }
 }
 
@@ -162,6 +257,9 @@ final class TelemetryUploader: ObservableObject {
         let isBlockedByBuild: () -> Bool
         let currentUserID: () -> String?
         let isSignedIn: () -> Bool
+        /// The observatory's read of this account's cloud rows (§16 rule 3);
+        /// nil where there is none (tests that only upload).
+        var cloudReader: TelemetryCloudReading? = nil
     }
 
     struct Dependencies {
@@ -181,6 +279,9 @@ final class TelemetryUploader: ObservableObject {
         /// at launch even though `AuthService` lives further down the view
         /// tree (nil under test and when nothing is persisted).
         var bootstrapOwner: () -> String? = { nil }
+        /// §16 rule 2: whether this install came from TestFlight. StoreKit
+        /// in the app; tests hand in an answer.
+        var isTestFlight: @MainActor () async -> Bool = { await TestFlightDetector.isTestFlight() }
     }
 
     let dependencies: Dependencies
@@ -279,12 +380,14 @@ final class TelemetryUploader: ObservableObject {
         if attachment != nil, self.authService === authService, self.syncService === syncService { return }
         self.authService = authService
         self.syncService = syncService
+        let rest = SupabaseREST(url: SupabaseSyncConfig.url, projectAPIKey: SupabaseSyncConfig.publishableKey,
+                                authService: authService)
         attach(Attachment(
-            gateway: SupabaseREST(url: SupabaseSyncConfig.url, projectAPIKey: SupabaseSyncConfig.publishableKey,
-                                  authService: authService),
+            gateway: rest,
             isBlockedByBuild: { [weak syncService] in syncService?.uploadsBlockedByBuild ?? true },
             currentUserID: { [weak authService] in authService?.userId },
-            isSignedIn: { [weak authService] in authService?.isSignedIn ?? false }
+            isSignedIn: { [weak authService] in authService?.isSignedIn ?? false },
+            cloudReader: rest
         ))
     }
 
@@ -309,6 +412,55 @@ final class TelemetryUploader: ObservableObject {
         }
         if UIApplication.shared.applicationState == .active {
             armLaunchBatch()
+        }
+        Task { [weak self] in await self?.applyTestFlightDefaultIfNeeded() }
+    }
+
+    /// §16 rule 2: a TestFlight install whose user has not ruled starts with
+    /// statistics ON and the watermark in the distant past, so this device's
+    /// account-stamped history goes up in the first batches. Never touches
+    /// the note sub-switch and never sets "decided" (that is the user's
+    /// alone), so it re-asserts itself — idempotently — on each launch until
+    /// the user flips the switch either way. Returns whether it is on by
+    /// default after the call.
+    @discardableResult
+    func applyTestFlightDefaultIfNeeded() async -> Bool {
+        let defaults = dependencies.defaults
+        guard !TelemetryConsentStore.userHasDecided(defaults) else { return false }
+        let isTestFlight = await dependencies.isTestFlight()
+        // Re-read after the await: the user may have flipped the switch
+        // while StoreKit answered.
+        guard TelemetryDefaultPolicy.autoEnables(isTestFlight: isTestFlight,
+                                                 userHasDecided: TelemetryConsentStore.userHasDecided(defaults)) else { return false }
+        let wasOn = defaults.bool(forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        let changed = !wasOn || TelemetryConsentStore.consentAt(defaults) != TelemetryDefaultPolicy.testFlightWatermark
+        defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        TelemetryConsentStore.recordGrant(defaults, at: TelemetryDefaultPolicy.testFlightWatermark)
+        if changed {
+            DiagnosticTrail.record("Telemetry", "default.testflight_on was_on=\(wasOn) watermark=distant_past")
+            schedule(.launch)
+        }
+        return true
+    }
+
+    // MARK: Observatory
+
+    /// This account's observatory rows from the cloud (§16 rule 3),
+    /// decoded; nil when there is no cloud to ask — not attached, signed
+    /// out, no reader, or the read failed — so the deck falls back to this
+    /// device and says so. Reading one's own rows needs no consent switch.
+    func fetchObservatoryCloudRuns() async -> [SpikeRun]? {
+        guard let attachment, let reader = attachment.cloudReader, attachment.isSignedIn() else { return nil }
+        do {
+            let rows = try await TelemetryCloudPager.fetchAll(
+                from: reader,
+                spikeIDs: [FixObservationRegistry.residentDailySpikeID, FixObservationRegistry.effortPathFixID]
+            )
+            return rows.compactMap(TelemetryWire.run(fromRow:))
+        } catch {
+            let failure = SyncWriteFailure.classify(error)
+            DiagnosticTrail.record("Telemetry", "observatory.cloud_unavailable kind=\(failure.kind) code=\(failure.code)")
+            return nil
         }
     }
 
@@ -427,7 +579,7 @@ final class TelemetryUploader: ObservableObject {
         }
         inFlight = Task(priority: .utility) { [weak self] in
             guard let self else { return }
-            let outcome = await self.runBatch(trigger: trigger)
+            let outcome = await self.runUntilDrained(trigger: trigger)
             // One line per CHANGE of gate outcome, not per batch: a device
             // stuck at a gate shows the gate once, not a line per edge.
             if let gate = outcome.gateLabel, outcome != self.lastOutcome {
@@ -443,9 +595,54 @@ final class TelemetryUploader: ObservableObject {
         }
     }
 
+    // MARK: One trigger: batches until drained (design §16 rule 2)
+
+    /// A ceiling on one trigger's batches (2048 rows): a backfill larger
+    /// than that finishes on the next trigger.
+    static let maxBatchesPerTrigger = 64
+
+    /// One trigger sends batches until nothing is pending — a TestFlight
+    /// device's backfill is hundreds of rows, a batch is ≤32. It stops at
+    /// the first batch that moves nothing: a gate, an empty selection, a
+    /// failure, an erase — so a failure waits for the next trigger like any
+    /// other. The daily throttle is judged ONCE, at the trigger: an edge
+    /// that may send dailies sends all of them, not only the first batch's.
+    /// The loop runs inside the single in-flight task, so the keep-alive
+    /// covers all of it.
+    private func runUntilDrained(trigger: TelemetryTrigger) async -> TelemetryUploadOutcome {
+        let dailyClockAtTrigger = lastDailyUploadAt
+        var sent = 0
+        var parked = 0
+        var last: TelemetryUploadOutcome = .nothingPending
+        batches: for _ in 0..<Self.maxBatchesPerTrigger {
+            last = await runBatch(trigger: trigger, lastDailyUploadAt: dailyClockAtTrigger)
+            switch last {
+            case .uploaded(let rows):
+                sent += rows
+            case .partial(let uploaded, let quarantined) where uploaded + quarantined > 0:
+                sent += uploaded
+                parked += quarantined
+            default:
+                break batches
+            }
+        }
+        if sent > 0 { lastBatchCount = sent }
+        switch last {
+        case .uploaded, .partial, .nothingPending:
+            // Drained (or at the ceiling): report what the trigger moved.
+            if parked > 0 { return .partial(uploaded: sent, quarantined: parked) }
+            if sent > 0 { return .uploaded(rows: sent) }
+            return last
+        default:
+            // Stopped by a failure, a gate or an erase: that is the news;
+            // the status line already shows the rows that did land.
+            return last
+        }
+    }
+
     // MARK: One batch
 
-    private func runBatch(trigger: TelemetryTrigger) async -> TelemetryUploadOutcome {
+    private func runBatch(trigger: TelemetryTrigger, lastDailyUploadAt: Date?) async -> TelemetryUploadOutcome {
         let defaults = dependencies.defaults
         guard defaults.bool(forKey: AppSettingsKeys.telemetryUploadsEnabled) else { return .switchOff }
         guard let attachment else { return .notAttached }

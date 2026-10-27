@@ -329,6 +329,11 @@ enum AppSettingsKeys {
     /// The second switch (decision point 1, option A): the manual Spike
     /// `note` — the ONE free-text field — rides along only with this on.
     static let telemetryNoteUploadsEnabled = "telemetryNoteUploadsEnabled"
+    /// gh#273 §16: the user has flipped the statistics switch themselves,
+    /// either way. Until then a TestFlight build switches it on by default;
+    /// once set, nothing but the user turns it on. Not registered (unset
+    /// reads false) and swept by the erase, like the switch itself.
+    static let telemetryUserDecided = "telemetryUserDecided"
 
     /// What an unset key reads as (design D9: sync is on by default). Only
     /// the registration domain: nothing is written, so a value the user
@@ -356,6 +361,7 @@ enum AppSettingsKeys {
         telemetryUploadsEnabled,
         telemetryConsentAt,
         telemetryNoteUploadsEnabled,
+        telemetryUserDecided,
         calendarAgenticCreateEnabled,
         agentAskBeforeCreatingEventTypeTemplates,
         rememberLastTab,

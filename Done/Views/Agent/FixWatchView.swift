@@ -33,10 +33,20 @@ import SwiftUI
 struct FixWatchView: View {
     @State private var verdicts: [FixVerdict] = []
     @State private var storageBytes: Int = 0
+    /// §16 rule 3: where the verdicts below were computed from.
+    @State private var source: FixWatchSource = .localOnly
     @AppStorage(AppSettingsKeys.telemetryUploadsEnabled) private var telemetryUploadsEnabled = false
+    @AppStorage(AppSettingsKeys.telemetryNoteUploadsEnabled) private var telemetryNoteUploadsEnabled = false
+    /// nil under XCTest and before the app created one — the card then
+    /// shows the switches without the status row, and the deck reads this
+    /// device only.
+    @Environment(\.telemetryUploader) private var telemetryUploader
+    @State private var isPresentingTelemetrySample = false
 
     var body: some View {
         settingsPage("观察站") {
+            telemetryCard
+
             settingsHintCard("Fix Watch:已合入修复的常驻观察。判定只读 Release 构建的数据;Debug 数据单独计数、永不参与判定 — 所以在 Debug 构建里,卡片会一直停在 观察中/数据不足,这是设计而非故障。逐项标准与诚实性注记见各卡片。")
 
             if let alarmed = verdicts.first(where: \.alarm) {
@@ -78,6 +88,61 @@ struct FixWatchView: View {
             }
         }
         .onAppear(perform: refresh)
+        .sheet(isPresented: $isPresentingTelemetrySample) {
+            if let telemetryUploader {
+                TelemetrySampleSheet(uploader: telemetryUploader)
+            }
+        }
+    }
+
+    // MARK: Statistics (design §16 rule 1: the one entrance)
+
+    /// The switch, its note sub-switch and the visible feedback ("did it
+    /// upload, and what") — moved here from Data & Privacy so collecting the
+    /// data and reading it sit on one page. The toggle is BOUND to
+    /// `TelemetrySwitchEdge.apply` rather than observed: a programmatic
+    /// write of the stored value (the TestFlight default) must not pass for
+    /// the user's own flip.
+    @ViewBuilder
+    private var telemetryCard: some View {
+        settingsCard(L(.telemetryCardTitle), spacing: 14) {
+            Toggle(isOn: Binding(
+                get: { telemetryUploadsEnabled },
+                set: { newValue in
+                    let oldValue = telemetryUploadsEnabled
+                    telemetryUploadsEnabled = newValue
+                    TelemetrySwitchEdge.apply(from: oldValue, to: newValue, defaults: .standard, now: Date(),
+                                              uploader: telemetryUploader)
+                }
+            )) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(L(.telemetryShareToggle))
+                        .font(.subheadline.weight(.medium))
+                    Text(L(.telemetryShareHint))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Toggle(isOn: $telemetryNoteUploadsEnabled) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(L(.telemetryNoteToggle))
+                        .font(.subheadline.weight(.medium))
+                    Text(L(.telemetryNoteHint))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .disabled(!telemetryUploadsEnabled)
+            if let telemetryUploader {
+                TelemetryStatusRows(uploader: telemetryUploader, isEnabled: telemetryUploadsEnabled,
+                                    isPresentingSample: $isPresentingTelemetrySample)
+            }
+            if !telemetryUploadsEnabled {
+                settingsHintText(L(.telemetryOffRetentionHint))
+            }
+        }
     }
 
     // MARK: Cards
@@ -123,6 +188,9 @@ struct FixWatchView: View {
                     }
                 }
                 Text("Release 天数 \(verdict.releaseDayCount) · 非 Release 记录 \(verdict.nonReleaseCount)(不参与判定)")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                Text(source.label)
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                 ForEach(verdict.notes, id: \.self) { note in
@@ -182,10 +250,21 @@ struct FixWatchView: View {
     // MARK: Data
 
     private func refresh() {
-        // Shared with the settings row's attention indicator (review Q5),
-        // so the two surfaces can never disagree about the same records.
-        verdicts = FixWatchAttention.loadVerdicts()
+        // This device first, at once (shared with the settings row's
+        // attention indicator, review Q5); then the account's cloud rows
+        // when there is a cloud to ask (§16 rule 3).
+        let local = FixWatchAttention.loadLocalRecords()
+        verdicts = FixWatchAttention.evaluate(dailies: local.dailies, windows: local.windows)
+        source = .localOnly
         storageBytes = spikeRunsDirectoryBytes()
+        guard let telemetryUploader else { return }
+        Task {
+            let cloud = await telemetryUploader.fetchObservatoryCloudRuns()
+            let read = FixWatchAttention.observatory(localDailies: local.dailies, localWindows: local.windows,
+                                                     cloud: cloud, localInstall: SpikeRunStore.installID())
+            verdicts = read.verdicts
+            source = read.source
+        }
     }
 
     private func spikeRunsDirectoryBytes() -> Int {
@@ -214,14 +293,45 @@ enum FixWatchAttention {
     /// never reads a stale day.
     @MainActor
     static func loadVerdicts() -> [FixVerdict] {
+        let local = loadLocalRecords()
+        return evaluate(dailies: local.dailies, windows: local.windows)
+    }
+
+    /// The local half of the deck's read: flush today so far, then this
+    /// device's records.
+    @MainActor
+    static func loadLocalRecords() -> (dailies: [SpikeRun], windows: [SpikeRun]) {
         ResidentObservationCenter.shared?.flushDaily()
-        let dailies = SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.residentDailySpikeID)
-        let windows = SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.effortPathFixID)
-        return [
+        return (SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.residentDailySpikeID),
+                SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.effortPathFixID))
+    }
+
+    static func evaluate(dailies: [SpikeRun], windows: [SpikeRun]) -> [FixVerdict] {
+        [
             FixWatchVerdictEvaluator.evaluateEffortPath(dailies: dailies, windows: windows),
             FixWatchVerdictEvaluator.evaluateMeTabGate(dailies: dailies),
             FixWatchVerdictEvaluator.evaluateTouchDelivery(dailies: dailies),
         ]
+    }
+
+    /// §16 rule 3, pure: the deck's verdicts and its source line from this
+    /// device's records and — when there is one — this account's cloud
+    /// rows. No cloud (offline, signed out, a failed read) or an empty one
+    /// falls back to this device and says "this device only"; otherwise the
+    /// two are merged (`TelemetryObservatoryMerge`) and the line names how
+    /// many installs the release records came from.
+    static func observatory(
+        localDailies: [SpikeRun], localWindows: [SpikeRun], cloud: [SpikeRun]?, localInstall: UUID
+    ) -> (verdicts: [FixVerdict], source: FixWatchSource) {
+        guard let cloud, !cloud.isEmpty else {
+            return (evaluate(dailies: localDailies, windows: localWindows), .localOnly)
+        }
+        let merged = TelemetryObservatoryMerge.merge(local: localDailies + localWindows, cloud: cloud)
+        let dailies = merged.filter { $0.spikeID == FixObservationRegistry.residentDailySpikeID }
+        let windows = merged.filter { $0.spikeID == FixObservationRegistry.effortPathFixID }
+        let installs = TelemetryObservatoryMerge.installCount(merged.filter(FixWatchVerdictEvaluator.isRelease),
+                                                              localInstall: localInstall)
+        return (evaluate(dailies: dailies, windows: windows), .cloud(devices: max(installs, 1)))
     }
 
     @MainActor
@@ -246,5 +356,21 @@ enum FixWatchAttention {
     static func isoDayString(_ date: Date) -> String {
         let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
+    }
+}
+
+
+// MARK: - Source (design §16 rule 3)
+
+/// Where the deck's verdicts were computed from, stated on every card.
+enum FixWatchSource: Equatable {
+    case localOnly
+    case cloud(devices: Int)
+
+    var label: String {
+        switch self {
+        case .localOnly: return L(.fixWatchSourceLocal)
+        case .cloud(let devices): return String(format: L(.fixWatchSourceCloudFormat), "\(devices)")
+        }
     }
 }
