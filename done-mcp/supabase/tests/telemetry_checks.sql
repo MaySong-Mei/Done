@@ -1,12 +1,14 @@
 -- Bench for migration 016 (telemetry chassis: spike_runs, the revision guard,
--- key_registry and its value vocabulary, the views) — SQL-side checks, in the sync_feed_checks.sql
--- pattern. Run through run_checks.sh (this machine has no host psql: the
+-- key_registry and its value vocabulary, the views) and 017 (v_my_spike_runs,
+-- the caller's own rows for the observatory: T29–T33) — SQL-side checks, in
+-- the sync_feed_checks.sql pattern. Run through run_checks.sh (this machine has no host psql: the
 -- runner copies supabase/ into the db container and runs psql there), or:
 --   psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -v ON_ERROR_STOP=1 -f telemetry_checks.sql
 -- from this directory, after telemetry/key_registry_load.sql was applied.
 -- Every check prints PASS/FAIL with the observed values; the script raises at
 -- the end when any check failed, so psql exits non-zero.
--- Second sessions (user U, user V, anon) are dblink connections the server
+-- Second sessions (user U, user V, anon; briefly a no-sub authenticated N and
+-- service_role S in T29/T31) are dblink connections the server
 -- opens back to itself over its own address (scram); a loopback connection is
 -- trust-authenticated and dblink refuses that for a non-superuser — so run
 -- this over TCP, not a unix socket (inet_server_addr() is null there).
@@ -125,6 +127,17 @@ create function pg_temp.inventory() returns text language sql as $$
     (select count(*) from pg_proc where proname in ('spike_runs_upload_stamp', 'spike_metric_num')
        and pronamespace = 'public'::regnamespace))
 $$;
+
+-- Client-role grants on the eight shared views as the whole migration chain
+-- left them, read BEFORE T1 reruns 016: 016's revoke would wipe a grant that
+-- 017 or a later migration made, and T9 / T32's live reads come after T1
+-- (asserted in T32).
+select count(*) as m_chain_grants,
+       coalesce(string_agg(table_name || ':' || grantee || ':' || privilege_type, ',' order by table_name, grantee, privilege_type), '') as m_chain_grants_list
+from information_schema.role_table_grants where table_schema = 'public'
+  and grantee in ('anon', 'authenticated', 'service_role', 'PUBLIC')
+  and table_name in ('counter_long', 'v_active_installs', 'v_feature_unused_30d', 'v_sync_failure_by_build', 'v_metrickit_by_build',
+                     'v_fixwatch_verdicts_by_install', 'v_fixwatch_pooled_buckets', 'v_possible_dead_wire') \gset
 
 -- ============================================================
 -- T1  a rerun of 016 (twice) is a no-op: same inventory, rows kept
@@ -698,6 +711,155 @@ from lean_res \gset
 select pg_temp.rec('T27', 'every Lean server.apply fixture (accepted <=> the row''s revision changed, final state as expected) and every server.fold fixture (final revision as expected) replays against the trigger as user U; revision-0 fixtures are skipped and counted',
   :fx_total > 0 and :fx_apply > 0 and :fx_fold > 0 and :fx_fail = 0 and :fx_pass = :fx_total - :fx_skipped,
   format('fixtures=%s replayed=%s (apply=%s fold=%s) skipped=%s [%s]; failures: [%s]', :fx_total, :fx_pass, :fx_apply, :fx_fold, :fx_skipped, :'fx_skipped_labels', :'fx_bad'));
+
+-- ============================================================
+-- 017: public.v_my_spike_runs, the caller's own rows for the observatory
+-- (design §16 rules 3 and 4). Two fences — security_invoker (016's RLS
+-- applies) and where user_id = auth.uid() — and either alone keeps V's rows
+-- out of U's result, so T29 is the row-level outcome and T30 pins each fence
+-- structurally (removing one fence leaves T29 green; T30 is what goes red).
+-- try_scalar: a remote one-value query whose outcome is the value as text or
+-- ERR:<sqlstate>, so a missing view is a FAIL line, not a psql abort (try_exec
+-- cannot read: dblink_exec refuses a statement that returns rows, 2F003).
+-- ============================================================
+create function pg_temp.try_scalar(conn text, sql text) returns text language plpgsql as $$
+declare v text;
+begin
+  select t.x into v from dblink(conn, sql) as t(x text);
+  return coalesce(v, '<null>');
+exception when others then
+  return 'ERR:' || sqlstate;
+end $$;
+
+-- ============================================================
+-- T29 as U, v_my_spike_runs returns exactly U's rows (all of them, debug
+--     too: the client filters build_configuration itself) and none of V's;
+--     as V, exactly V's; an authenticated session without a sub sees none
+-- ============================================================
+\echo '--- T29'
+select gen_random_uuid() as m_vrel \gset
+select pg_temp.fixture(:'v', :'m_vrel', :'i2', 'daily_rollup', 'resident-daily', 'daily-rollup', :'today', 5, 'release', '{"tapCount": 4}');
+select count(*) as m_u_owns,
+       count(*) filter (where build_configuration = 'release' and spike_id in ('resident-daily', 'fix-effort-path')) as m_u_owns_f
+from public.spike_runs where user_id = :'u' \gset
+select count(*) as m_v_owns from public.spike_runs where user_id = :'v' \gset
+select pg_temp.try_scalar('U', format('select concat_ws(''/'', count(*), count(*) filter (where user_id <> %L), count(*) filter (where user_id = %L), count(*) filter (where run_id = %L)) from public.v_my_spike_runs',
+                                      :'u', :'v', :'m_vrel')) as m_u_sees \gset
+select pg_temp.try_scalar('U', format('select count(*) from public.v_my_spike_runs where run_id = %L', :'r2')) as m_u_r2 \gset
+select pg_temp.try_scalar('U', 'select count(*) from public.v_my_spike_runs where build_configuration = ''release'' and spike_id in (''resident-daily'', ''fix-effort-path'')') as m_u_f \gset
+select pg_temp.try_scalar('V', format('select concat_ws(''/'', count(*), count(*) filter (where user_id <> %L), count(*) filter (where run_id = %L)) from public.v_my_spike_runs',
+                                      :'v', :'m_vrel')) as m_v_sees \gset
+select dblink_connect('N', :'conninfo');
+select pg_temp.try_exec('N', 'set request.jwt.claims = ''{"role":"authenticated"}''') as m_n_claims \gset
+select pg_temp.try_exec('N', 'set role authenticated') as m_n_role \gset
+select pg_temp.try_scalar('N', 'select count(*) from public.v_my_spike_runs') as m_n_sees \gset
+select dblink_disconnect('N');
+select pg_temp.rec('T29', 'as U, v_my_spike_runs returns every row U owns (debug and release) and 0 rows of V''s — not the shared run_id''s V row, not V''s release daily_rollup; as V, exactly V''s rows (positive control: the view is not simply empty)',
+  :m_u_owns > 0 and :'m_u_sees' = format('%s/0/0/0', :m_u_owns) and :'m_u_r2' = '1' and :m_v_owns >= 2 and :'m_v_sees' = format('%s/0/1', :m_v_owns),
+  format('U: total/foreign/V''s/V''s release run = %s (U owns %s); U rows for the shared run_id=%s (table has 2); V: total/foreign/its release run = %s (V owns %s)',
+         :'m_u_sees', :m_u_owns, :'m_u_r2', :'m_v_sees', :m_v_owns));
+select pg_temp.rec('T29', 'as U, the client''s filter (build_configuration = release, spike_id in resident-daily / fix-effort-path) returns exactly U''s matching rows, and there are some; an authenticated session whose claims carry no sub (auth.uid() null) sees 0 rows',
+  :m_u_owns_f > 0 and :'m_u_f' = :'m_u_owns_f' and :'m_n_claims' = 'SET' and :'m_n_role' = 'SET' and :'m_n_sees' = '0',
+  format('filtered via view=%s, U''s matching rows in the table=%s; no-sub session [%s %s] sees %s', :'m_u_f', :m_u_owns_f, :'m_n_claims', :'m_n_role', :'m_n_sees'));
+
+-- ============================================================
+-- T30 the view's columns are spike_runs' columns minus note /
+--     first_uploaded_at / last_uploaded_at, in table order; both fences are
+--     in the catalog: security_invoker=true and auth.uid() in the where
+-- ============================================================
+\echo '--- T30'
+select coalesce(string_agg(column_name, ',' order by ordinal_position), '') as m_cols,
+       count(*) filter (where column_name in ('note', 'first_uploaded_at', 'last_uploaded_at')) as m_hidden_shown
+from information_schema.columns where table_schema = 'public' and table_name = 'v_my_spike_runs' \gset
+select coalesce(string_agg(column_name, ',' order by ordinal_position) filter (where column_name not in ('note', 'first_uploaded_at', 'last_uploaded_at')), '') as m_cols_exp,
+       count(*) filter (where column_name in ('note', 'first_uploaded_at', 'last_uploaded_at')) as m_base_has3
+from information_schema.columns where table_schema = 'public' and table_name = 'spike_runs' \gset
+select pg_temp.rec('T30', 'v_my_spike_runs has exactly spike_runs'' columns minus note, first_uploaded_at and last_uploaded_at (same order); none of the three appears, and the table does carry all three (so their absence is not vacuous)',
+  :'m_cols' <> '' and :'m_cols' = :'m_cols_exp' and :m_hidden_shown = 0 and :m_base_has3 = 3,
+  format('view columns [%s]; expected [%s]; hidden columns shown=%s; table has the three=%s', :'m_cols', :'m_cols_exp', :m_hidden_shown, :m_base_has3));
+select coalesce(max(array_to_string(c.reloptions, ',')), '') as m_relopts,
+       coalesce(bool_or(position('auth.uid()' in pg_get_viewdef(c.oid)) > 0), false) as m_uid_where,
+       coalesce(bool_or(position('spike_runs' in pg_get_viewdef(c.oid)) > 0), false) as m_reads_table
+from pg_class c where c.oid = to_regclass('public.v_my_spike_runs') and c.relkind = 'v' \gset
+select pg_temp.rec('T30', 'both fences are in the catalog: the view is security_invoker=true (016''s RLS applies to the caller) and its definition reads spike_runs filtered by auth.uid()',
+  :'m_relopts' like '%security_invoker=true%' and :'m_uid_where' = 't' and :'m_reads_table' = 't',
+  format('reloptions [%s]; auth.uid() in definition=%s; reads spike_runs=%s', :'m_relopts', :'m_uid_where', :'m_reads_table'));
+
+-- ============================================================
+-- T31 grants: select to authenticated and nothing else — anon and
+--     service_role are refused (42501); U cannot write through the view
+--     (a one-table view is auto-updatable, so only the missing grant stops it)
+-- ============================================================
+\echo '--- T31'
+select pg_temp.try_scalar('A', 'select count(*) from public.v_my_spike_runs') as m_anon \gset
+select dblink_connect('S', :'conninfo');
+select pg_temp.try_exec('S', 'set role service_role') as m_s_role \gset
+select pg_temp.try_scalar('S', 'select count(*) from public.v_my_spike_runs') as m_sr \gset
+select dblink_disconnect('S');
+select pg_temp.try_exec('U', format('update public.v_my_spike_runs set revision = revision + 100 where user_id = %L', :'u')) as m_upd \gset
+select pg_temp.try_exec('U', format('delete from public.v_my_spike_runs where user_id = %L', :'u')) as m_del \gset
+select pg_temp.try_exec('U', format('insert into public.v_my_spike_runs (user_id, run_id) values (%L, gen_random_uuid())', :'u')) as m_ins \gset
+select count(*) as m_u_rows_after from public.spike_runs where user_id = :'u' \gset
+select coalesce(string_agg(grantee || ':' || privilege_type, ',' order by grantee, privilege_type), '') as m_grants
+from information_schema.role_table_grants where table_schema = 'public' and table_name = 'v_my_spike_runs'
+  and grantee in ('anon', 'authenticated', 'service_role', 'PUBLIC') \gset
+select pg_temp.rec('T31', 'as anon and as service_role, select on v_my_spike_runs is permission denied (42501); the client-role grants on the view are exactly authenticated:SELECT',
+  :'m_anon' = 'ERR:42501' and :'m_s_role' = 'SET' and :'m_sr' = 'ERR:42501' and :'m_grants' = 'authenticated:SELECT',
+  format('anon [%s]; service_role [%s] -> [%s]; grants [%s]', :'m_anon', :'m_s_role', :'m_sr', :'m_grants'));
+select pg_temp.rec('T31', 'as U, update / delete / insert through v_my_spike_runs are permission denied (42501) and U''s rows are untouched',
+  :'m_upd' = 'ERR:42501' and :'m_del' = 'ERR:42501' and :'m_ins' = 'ERR:42501' and :m_u_rows_after = :m_u_owns,
+  format('update [%s] delete [%s] insert [%s]; U rows %s -> %s', :'m_upd', :'m_del', :'m_ins', :m_u_owns, :m_u_rows_after));
+
+-- ============================================================
+-- T32 the eight shared views stay closed to authenticated: as U each select
+--     is 42501, while the same session reads v_my_spike_runs (positive
+--     control); no client role holds a grant on any of the eight, neither
+--     now nor as the migration chain left them (read before T1)
+-- ============================================================
+\echo '--- T32'
+select count(*) as m_shared_n,
+       count(*) filter (where res <> 'ERR:42501') as m_shared_open,
+       string_agg(v || '=' || res, ' ' order by v) as m_shared_res
+from (select v, pg_temp.try_scalar('U', format('select count(*) from public.%I', v)) as res
+      from unnest(array['counter_long', 'v_active_installs', 'v_feature_unused_30d', 'v_sync_failure_by_build', 'v_metrickit_by_build',
+                        'v_fixwatch_verdicts_by_install', 'v_fixwatch_pooled_buckets', 'v_possible_dead_wire']) v) x \gset
+select pg_temp.try_scalar('U', 'select count(*) from public.v_my_spike_runs') as m_mine_ok \gset
+select count(*) as m_shared_grants from information_schema.role_table_grants where table_schema = 'public'
+  and grantee in ('anon', 'authenticated', 'service_role', 'PUBLIC')
+  and table_name in ('counter_long', 'v_active_installs', 'v_feature_unused_30d', 'v_sync_failure_by_build', 'v_metrickit_by_build',
+                     'v_fixwatch_verdicts_by_install', 'v_fixwatch_pooled_buckets', 'v_possible_dead_wire') \gset
+select pg_temp.rec('T32', 'as U (authenticated), selecting from each of the eight shared views is permission denied (42501) while the same session reads v_my_spike_runs; no client role holds a grant on the eight',
+  :m_shared_n = 8 and :m_shared_open = 0 and :'m_mine_ok' = :m_u_owns::text and :m_shared_grants = 0,
+  format('[%s]; v_my_spike_runs [%s rows, U owns %s]; client-role grants on the eight=%s', :'m_shared_res', :'m_mine_ok', :m_u_owns, :m_shared_grants));
+select pg_temp.rec('T32', 'as the full migration chain (001–017, and any later one) left them, before T1''s rerun of 016 could revoke anything, no client role held a grant on the eight shared views',
+  :m_chain_grants = 0, format('client-role grants on the eight before T1=%s [%s]', :m_chain_grants, :'m_chain_grants_list'));
+
+-- ============================================================
+-- T33 a rerun of 017 (twice) recreates the view (new oid) with the same
+--     columns, options and grants, and U reads the same rows through it
+-- ============================================================
+\echo '--- T33'
+create function pg_temp.my_view_state() returns text language sql as $$
+  select format('cols=[%s] opts=[%s] grants=[%s]',
+    (select coalesce(string_agg(column_name || ':' || data_type, ',' order by ordinal_position), '')
+       from information_schema.columns where table_schema = 'public' and table_name = 'v_my_spike_runs'),
+    (select coalesce(max(array_to_string(reloptions, ',')), '') from pg_class where oid = to_regclass('public.v_my_spike_runs')),
+    (select coalesce(string_agg(grantee || ':' || privilege_type, ',' order by grantee, privilege_type), '')
+       from information_schema.role_table_grants where table_schema = 'public' and table_name = 'v_my_spike_runs'
+        and grantee in ('anon', 'authenticated', 'service_role', 'PUBLIC')))
+$$;
+select pg_temp.my_view_state() as m_state0, coalesce(to_regclass('public.v_my_spike_runs')::oid::text, '') as m_oid0 \gset
+select pg_temp.try_scalar('U', 'select count(*) from public.v_my_spike_runs') as m_n0 \gset
+set client_min_messages = warning;
+\ir ../migrations/017_spike_runs_my_view.sql
+\ir ../migrations/017_spike_runs_my_view.sql
+set client_min_messages = notice;
+select pg_temp.my_view_state() as m_state1, coalesce(to_regclass('public.v_my_spike_runs')::oid::text, '') as m_oid1 \gset
+select pg_temp.try_scalar('U', 'select count(*) from public.v_my_spike_runs') as m_n1 \gset
+select pg_temp.rec('T33', 'rerunning 017 twice drops and recreates the view (its oid changes) and leaves the same columns, options and grants (authenticated:SELECT only); U reads the same row count through it before and after',
+  :'m_oid0' <> '' and :'m_oid1' <> '' and :'m_oid0' <> :'m_oid1' and :'m_state0' = :'m_state1' and :'m_state1' like '%grants=[authenticated:SELECT]%'
+    and :'m_n0' = :'m_n1' and :'m_n0' = :m_u_owns::text,
+  format('oid %s -> %s; %s -> %s; U rows via view %s -> %s (owns %s)', :'m_oid0', :'m_oid1', :'m_state0', :'m_state1', :'m_n0', :'m_n1', :m_u_owns));
 
 -- ============================================================
 -- T14 cleanup through the cascade: deleting the auth.users rows removes
