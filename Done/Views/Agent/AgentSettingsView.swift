@@ -1044,12 +1044,18 @@ enum TelemetrySettingsCopy {
         sharing ? L(.hintLocalDataSharing) : L(.hintLocalData)
     }
 
-    static func statusLine(uploader: TelemetryUploader, now: Date) -> String {
-        guard let lastUploadAt = uploader.lastUploadAt else { return L(.telemetryStatusNever) }
-        let when = RelativeDateTimeFormatter.telemetryShort.localizedString(for: lastUploadAt, relativeTo: now)
+    static func statusLine(uploader: TelemetryUploader, now: Date, language: AppLanguage = .current) -> String {
+        guard let lastUploadAt = uploader.lastUploadAt else { return LKey.telemetryStatusNever.text(for: language) }
         let build = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "?"
-        return statusLine(when: when, rows: uploader.lastBatchCount, total: uploader.totalAcknowledged, build: build,
-                          language: .current)
+        return statusLine(when: relativeWhen(lastUploadAt, now: now, language: language), rows: uploader.lastBatchCount,
+                          total: uploader.totalAcknowledged, build: build, language: language)
+    }
+
+    /// Under a second ago — or ahead of `now`, a clock that stepped back
+    /// since — reads "just now", never "in 0 sec." (QA).
+    static func relativeWhen(_ date: Date, now: Date, language: AppLanguage) -> String {
+        guard now.timeIntervalSince(date) >= 1 else { return LKey.telemetryJustNow.text(for: language) }
+        return RelativeDateTimeFormatter.telemetryShort.localizedString(for: date, relativeTo: now)
     }
 
     /// "1 row", not "1 rows" (English has a singular; Chinese spells both
@@ -1063,28 +1069,36 @@ enum TelemetrySettingsCopy {
     /// P2-2): the manual button is the device checklist's probe, and
     /// "nothing to send" must read differently from "stopped at a gate".
     /// nil for a plain success — the status line above already says it.
-    static func outcomeLine(_ outcome: TelemetryUploadOutcome?) -> String? {
+    static func outcomeLine(_ outcome: TelemetryUploadOutcome?, language: AppLanguage = .current) -> String? {
+        func text(_ key: LKey) -> String { key.text(for: language) }
         switch outcome {
         case nil, .uploaded?: return nil
-        case .switchOff?: return L(.telemetryOutcomeSwitchOff)
-        case .defaultNotConfirmed?: return L(.telemetryOutcomeDefaultNotConfirmed)
-        case .notAttached?: return L(.telemetryOutcomeNotAttached)
-        case .blockedByBuild?: return L(.telemetryOutcomeBlockedByBuild)
-        case .noConsent?: return L(.telemetryOutcomeNoConsent)
-        case .signedOut?: return L(.telemetryOutcomeSignedOut)
-        case .nothingPending?: return L(.telemetryOutcomeNothingPending)
-        case .staleAfterErase?: return L(.telemetryOutcomeStale)
+        case .switchOff?: return text(.telemetryOutcomeSwitchOff)
+        case .defaultNotConfirmed?: return text(.telemetryOutcomeDefaultNotConfirmed)
+        case .notAttached?: return text(.telemetryOutcomeNotAttached)
+        case .blockedByBuild?: return text(.telemetryOutcomeBlockedByBuild)
+        case .noConsent?: return text(.telemetryOutcomeNoConsent)
+        case .signedOut?: return text(.telemetryOutcomeSignedOut)
+        case .nothingPending?: return text(.telemetryOutcomeNothingPending)
+        case .staleAfterErase?: return text(.telemetryOutcomeStale)
         case .partial(let uploaded, let quarantined)?:
-            return String(format: L(.telemetryOutcomePartialFormat), "\(uploaded)", "\(quarantined)")
+            return String(format: text(.telemetryOutcomePartialFormat),
+                          rows(uploaded, language: language), rows(quarantined, language: language))
         case .failed(let kind, let code)?:
-            return String(format: L(.telemetryLastFailureFormat), "\(kind) \(code)")
+            return String(format: text(.telemetryLastFailureFormat), "\(kind) \(code)")
         }
     }
 
+    /// "1 row" / "3 rows" (Chinese: "1 条" / "3 条").
+    static func rows(_ count: Int, language: AppLanguage) -> String {
+        String(format: (count == 1 ? LKey.telemetryRowsOne : .telemetryRowsMany).text(for: language), "\(count)")
+    }
+
     /// Rows the server refused and the cursor parked, when any.
-    static func quarantinedLine(count: Int) -> String? {
+    static func quarantinedLine(count: Int, language: AppLanguage = .current) -> String? {
         guard count > 0 else { return nil }
-        return String(format: L(.telemetryQuarantinedFormat), "\(count)")
+        let format = (count == 1 ? LKey.telemetryQuarantinedOne : .telemetryQuarantinedFormat).text(for: language)
+        return String(format: format, "\(count)")
     }
 
     /// A failed or partial attempt is shown in orange; a gate or an empty

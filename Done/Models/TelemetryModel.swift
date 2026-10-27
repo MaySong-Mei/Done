@@ -182,6 +182,15 @@ struct TelemetryClaimKey: Equatable {
     }
 }
 
+// MARK: - Last upload (the status row)
+
+/// When the last batch landed and how many rows its trigger moved — what
+/// the status row says, kept across relaunches (QA).
+struct TelemetryUploadStatus: Codable, Equatable {
+    let at: Date
+    let rows: Int
+}
+
 // MARK: - Upload cursor (design §7.2, B·F9/F36)
 
 /// `run_id → highest revision the server has acknowledged`. Advances only

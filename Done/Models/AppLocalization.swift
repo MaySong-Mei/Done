@@ -402,6 +402,7 @@ enum LKey {
     case telemetryOutcomeStale, telemetryOutcomePartialFormat, telemetryQuarantinedFormat
     // gh#273 review round: "1 rows", and the by-default gate's own line.
     case telemetryStatusFormatOne, telemetryOutcomeDefaultNotConfirmed
+    case telemetryJustNow, telemetryRowsOne, telemetryRowsMany, telemetryQuarantinedOne
     case telemetryMovedHint, telemetryOpenFixWatch, fixWatchSourceCloudFormat, fixWatchSourceLocal
     case hintLocalDataSharing
     case fixWatchDataLocalOnly, fixWatchDataSharing
@@ -1196,8 +1197,12 @@ enum LKey {
         case .telemetryOutcomeSignedOut: return "Last attempt: signed out, nothing was sent."
         case .telemetryOutcomeNothingPending: return "Last attempt: nothing new to send."
         case .telemetryOutcomeStale: return "Last attempt: data was erased while sending; nothing recorded."
-        case .telemetryOutcomePartialFormat: return "Last attempt: %@ rows sent, %@ refused by the server and set aside."
+        case .telemetryOutcomePartialFormat: return "Last attempt: %@ sent, %@ refused by the server and set aside."
         case .telemetryQuarantinedFormat: return "%@ rows the server refused are set aside and will not be retried unchanged."
+        case .telemetryQuarantinedOne: return "%@ row the server refused is set aside and will not be retried unchanged."
+        case .telemetryRowsOne: return "%@ row"
+        case .telemetryRowsMany: return "%@ rows"
+        case .telemetryJustNow: return "just now"
         case .telemetryMovedHint: return "Sharing statistics — the switch, the upload status and the request sample — lives in Fix Watch, beside the data it describes."
         case .telemetryOpenFixWatch: return "Open Fix Watch"
         case .fixWatchSourceCloudFormat: return "Source: cloud · %@ device(s) on this account"
@@ -1900,8 +1905,12 @@ enum LKey {
         case .telemetryOutcomeSignedOut: return "上次尝试:未登录,未发送。"
         case .telemetryOutcomeNothingPending: return "上次尝试:没有新内容可发送。"
         case .telemetryOutcomeStale: return "上次尝试:发送期间数据被擦除,未记录。"
-        case .telemetryOutcomePartialFormat: return "上次尝试:已发送 %@ 条,%@ 条被服务端拒绝并搁置。"
+        case .telemetryOutcomePartialFormat: return "上次尝试:已发送 %@,%@被服务端拒绝并搁置。"
         case .telemetryQuarantinedFormat: return "%@ 条被服务端拒绝的记录已搁置,不会原样重试。"
+        case .telemetryQuarantinedOne: return "%@ 条被服务端拒绝的记录已搁置,不会原样重试。"
+        case .telemetryRowsOne: return "%@ 条"
+        case .telemetryRowsMany: return "%@ 条"
+        case .telemetryJustNow: return "刚刚"
         case .telemetryMovedHint: return "统计分享——开关、上传状态与请求样本——在观察站里,和它描述的数据放在一起。"
         case .telemetryOpenFixWatch: return "打开观察站"
         case .fixWatchSourceCloudFormat: return "来源:云端 · 本账号 %@ 台设备"

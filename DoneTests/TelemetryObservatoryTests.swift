@@ -784,11 +784,20 @@ final class TelemetryObservatoryMergeTests: XCTestCase {
         XCTAssertNotNil(merged.first { $0.id == cloudOnly.id })
     }
 
-    private func releaseDaily(install: UUID?, revision: Int = 1, startedAt: Date, dayKey: String = "2026-09-21") -> SpikeRun {
-        var run = TelemetryFixtures.run(startedAt: startedAt, metrics: ResidentCounterSet().metrics, revision: revision,
-                                        dayKey: dayKey)
+    private func releaseDaily(install: UUID?, revision: Int = 1, startedAt: Date, dayKey: String = "2026-09-21",
+                              visible: Int = 0) -> SpikeRun {
+        var metrics = ResidentCounterSet().metrics
+        metrics["meComputedVisible"] = .number(Double(visible))
+        var run = TelemetryFixtures.run(startedAt: startedAt, metrics: metrics, revision: revision, dayKey: dayKey)
         run.installID = install
         return run
+    }
+
+    /// The deck's "visible computes (liveness)" count — the number QA saw
+    /// read 29 online and 115 offline on one phone.
+    private func meTabVisible(_ verdicts: [FixVerdict]) -> String? {
+        verdicts.first { $0.entryID == FixObservationRegistry.meTabGateFixID }?
+            .readouts.first { $0.id == "visible computes (liveness)" }?.measured
     }
 
     /// Before every window in this class: `rig.clock` is 2026-09-21 in
@@ -900,17 +909,23 @@ final class TelemetryObservatoryMergeTests: XCTestCase {
         XCTAssertEqual(meTabDays(read.verdicts), 2, "2026-07-23 here and 2026-09-20 on the other phone")
     }
 
-    /// QA (M8b): the deck's read without a cloud. A read answering nil
-    /// (offline, signed out, a failed request), one that throws, and one
-    /// answering nothing all leave the deck exactly this device's: the same
-    /// verdicts, "this device only", never an empty deck. Positive control:
-    /// a readable cloud is merged.
-    func testWithoutACloudTheDeckIsExactlyThisDevicesAndNeverEmpty() async throws {
+    /// QA (M8b, and one phone reading 29 online / 115 offline): the deck's
+    /// read without a cloud. A read answering nil (offline, signed out, a
+    /// failed request), one that throws, and one answering nothing all
+    /// leave the deck this device's records IN THE SAME WINDOW as a cloud
+    /// read: a 70-day-old daily with counts is out either way. The deck is
+    /// never empty, and says "this device only". Positive control: a
+    /// readable cloud is merged — still without the old day. The settings
+    /// row's indicator, which reads the whole pool, does count it.
+    func testWithOrWithoutACloudTheDeckReadsThisDevicesWindowAndIsNeverEmpty() async throws {
         let local = UUID()
-        let mine = releaseDaily(install: local, startedAt: rig.clock)
-        let records = (dailies: [mine], windows: [SpikeRun]())
+        let mine = releaseDaily(install: local, startedAt: rig.clock, visible: 2)
+        let old = releaseDaily(install: local, startedAt: rig.clock - 70 * 86_400, dayKey: "2026-07-13", visible: 40)
+        let records = (dailies: [mine, old], windows: [SpikeRun]())
         let expected = FixWatchAttention.evaluate(dailies: [mine], windows: [])
-        XCTAssertEqual(meTabDays(expected), 1, "rig: this device has a release day")
+        XCTAssertEqual(meTabDays(expected), 1, "rig: this device has a release day in the window")
+        XCTAssertEqual(meTabVisible(FixWatchAttention.evaluate(dailies: [mine, old], windows: [])), "42",
+                       "liveness: the old day's counts do show wherever the whole pool is read")
         struct ReadFailed: Error {}
         let reads: [(label: String, read: (String) async throws -> [SpikeRun]?)] = [
             ("nil", { _ in nil }),
@@ -924,12 +939,15 @@ final class TelemetryObservatoryMergeTests: XCTestCase {
             XCTAssertEqual(deck.verdicts, expected, label)
             XCTAssertEqual(deck.verdicts.count, 3, "\(label): never an empty deck")
             XCTAssertEqual(meTabDays(deck.verdicts), 1, label)
+            XCTAssertEqual(meTabVisible(deck.verdicts), "2", "\(label): the 70-day-old counts are out")
         }
-        let theirs = try viaCloud(releaseDaily(install: UUID(), startedAt: rig.clock - 86_400, dayKey: "2026-09-20"), revision: 1)
+        let theirs = try viaCloud(releaseDaily(install: UUID(), startedAt: rig.clock - 86_400, dayKey: "2026-09-20", visible: 3),
+                                  revision: 1)
         let merged = await FixWatchAttention.loadObservatory(local: records, readCloud: { _ in [theirs] }, now: rig.clock,
                                                              calendar: losAngeles, localInstall: local)
         XCTAssertEqual(merged.source, .cloud(devices: 2), "positive control: a readable cloud is merged")
         XCTAssertEqual(meTabDays(merged.verdicts), 2)
+        XCTAssertEqual(meTabVisible(merged.verdicts), "5", "online too, the 70-day-old counts are out")
     }
 
     /// Review P1-3: "Release 天数" counts DAYS. One day on two phones is one
@@ -1024,5 +1042,84 @@ final class TelemetryFakeTestFlightTests: XCTestCase {
         let uploader = try code("Done/Services/TelemetryUploader.swift")
         XCTAssertFalse(uploader.contains("TelemetryFakeTestFlight"))
         XCTAssertFalse(uploader.contains("TELEMETRY_FAKE_TESTFLIGHT"))
+    }
+}
+
+// MARK: - The status row (QA)
+
+@MainActor
+final class TelemetryStatusLineTests: XCTestCase {
+    private var rig: ObservatoryRig!
+
+    override func setUp() {
+        super.setUp()
+        rig = ObservatoryRig()
+        rig.defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        TelemetryConsentStore.recordGrant(rig.defaults, at: .distantPast)
+    }
+
+    override func tearDown() {
+        rig.tearDown()
+        rig = nil
+        super.tearDown()
+    }
+
+    /// QA: after a relaunch the row read "never uploaded". The last upload
+    /// is now kept beside the cursor: a NEW uploader over the same pool
+    /// reads it back. The erase takes it — with the pool and in memory —
+    /// so a phone handed on says "never" again.
+    func testTheLastUploadSurvivesARelaunchAndNotAnErase() async {
+        rig.seed(3, kind: .window)
+        let first = rig.uploader()
+        let outcome = await first.uploadNow(trigger: .launch)
+        XCTAssertEqual(outcome, .uploaded(rows: 3))
+        XCTAssertEqual(first.lastUploadAt, rig.clock)
+
+        let relaunched = rig.uploader()
+        XCTAssertEqual(relaunched.lastUploadAt, rig.clock, "the last upload survives the relaunch")
+        XCTAssertEqual(relaunched.lastBatchCount, 3)
+        let line = TelemetrySettingsCopy.statusLine(uploader: relaunched, now: rig.clock + 120, language: .english)
+        XCTAssertNotEqual(line, LKey.telemetryStatusNever.text(for: .english))
+        XCTAssertTrue(line.contains("· 3 rows ·"), line)
+
+        SpikeRunStore.wipe(location: rig.location)
+        relaunched.forgetAfterErase()
+        XCTAssertNil(relaunched.lastUploadAt, "the erase clears it in memory")
+        XCTAssertEqual(relaunched.lastBatchCount, 0)
+        let afterErase = rig.uploader()
+        XCTAssertNil(afterErase.lastUploadAt, "and on disk")
+        XCTAssertEqual(afterErase.lastBatchCount, 0)
+        XCTAssertEqual(TelemetrySettingsCopy.statusLine(uploader: afterErase, now: rig.clock, language: .chinese), "尚未上传")
+    }
+
+    /// QA: "in 0 sec." A clock 0.3 s behind the upload, or under a second
+    /// after it, reads "just now"; a minute and a half later it does not.
+    func testAClockBehindTheUploadOrUnderASecondAfterReadsJustNow() async throws {
+        rig.seed(1, kind: .window)
+        let uploader = rig.uploader()
+        _ = await uploader.uploadNow(trigger: .launch)
+        let at = try XCTUnwrap(uploader.lastUploadAt)
+
+        let behind = TelemetrySettingsCopy.statusLine(uploader: uploader, now: at - 0.3, language: .chinese)
+        XCTAssertTrue(behind.hasPrefix("上次上传 刚刚 ·"), behind)
+        let justAfter = TelemetrySettingsCopy.statusLine(uploader: uploader, now: at + 0.4, language: .english)
+        XCTAssertTrue(justAfter.hasPrefix("Last upload just now · 1 row ·"), justAfter)
+        XCTAssertNotEqual(TelemetrySettingsCopy.relativeWhen(at, now: at + 90, language: .english), "just now",
+                          "positive control: older than a second is a relative time")
+    }
+
+    /// "1 rows" on the partial and set-aside lines too; Chinese has one form.
+    func testThePartialAndSetAsideLinesHaveASingular() {
+        XCTAssertEqual(TelemetrySettingsCopy.outcomeLine(.partial(uploaded: 1, quarantined: 1), language: .english),
+                       "Last attempt: 1 row sent, 1 row refused by the server and set aside.")
+        XCTAssertEqual(TelemetrySettingsCopy.outcomeLine(.partial(uploaded: 3, quarantined: 2), language: .english),
+                       "Last attempt: 3 rows sent, 2 rows refused by the server and set aside.")
+        XCTAssertEqual(TelemetrySettingsCopy.outcomeLine(.partial(uploaded: 3, quarantined: 1), language: .chinese),
+                       "上次尝试:已发送 3 条,1 条被服务端拒绝并搁置。")
+        XCTAssertEqual(TelemetrySettingsCopy.quarantinedLine(count: 1, language: .english),
+                       "1 row the server refused is set aside and will not be retried unchanged.")
+        XCTAssertEqual(TelemetrySettingsCopy.quarantinedLine(count: 2, language: .english),
+                       "2 rows the server refused are set aside and will not be retried unchanged.")
+        XCTAssertNil(TelemetrySettingsCopy.quarantinedLine(count: 0, language: .english))
     }
 }

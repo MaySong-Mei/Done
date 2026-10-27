@@ -250,18 +250,23 @@ struct FixWatchView: View {
     // MARK: Data
 
     private func refresh() {
-        // This device first, at once (shared with the settings row's
-        // attention indicator, review Q5); then the account's cloud rows
-        // when there is a cloud to ask (§16 rule 3).
+        // This device first, at once — through the deck's own no-cloud path,
+        // so it covers the same window the cloud read will; then the
+        // account's cloud rows when there is a cloud to ask (§16 rule 3).
         let local = FixWatchAttention.loadLocalRecords()
-        verdicts = FixWatchAttention.evaluate(dailies: local.dailies, windows: local.windows)
-        source = .localOnly
+        let now = Date()
+        let installID = SpikeRunStore.installID()
+        let firstPaint = FixWatchAttention.observatory(
+            localDailies: local.dailies, localWindows: local.windows, cloud: nil, localInstall: installID,
+            sinceDayKey: FixWatchAttention.observatorySinceDayKey(now: now))
+        verdicts = firstPaint.verdicts
+        source = firstPaint.source
         storageBytes = spikeRunsDirectoryBytes()
         guard let telemetryUploader else { return }
         Task {
             let read = await FixWatchAttention.loadObservatory(
                 local: local, readCloud: { await telemetryUploader.fetchObservatoryCloudRuns(sinceDayKey: $0) },
-                now: Date(), localInstall: SpikeRunStore.installID())
+                now: now, localInstall: installID)
             verdicts = read.verdicts
             source = read.source
         }
@@ -316,8 +321,10 @@ enum FixWatchAttention {
         ]
     }
 
-    /// How far back the deck reads once the cloud is involved (review P1-3):
-    /// recent weeks, not the account's lifetime.
+    /// How far back the deck reads, with a cloud or without one (review
+    /// P1-3; QA: one phone read 29 online and 115 offline): recent weeks,
+    /// not the account's lifetime. The settings row's indicator does not
+    /// use it — it reads this device's whole pool (`loadVerdicts`).
     static let observatoryWindowDays = 60
 
     /// The first day inside the window: today minus `observatoryWindowDays`,
@@ -333,7 +340,8 @@ enum FixWatchAttention {
     /// reach it). The window is computed ONCE and handed to both the cloud
     /// read and the merge, so the two halves always cover the same days.
     /// A read that answers nil (no cloud, a failed request), throws, or
-    /// answers nothing leaves the deck exactly this device's — never empty.
+    /// answers nothing leaves the deck this device's records in the same
+    /// window — never empty.
     @MainActor
     static func loadObservatory(
         local: (dailies: [SpikeRun], windows: [SpikeRun]),
@@ -348,21 +356,22 @@ enum FixWatchAttention {
 
     /// §16 rule 3, pure: the deck's verdicts and its source line from this
     /// device's records and — when there is one — this account's cloud
-    /// rows. No cloud (offline, signed out, a failed read) or an empty one
-    /// falls back to this device and says "this device only"; otherwise the
-    /// two are merged (`TelemetryObservatoryMerge`), both halves cut to the
-    /// window starting at `sinceDayKey`, and the line names how many
+    /// rows, every record cut to the window starting at `sinceDayKey`. No
+    /// cloud (offline, signed out, a failed read) or an empty one falls
+    /// back to this device and says "this device only"; otherwise the two
+    /// are merged (`TelemetryObservatoryMerge`) and the line names how many
     /// installs the release records came from.
     static func observatory(
         localDailies: [SpikeRun], localWindows: [SpikeRun], cloud: [SpikeRun]?, localInstall: UUID,
         sinceDayKey: String, calendar: Calendar = .current
     ) -> (verdicts: [FixVerdict], source: FixWatchSource) {
-        guard let cloud, !cloud.isEmpty else {
-            return (evaluate(dailies: localDailies, windows: localWindows), .localOnly)
-        }
         let inWindow: (SpikeRun) -> Bool = { FixWatchVerdictEvaluator.dayKey(of: $0, calendar: calendar) >= sinceDayKey }
-        let merged = TelemetryObservatoryMerge.merge(local: (localDailies + localWindows).filter(inWindow),
-                                                     cloud: cloud.filter(inWindow))
+        let dailiesHere = localDailies.filter(inWindow)
+        let windowsHere = localWindows.filter(inWindow)
+        guard let cloud, !cloud.isEmpty else {
+            return (evaluate(dailies: dailiesHere, windows: windowsHere), .localOnly)
+        }
+        let merged = TelemetryObservatoryMerge.merge(local: dailiesHere + windowsHere, cloud: cloud.filter(inWindow))
         let dailies = merged.filter { $0.spikeID == FixObservationRegistry.residentDailySpikeID }
         let windows = merged.filter { $0.spikeID == FixObservationRegistry.effortPathFixID }
         let installs = TelemetryObservatoryMerge.installCount(merged.filter(FixWatchVerdictEvaluator.isRelease),

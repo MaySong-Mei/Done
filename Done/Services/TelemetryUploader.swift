@@ -386,6 +386,9 @@ final class TelemetryUploader: ObservableObject {
     /// 15-minute throttle. In memory only: a relaunch's own launch batch
     /// sends the daily anyway.
     private var lastDailyUploadAt: Date?
+    /// Rows the running trigger has landed so far — what the status row
+    /// counts ("the trigger, not its last batch").
+    private var landedThisTrigger = 0
     /// Where this install came from (§16), learned once at activation
     /// (`refreshDistribution`). nil until then: a batch that runs first
     /// filters by the stored consent (the App Store rule) — and sends
@@ -402,6 +405,10 @@ final class TelemetryUploader: ObservableObject {
         let cursor = SpikeRunStore.loadUploadCursor(location: dependencies.location)
         totalAcknowledged = cursor.totalAcknowledged
         quarantinedCount = cursor.quarantined.count
+        if let status = SpikeRunStore.loadLastUploadStatus(location: dependencies.location) {
+            lastUploadAt = status.at
+            lastBatchCount = status.rows
+        }
         if let sample = SpikeRunStore.loadLastUploadSample(location: dependencies.location) {
             lastRequestBodyPreview = String(data: sample, encoding: .utf8)
         }
@@ -612,6 +619,7 @@ final class TelemetryUploader: ObservableObject {
     func forgetAfterErase() {
         lastUploadAt = nil
         lastBatchCount = 0
+        landedThisTrigger = 0
         totalAcknowledged = 0
         quarantinedCount = 0
         lastRequestBodyPreview = nil
@@ -736,6 +744,7 @@ final class TelemetryUploader: ObservableObject {
     /// covers all of it.
     private func runUntilDrained(trigger: TelemetryTrigger) async -> TelemetryUploadOutcome {
         let dailyClockAtTrigger = lastDailyUploadAt
+        landedThisTrigger = 0
         var sent = 0
         var parked = 0
         var last: TelemetryUploadOutcome = .nothingPending
@@ -751,7 +760,6 @@ final class TelemetryUploader: ObservableObject {
                 break batches
             }
         }
-        if sent > 0 { lastBatchCount = sent }
         switch last {
         case .uploaded, .partial, .nothingPending:
             // Drained (or at the ceiling): report what the trigger moved.
@@ -921,8 +929,12 @@ final class TelemetryUploader: ObservableObject {
             lastDailyUploadAt = now
         }
         if !landed.isEmpty {
+            landedThisTrigger += landed.count
             lastUploadAt = now
-            lastBatchCount = landed.count
+            lastBatchCount = landedThisTrigger
+            // Beside the cursor, under the same erase check: a relaunch shows
+            // the last upload instead of "never" (QA).
+            SpikeRunStore.saveLastUploadStatus(TelemetryUploadStatus(at: now, rows: landedThisTrigger), location: location)
         }
         totalAcknowledged = cursor.totalAcknowledged
         quarantinedCount = cursor.quarantined.count

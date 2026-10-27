@@ -104,7 +104,7 @@ enum SpikeRunStore {
 
     // MARK: Telemetry side files (gh#273 §7.2 / §7.5)
     //
-    // All three live INSIDE `location.directory`, so `wipe()` — already on
+    // All four live INSIDE `location.directory`, so `wipe()` — already on
     // the erase list (`EraseWiringQATests`) — takes them with the records
     // and no second erase entry is needed (A·#23 / B·F12). Each is marked
     // excluded from backup: the records are deliberately backed up (the
@@ -115,6 +115,7 @@ enum SpikeRunStore {
     static let installIDFileName = ".install-id"
     static let uploadCursorFileName = ".upload-cursor.json"
     static let lastUploadSampleFileName = ".last-upload-sample.json"
+    static let lastUploadStatusFileName = ".last-upload-status.json"
 
     static func installIDURL(location: SpikeRunStorageLocation = .production) -> URL {
         location.directory.appendingPathComponent(installIDFileName)
@@ -171,6 +172,23 @@ enum SpikeRunStore {
         try? Data(contentsOf: lastUploadSampleURL(location: location))
     }
 
+    static func lastUploadStatusURL(location: SpikeRunStorageLocation = .production) -> URL {
+        location.directory.appendingPathComponent(lastUploadStatusFileName)
+    }
+
+    /// The status row's "last upload · rows" (QA: it read "never uploaded"
+    /// after every relaunch). Missing or unreadable → nil.
+    @discardableResult
+    static func saveLastUploadStatus(_ status: TelemetryUploadStatus, location: SpikeRunStorageLocation = .production) -> Bool {
+        guard let data = try? JSONEncoder().encode(status) else { return false }
+        return writeSideFile(data, to: lastUploadStatusURL(location: location))
+    }
+
+    static func loadLastUploadStatus(location: SpikeRunStorageLocation = .production) -> TelemetryUploadStatus? {
+        guard let data = try? Data(contentsOf: lastUploadStatusURL(location: location)) else { return nil }
+        return try? JSONDecoder().decode(TelemetryUploadStatus.self, from: data)
+    }
+
     @discardableResult
     private static func writeSideFile(_ data: Data, to url: URL) -> Bool {
         do {
@@ -196,8 +214,9 @@ enum SpikeRunStore {
     /// that skipped it left user writing in a backed-up location.
     ///
     /// Also takes the telemetry side files kept in the same directory
-    /// (gh#273 §7.5): the upload cursor, the install id and the last
-    /// request sample — so the next install is a stranger to the server.
+    /// (gh#273 §7.5): the upload cursor, the install id, the last request
+    /// sample and the last upload's status — so the next install is a
+    /// stranger to the server.
     ///
     /// A missing directory is success.
     static func wipe(location: SpikeRunStorageLocation = .production) {
