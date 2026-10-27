@@ -360,3 +360,10 @@ build 4 之后两周零 archive。期间四条分支各自跑完独立验证循�
 - **打包**：DerivedData `/Volumes/AgentAPFS/claude-build-cache/b20/rel-dd`，archive 一次成功。
 - **装机重点**：见 RELEASE_CHECK 顶部「build 20 装机重点」。
 - **上传 TestFlight 是用户动作。**
+## 节点 26 — build 22（2026-10-27）：手表 今天 | 统计 | 设置
+
+- **来源**：`release/build22` @ `e28408a`（`release/build21` `3e7ffd9` + merge `feat/watch-settings-page` `42702cb` + bump）。archive `~/Library/Developer/Xcode/Archives/2026-10-27/Done build22.xcarchive`，0.5.0 · 22，99M，本地时间 11:35。
+- **相对 build 21 新增**：去掉记录页，今天页底部计时条（+15 / ✓ / 捏两下）；草稿半透明、现在线在最上；手表设置页（缩放 44/64/88、默认口径、重叠算法与排除背景写回手机）；计时条放在页面之上避免每帧重绘。
+- **身份门**：三个 Info.plist 0.5.0 / 22 ✅；密钥 / 调试参数 ×0 ✅；`sb_publishable_` 仅 app ×1 ✅；codesign 通过；export 预演成功。
+- **验证**：全量 3239 / 0 失败 / 2 skip（专用机先 erase）；手表 190/0；模拟器 QA 见 RELEASE_CHECK。
+- **上传 TestFlight 是用户动作。**
