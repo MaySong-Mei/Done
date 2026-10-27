@@ -321,6 +321,8 @@ final class WristDayViewQATests: XCTestCase {
                 let without = try WristWire.encode(noStats).count
                 var fullStats = snap; fullStats.stats = payload
                 let untrimmed = try WristWire.encode(fullStats).count
+                var noHints = snap; noHints.titleHints = [:]
+                print("QA-C5 \(label) perDay=\(perDay): title hints part \(withStats - (try WristWire.encode(noHints).count))B for \(snap.titleHints.values.map(\.count).reduce(0, +)) names")
                 print("QA-C5 \(label) perDay=\(perDay): snapshot=\(withStats)B (no stats \(without)B, stats part \(withStats - without)B; untrimmed month would be \(untrimmed)B) occurrences=\(snap.occurrences.count) days=\(snap.stats?.days?.count ?? -1)/\(payload.days?.count ?? -1)")
                 XCTAssertNotNil(snap.stats)
                 XCTAssertEqual(snap.stats?.coverageStart, payload.coverageStart,

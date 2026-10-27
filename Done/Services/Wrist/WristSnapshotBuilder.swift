@@ -30,14 +30,16 @@ enum WristSnapshotBuilder {
         statsSettings: WristStatsSettings = .standard,
         colorHex: (String) -> String
     ) -> WristSnapshot {
-        WristSnapshot(
+        let types = rankedTypes(events: events, templates: templates, now: now, calendar: calendar)
+        return WristSnapshot(
             generatedAt: now,
             language: language,
-            types: rankedTypes(events: events, templates: templates, now: now, calendar: calendar),
+            types: types,
             occurrences: occurrences(events: events, now: now, calendar: calendar, colorHex: colorHex),
             receipts: receipts,
             stats: stats.flatMap { trimmed($0, now: now, reach: .thirtyDays) },
-            statsSettings: statsSettings
+            statsSettings: statsSettings,
+            titleHints: titleHints(events: events, types: types, now: now, calendar: calendar)
         )
     }
 
@@ -130,6 +132,107 @@ enum WristSnapshotBuilder {
             }
             .prefix(maxTypes)
             .map { WristType(id: $0.element.id, title: $0.element.title, colorHex: $0.element.colorHex) }
+    }
+
+    /// How many names each type sends.
+    static let maxTitlesPerType = 6
+    /// Names are learned from events that started within this many days.
+    static let titleWindowDays = 120
+    /// Longer titles are one-off notes, not names worth a tap.
+    static let maxTitleLength = 40
+
+    /// Per start-grid type, the names its events were given — not empty and
+    /// not just the type's own name — most used first, with when they
+    /// usually start and how long they usually last. Spellings that differ
+    /// only in case or accents count as one name, shown as most recently
+    /// written. A use fades by half every `WristTitleRanking.halfLifeDays`,
+    /// counted from the start of today so the figures, and with them the
+    /// snapshot's content, hold still through the day. A repeating series
+    /// counts once, as a use today, at its first range's time.
+    static func titleHints(
+        events: [Event], types: [WristType], now: Date, calendar: Calendar
+    ) -> [String: [WristTitleHint]] {
+        let wanted = Set(types.map(\.title))
+        guard !wanted.isEmpty else { return [:] }
+        let today = calendar.startOfDay(for: now)
+        let windowStart = calendar.date(byAdding: .day, value: -titleWindowDays, to: today) ?? today
+
+        struct Use {
+            var start: Date
+            var minutes: Double
+            var weight: Double
+        }
+        struct Name {
+            var title: String
+            var latest: Date
+            var uses: [Use] = []
+        }
+        var names: [String: [String: Name]] = [:]
+
+        func fold(_ text: String) -> String {
+            text.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
+        }
+
+        for event in events where wanted.contains(event.type) && !event.isAllDay && event.timerStartedAt == nil {
+            let title = event.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !title.isEmpty, title.count <= maxTitleLength, fold(title) != fold(event.type) else { continue }
+            var uses: [Use] = []
+            if event.isRecurringSeries {
+                if let range = event.primaryTimeRange, range.end > range.start {
+                    uses.append(Use(start: range.start, minutes: range.end.timeIntervalSince(range.start) / 60, weight: 1))
+                }
+            } else {
+                for range in event.timeRanges
+                where range.end > range.start && range.start >= windowStart && range.start <= now {
+                    let ageDays = max(0, today.timeIntervalSince(calendar.startOfDay(for: range.start)) / 86_400)
+                    uses.append(Use(
+                        start: range.start, minutes: range.end.timeIntervalSince(range.start) / 60,
+                        weight: pow(0.5, ageDays / WristTitleRanking.halfLifeDays)
+                    ))
+                }
+            }
+            guard let newest = uses.map(\.start).max() else { continue }
+            let key = fold(title)
+            var name = names[event.type]?[key] ?? Name(title: title, latest: newest)
+            if newest > name.latest {
+                name.title = title
+                name.latest = newest
+            }
+            name.uses += uses
+            names[event.type, default: [:]][key] = name
+        }
+
+        return names.mapValues { byKey in
+            byKey.values
+                .map { name -> WristTitleHint in
+                    let weight = name.uses.reduce(0) { $0 + $1.weight }
+                    var x = 0.0, y = 0.0
+                    for use in name.uses {
+                        let parts = calendar.dateComponents([.hour, .minute], from: use.start)
+                        let angle = Double((parts.hour ?? 0) * 60 + (parts.minute ?? 0)) / 1440 * 2 * .pi
+                        x += use.weight * cos(angle)
+                        y += use.weight * sin(angle)
+                    }
+                    var meanAngle = atan2(y, x)
+                    if meanAngle < 0 { meanAngle += 2 * .pi }
+                    let byLength = name.uses.sorted { $0.minutes < $1.minutes }
+                    var running = 0.0
+                    let median = byLength.first { use in
+                        running += use.weight
+                        return running >= weight / 2
+                    }?.minutes ?? byLength.last?.minutes ?? 60
+                    return WristTitleHint(
+                        title: name.title,
+                        weight: max(0.1, (weight * 10).rounded() / 10),
+                        startMinute: Int((meanAngle / (2 * .pi) * 1440).rounded()) % 1440,
+                        concentration: weight > 0 ? Int((hypot(x, y) / weight * 100).rounded()) : 0,
+                        minutes: max(1, Int(median.rounded()))
+                    )
+                }
+                .sorted { $0.weight != $1.weight ? $0.weight > $1.weight : $0.title < $1.title }
+                .prefix(maxTitlesPerType)
+                .map { $0 }
+        }
     }
 
     /// Timed occurrences for yesterday through the day after tomorrow,

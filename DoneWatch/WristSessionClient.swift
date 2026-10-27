@@ -132,13 +132,14 @@ final class WristSessionClient: NSObject, ObservableObject {
     }
 
     /// A block drawn on the today page: a start with the drawn range, past
-    /// or future — the phone stores whatever range a start names.
-    func create(_ type: WristType, start: Date, end: Date, now: Date = Date()) {
+    /// or future — the phone stores whatever range a start names — and the
+    /// name picked for it, if any.
+    func create(_ type: WristType, title: String? = nil, start: Date, end: Date, now: Date = Date()) {
         guard end > start else { return }
         send(
             WristCommand(
                 id: UUID(), issuedAt: now,
-                kind: .start(eventID: UUID(), typeTitle: type.title, start: start, end: end)
+                kind: .start(eventID: UUID(), typeTitle: type.title, start: start, end: end, title: title)
             )
         )
     }

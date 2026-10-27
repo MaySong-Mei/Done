@@ -284,12 +284,13 @@ nonisolated enum WristStateReducer {
                 pendingIDs.insert(entry.command.eventID)
             }
             switch entry.command.kind {
-            case .start(let eventID, let typeTitle, let start, let end):
+            case .start(let eventID, let typeTitle, let start, let end, let title):
                 guard !occurrences.contains(where: { $0.eventID == eventID }) else { continue }
                 let color = snapshot.types.first { $0.title == typeTitle }?.colorHex ?? "#8E8E93"
                 occurrences.append(
                     WristOccurrence(
-                        id: "pending-\(eventID.uuidString)", eventID: eventID, title: typeTitle,
+                        id: "pending-\(eventID.uuidString)", eventID: eventID,
+                        title: WristCommand.storedTitle(typeTitle: typeTitle, title: title),
                         type: typeTitle, colorHex: color, start: start, end: end,
                         isInterrupt: false, quickActionsEnabled: true
                     )

@@ -32,6 +32,20 @@ final class WristCommandApplierTests: XCTestCase {
 
     // MARK: Start
 
+    func testStartStoresThePickedNameUnderTheType() {
+        let named = UUID(), blank = UUID()
+        let s = now
+        XCTAssertEqual(WristCommandApplier.apply(WristCommand(id: UUID(), issuedAt: now, kind: .start(
+            eventID: named, typeTitle: " Work ", start: s, end: s.addingTimeInterval(900), title: "  Standup\n"
+        )), to: store).outcome, .applied)
+        XCTAssertEqual(store.findCalendarEvent(id: named)?.title, "Standup")
+        XCTAssertEqual(store.findCalendarEvent(id: named)?.type, "Work")
+        XCTAssertEqual(WristCommandApplier.apply(WristCommand(id: UUID(), issuedAt: now, kind: .start(
+            eventID: blank, typeTitle: "Work", start: s, end: s.addingTimeInterval(900), title: " "
+        )), to: store).outcome, .applied)
+        XCTAssertEqual(store.findCalendarEvent(id: blank)?.title, "Work", "a blank name falls back to the type")
+    }
+
     func testStartCreatesOneSingleRangeEventOfTheType() {
         let eventID = UUID()
         let receipt = WristCommandApplier.apply(start(eventID: eventID, type: "  Research "), to: store)

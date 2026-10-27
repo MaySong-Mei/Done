@@ -24,6 +24,8 @@ struct WristStrings {
     var extend: String { "+15" }
     var editOnPhone: String { isChinese ? "重复事件请在 iPhone 上调整" : "Adjust repeating events on iPhone" }
     var sending: String { isChinese ? "发送中…" : "Sending…" }
+    /// The names step's last row: the block named after its type alone.
+    func justType(_ type: String) -> String { isChinese ? "仅「\(type)」" : "Just \(type)" }
 
     /// The record page's clock row: "距上次 2小时16分" / "2h16m since last",
     /// the time in white.

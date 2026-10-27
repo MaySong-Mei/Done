@@ -76,7 +76,8 @@ struct WristRootView: View {
             WristTodayView(
                 occurrences: timeline, dismissed: client.dismissed, stats: snapshot.wristStats,
                 now: now, currentID: current, strings: strings, types: snapshot.types,
-                onCreate: { type, start, end in client.create(type, start: start, end: end) }
+                titleHints: snapshot.titleHints,
+                onCreate: { type, title, start, end in client.create(type, title: title, start: start, end: end) }
             )
         } else {
             WristEmptyView(strings: strings)
@@ -106,8 +107,9 @@ enum WristPage: String, Hashable {
 ///
 /// Press and hold on empty time, then drag, to draw a block — the phone's
 /// drag to create (`WristDraftMapping`). The page holds still while the
-/// finger is down; on release a type picker names the block, and closing
-/// it discards the draft.
+/// finger is down; on release a type picker names the block — then, when
+/// the phone knows names for that type, the likeliest few for this range —
+/// and closing it discards the draft.
 struct WristTodayView: View {
     let occurrences: [WristOccurrence]
     let dismissed: [WristDismissal]
@@ -116,7 +118,8 @@ struct WristTodayView: View {
     let currentID: String?
     let strings: WristStrings
     var types: [WristType] = []
-    var onCreate: (WristType, Date, Date) -> Void = { _, _, _ in }
+    var titleHints: [String: [WristTitleHint]] = [:]
+    var onCreate: (WristType, String?, Date, Date) -> Void = { _, _, _, _ in }
 
     /// The press point and the drawn range, in the day's own points.
     private struct Draft: Equatable {
@@ -228,8 +231,10 @@ struct WristTodayView: View {
         }
         .sheet(isPresented: $picking, onDismiss: { draft = nil }) {
             if let range = draft?.range {
-                WristDraftTypePicker(types: types, range: range, strings: strings) { type in
-                    onCreate(type, range.start, range.end)
+                WristDraftTypePicker(
+                    types: types, titleHints: titleHints, range: range, calendar: calendar, strings: strings
+                ) { type, title in
+                    onCreate(type, title, range.start, range.end)
                     picking = false
                 }
             }
@@ -333,16 +338,52 @@ struct WristTodayView: View {
 }
 
 /// Names a drawn block: the types as the record page's tiles, under the
-/// block's range. The sheet's close button discards the draft.
+/// block's range. A type the phone knows names for opens a second step with
+/// the likeliest of them for this range and "just <type>"; one without
+/// creates at once. The sheet's close button discards the draft.
 struct WristDraftTypePicker: View {
     let types: [WristType]
+    var titleHints: [String: [WristTitleHint]] = [:]
     let range: WristDraftMapping.Range
+    var calendar: Calendar = .current
     let strings: WristStrings
-    let onPick: (WristType) -> Void
+    let onPick: (WristType, String?) -> Void
+
+    @State private var naming: WristType?
 
     private let columns = [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)]
 
+    private func names(for type: WristType) -> [String] {
+        WristTitleRanking.rank(titleHints[type.title] ?? [], start: range.start, end: range.end, calendar: calendar)
+    }
+
     var body: some View {
+        NavigationStack {
+            typeGrid
+                .navigationDestination(item: $naming) { type in
+                    WristDraftTitlePicker(
+                        type: type, names: names(for: type), range: range, strings: strings,
+                        onPick: { onPick(type, $0) }
+                    )
+                }
+        }
+#if DEBUG
+        .onAppear(perform: seedDebugNaming)
+#endif
+    }
+
+#if DEBUG
+    /// `-wristDraftType <type title>` with `-wristDraft` opens the names
+    /// step for that type, for a check that cannot tap. Debug builds only.
+    private func seedDebugNaming() {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard naming == nil, let i = arguments.firstIndex(of: "-wristDraftType"), i + 1 < arguments.count,
+              let type = types.first(where: { $0.title == arguments[i + 1] }), !names(for: type).isEmpty else { return }
+        naming = type
+    }
+#endif
+
+    private var typeGrid: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 6) {
                 Text(strings.timeRange(range.start, range.end))
@@ -356,7 +397,11 @@ struct WristDraftTypePicker: View {
                 LazyVGrid(columns: columns, spacing: 6) {
                     ForEach(types) { type in
                         Button {
-                            onPick(type)
+                            if names(for: type).isEmpty {
+                                onPick(type, nil)
+                            } else {
+                                naming = type
+                            }
                         } label: {
                             WristTypeTile(type: type, minHeight: 40)
                         }
@@ -366,6 +411,59 @@ struct WristDraftTypePicker: View {
             }
             .padding(.horizontal, 4)
         }
+    }
+}
+
+/// The second step: the type's likeliest names for the drawn range, one
+/// tap each, then the type alone — what a block was named before names
+/// were offered.
+struct WristDraftTitlePicker: View {
+    let type: WristType
+    let names: [String]
+    let range: WristDraftMapping.Range
+    let strings: WristStrings
+    let onPick: (String?) -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(strings.timeRange(range.start, range.end))
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                ForEach(names, id: \.self) { name in
+                    Button {
+                        onPick(name)
+                    } label: {
+                        row(name, fill: WristColor.fill(type.colorHex), border: WristColor.border(type.colorHex))
+                    }
+                    .buttonStyle(.plain)
+                }
+                Button {
+                    onPick(nil)
+                } label: {
+                    row(strings.justType(type.title), fill: Color(white: 0.16), border: .white.opacity(0.2))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 4)
+        }
+        .navigationTitle(type.title)
+    }
+
+    private func row(_ text: String, fill: Color, border: Color) -> some View {
+        Text(text)
+            .font(.system(size: 15, weight: .semibold, design: .rounded))
+            .lineLimit(2)
+            .minimumScaleFactor(0.75)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+            .background(fill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(border, lineWidth: 1)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 
