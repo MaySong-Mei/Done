@@ -341,3 +341,11 @@ build 4 之后两周零 archive。期间四条分支各自跑完独立验证循�
 - **身份门**：三个 Info.plist 0.5.0 / 18 ✅；`LUwM3K` / JWT / `sb_secret_` / `SYNC_DEBUG_SESSION` / 手表调试参数 ×0 ✅；`sb_publishable_` 仅 app ×1 ✅；codesign 通过；`-exportArchive` 预演成功。
 - **验证**：全量 3173 / 0 失败 / 2 skip（专用机先 erase）；手表 177/0；模拟器实测边缘滚动（5–8 点 → 8–11 点，块 06:45–11:30）。
 - **上传 TestFlight 是用户动作。**
+
+## 节点 24 — build 19（2026-10-27）：手表今天页左右切换修复
+
+- **来源**：`release/build19` @ `e8dd377`（king `a952daf` = build 18 + `feat/watch-timeline-scale` 的 `171278a` / `88a89c7` + bump）。archive `~/Library/Developer/Xcode/Archives/2026-10-27/Done build19.xcarchive`，0.5.0 · 19，98M，本地时间 01:43。
+- **相对 build 18**：今天页任何拖动手势都会让分页 TabView 不翻页（模拟器短滑 0/6，去掉手势 6/6）——改为今天页自己识别横向快滑翻页（快慢两向均 100%，竖滚/拖拽建块不受影响）；边缘滚动计时器只在按住时运行（空闲 CPU 0.3% → 0.0%）。
+- **身份门**：三个 Info.plist 0.5.0 / 19 ✅；密钥 / 调试参数 ×0 ✅；`sb_publishable_` 仅 app ×1 ✅；codesign 通过；export 预演成功。
+- **验证**：全量 3173 / 0 失败 / 2 skip（专用机先 erase）。
+- **上传 TestFlight 是用户动作。**
