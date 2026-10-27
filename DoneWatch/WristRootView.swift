@@ -2,11 +2,11 @@
 //  WristRootView.swift
 //  DoneWatch
 //
-//  Three pages, swiped left and right: Record (start a type / the running
-//  session), Today (the day's timeline, the default page) and Stats (time
-//  by category, today or this week). The minute schedule re-resolves every
-//  page at event boundaries; the running counter ticks on its own through
-//  `Text(_:style: .timer)`.
+//  Three pages, swiped left and right: Today (the day's timeline, the
+//  default page, with the running session's bar at its foot), Stats (time
+//  by category over a period) and Settings. The minute schedule
+//  re-resolves every page at event boundaries; the running counter ticks
+//  on its own through `Text(_:style: .timer)`.
 //
 
 import Combine
@@ -16,24 +16,41 @@ import WatchKit
 struct WristRootView: View {
     @EnvironmentObject private var client: WristSessionClient
     @State private var page = WristPage.initial
+    @AppStorage(WristLocalSettings.zoomKey) private var zoomRaw = WristLocalSettings.Zoom.standard.rawValue
+    /// Empty until a period is picked on the watch: the phone's applies.
+    @AppStorage(WristLocalSettings.statsPeriodKey) private var periodRaw = ""
     private let housekeeping = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
         TimelineView(.everyMinute) { context in
             let strings = WristStrings(code: client.snapshot?.language)
+            let settings = client.statsSettings
+            let stats = client.snapshot?.stats?.markingLeftOut(settings)
             TabView(selection: $page) {
-                NavigationStack { record(now: context.date, strings: strings) }
-                    .tag(WristPage.record)
-                NavigationStack { today(now: context.date, strings: strings) }
+                NavigationStack { today(now: context.date, strings: strings, stats: stats) }
                     .tag(WristPage.today)
                 NavigationStack {
                     WristStatsView(
-                        stats: client.snapshot?.wristStats,
-                        settings: client.snapshot?.statsSettings ?? .standard,
+                        stats: stats,
+                        overlap: settings.overlap,
+                        openingPeriod: WristLocalSettings.openingPeriod(watch: periodRaw, phone: settings.defaultPeriod),
                         now: context.date, strings: strings
                     )
                 }
                 .tag(WristPage.stats)
+                NavigationStack {
+                    WristSettingsView(
+                        zoomRaw: $zoomRaw, periodRaw: $periodRaw,
+                        settings: settings,
+                        hasPhoneData: client.snapshot != nil,
+                        phoneTakesEdits: client.snapshot?.takesSettingsEdits ?? false,
+                        snapshotAge: client.snapshot.map { context.date.timeIntervalSince($0.generatedAt) },
+                        strings: strings,
+                        onEditOverlap: { client.editStatsSettings(overlap: $0) },
+                        onEditBackground: { client.editStatsSettings(excludesBackground: $0) }
+                    )
+                }
+                .tag(WristPage.settings)
             }
             .tabViewStyle(.page)
         }
@@ -43,45 +60,28 @@ struct WristRootView: View {
     }
 
     @ViewBuilder
-    private func record(now: Date, strings: WristStrings) -> some View {
-        switch client.display(now: now) {
-        case .noPhoneData:
-            WristEmptyView(strings: strings)
-        case .idle(let types, let since):
-            WristIdleView(
-                types: types,
-                sinceLastRecord: since,
-                snapshotAge: client.snapshot.map { now.timeIntervalSince($0.generatedAt) },
-                strings: strings,
-                onStart: { client.start($0) }
-            )
-        case .active(let occurrence, let pending):
-            WristActiveView(
-                occurrence: occurrence,
-                pending: pending,
-                strings: strings,
-                onExtend: { client.extend(occurrence) },
-                onFinish: { client.finish(occurrence) }
-            )
-        }
-    }
-
-    @ViewBuilder
-    private func today(now: Date, strings: WristStrings) -> some View {
+    private func today(now: Date, strings: WristStrings, stats: CategoryStatsPayload?) -> some View {
         if let snapshot = client.snapshot {
             let timeline = WristStateReducer.overlaid(snapshot, pending: client.pending, now: now).occurrences
-            let current: String? = {
-                if case .active(let occurrence, _) = client.display(now: now) { return occurrence.id }
+            let running: WristTodayView.Running? = {
+                if case .active(let occurrence, let pending) = client.display(now: now) {
+                    return WristTodayView.Running(occurrence: occurrence, pending: pending)
+                }
                 return nil
             }()
             WristTodayView(
-                occurrences: timeline, dismissed: client.dismissed, stats: snapshot.wristStats,
-                now: now, currentID: current, strings: strings, types: snapshot.types,
+                occurrences: timeline, dismissed: client.dismissed, stats: stats,
+                now: now, currentID: running?.occurrence.id, strings: strings, types: snapshot.types,
                 titleHints: snapshot.titleHints,
+                hourHeight: CGFloat(WristLocalSettings.Zoom(stored: zoomRaw).hourHeight),
+                running: running,
                 onCreate: { type, title, start, end in client.create(type, title: title, start: start, end: end) },
+                onExtend: { client.extend($0) },
+                onFinish: { client.finish($0) },
                 onFlick: { step in
-                    // Today sits between record and stats.
-                    withAnimation { page = step < 0 ? .record : .stats }
+                    // Today is the leftmost page.
+                    guard step > 0 else { return }
+                    withAnimation { page = .stats }
                 }
             )
         } else {
@@ -91,10 +91,10 @@ struct WristRootView: View {
 }
 
 enum WristPage: String, Hashable {
-    case record, today, stats
+    case today, stats, settings
 
-    /// Today. Debug builds accept `-wristPage record|today|stats` so a
-    /// paired-simulator check can open a page nothing can swipe to.
+    /// Today. Debug builds accept `-wristPage today|stats|settings` so a
+    /// paired-simulator check can open a page without a swipe.
     static var initial: WristPage {
 #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
@@ -115,8 +115,18 @@ enum WristPage: String, Hashable {
 /// drag to create (`WristDraftMapping`). The page holds still while the
 /// finger is down; on release a type picker names the block — then, when
 /// the phone knows names for that type, the likeliest few for this range —
-/// and closing it discards the draft.
+/// and closing it discards the draft. Drawing from the now line is how a
+/// session starts now.
+///
+/// While a session runs, a bar at the foot of the page shows it with +15
+/// and Finish; the day scrolls clear of it.
 struct WristTodayView: View {
+    /// The session in progress, and whether a command for it is unanswered.
+    struct Running: Equatable {
+        var occurrence: WristOccurrence
+        var pending: Bool
+    }
+
     let occurrences: [WristOccurrence]
     let dismissed: [WristDismissal]
     let stats: CategoryStatsPayload?
@@ -125,7 +135,12 @@ struct WristTodayView: View {
     let strings: WristStrings
     var types: [WristType] = []
     var titleHints: [String: [WristTitleHint]] = [:]
+    /// Points per hour (`WristLocalSettings.Zoom`).
+    var hourHeight: CGFloat = CGFloat(WristLocalSettings.Zoom.standard.hourHeight)
+    var running: Running?
     var onCreate: (WristType, String?, Date, Date) -> Void = { _, _, _, _ in }
+    var onExtend: (WristOccurrence) -> Void = { _ in }
+    var onFinish: (WristOccurrence) -> Void = { _ in }
     /// A sideways flick: -1 for the page to the left, +1 to the right. The
     /// hold-and-drag on the day is a drag gesture, and any drag gesture here
     /// keeps the paged TabView from turning the page itself.
@@ -162,8 +177,17 @@ struct WristTodayView: View {
             : Empty().eraseToAnyPublisher()
     }
 
-    private let hourHeight: CGFloat = 64
     private let gutter: CGFloat = 28
+    /// Where the running bar's top is on the screen. The bar sits above
+    /// the page dots, inside the screen's corners.
+    @State private var barTop: CGFloat?
+    /// Room the running bar takes at the foot of the page, in the day's
+    /// full-screen coordinates.
+    private var bottomInset: CGFloat {
+        guard running != nil else { return 0 }
+        guard let barTop else { return WristRunningBar.height }
+        return max(0, WKInterfaceDevice.current().screenBounds.height - barTop)
+    }
     /// The watch's own zone — the one its face shows. The stats payload
     /// carries the phone's zone at its last write, which may be another.
     private var calendar: Calendar { .current }
@@ -216,12 +240,6 @@ struct WristTodayView: View {
                                         y: CGFloat(WristDayLayout.fraction(block.start, dayStart: dayStart, dayEnd: dayEnd)) * height
                                     )
                             }
-                            Rectangle()
-                                .fill(.red)
-                                .frame(width: width + 4, height: 1.5)
-                                .offset(x: gutter - 4, y: nowY)
-                            Circle().fill(.red).frame(width: 5, height: 5)
-                                .offset(x: gutter - 6, y: nowY - 1.75)
                             if let draft {
                                 draftView(draft.range)
                                     .frame(
@@ -233,10 +251,20 @@ struct WristTodayView: View {
                                         y: CGFloat(WristDayLayout.fraction(draft.range.start, dayStart: dayStart, dayEnd: dayEnd)) * height
                                     )
                             }
+                            // Over the draft too: a block drawn across the
+                            // present still shows where the present is.
+                            Rectangle()
+                                .fill(.red)
+                                .frame(width: width + 4, height: 1.5)
+                                .offset(x: gutter - 4, y: nowY)
+                            Circle().fill(.red).frame(width: 5, height: 5)
+                                .offset(x: gutter - 6, y: nowY - 1.75)
                         }
                     }
-                    // Midnight can still scroll clear of the clock row.
+                    // Midnight can still scroll clear of the clock row, and
+                    // the night clear of the running bar.
                     .padding(.top, top)
+                    .padding(.bottom, bottomInset)
                 }
                 .scrollPosition($position)
                 .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { _, y in scrollY = y }
@@ -255,6 +283,22 @@ struct WristTodayView: View {
                 .onAppear {
                     DispatchQueue.main.async { proxy.scrollTo(nowRow, anchor: .center) }
                 }
+                // A new zoom puts the same hour row elsewhere: back to now.
+                .onChange(of: hourHeight) { _, _ in
+                    DispatchQueue.main.async { proxy.scrollTo(nowRow, anchor: .center) }
+                }
+            }
+        }
+        // Outside the frame, which runs under the screen's corners: the
+        // bar stays inside them.
+        .overlay(alignment: .bottom) {
+            if let running {
+                WristRunningBar(
+                    occurrence: running.occurrence, pending: running.pending, strings: strings,
+                    onExtend: { onExtend(running.occurrence) },
+                    onFinish: { onFinish(running.occurrence) }
+                )
+                .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .global).minY }) { _, y in barTop = y }
             }
         }
         // Lifting the finger ends the drag the same way whether the gesture
@@ -338,8 +382,9 @@ struct WristTodayView: View {
         // The top edge is under the clock row's glass.
         if fingerY < top + edgeZone {
             depth = -(top + edgeZone - fingerY) / edgeZone
-        } else if fingerY > viewportHeight - edgeZone {
-            depth = (fingerY - (viewportHeight - edgeZone)) / edgeZone
+        } else if fingerY > viewportHeight - bottomInset - edgeZone {
+            // The bottom edge is the running bar's top, when it is up.
+            depth = (fingerY - (viewportHeight - bottomInset - edgeZone)) / edgeZone
         } else {
             return
         }
@@ -356,12 +401,13 @@ struct WristTodayView: View {
         draft?.range = range
     }
 
-    /// The draft in the blocks' shape, neutral until it has a type: grey
-    /// fill, a white border, and its range in place of a title.
+    /// The draft in the blocks' shape, neutral until it has a type: a grey
+    /// fill the grid and blocks under it show through, a white border, and
+    /// its range in place of a title.
     private func draftView(_ range: WristDraftMapping.Range) -> some View {
         let height = CGFloat(range.end.timeIntervalSince(range.start) / 3600) * hourHeight
         return RoundedRectangle(cornerRadius: 4, style: .continuous)
-            .fill(WristColor.fill("", strength: 0.4))
+            .fill(Color(white: 0.3).opacity(0.6))
             .overlay(alignment: .topLeading) {
                 if height >= 13 {
                     Text(strings.timeRange(range.start, range.end))
@@ -429,7 +475,7 @@ struct WristTodayView: View {
     }
 }
 
-/// Names a drawn block: the types as the record page's tiles, under the
+/// Names a drawn block: the types as tiles, under the
 /// block's range. A type the phone knows names for opens a second step with
 /// the likeliest of them for this range and "just <type>"; one without
 /// creates at once. The sheet's close button discards the draft.
@@ -566,7 +612,7 @@ struct WristDraftTitlePicker: View {
     }
 }
 
-/// A type as the record page draws it: its name on the type color.
+/// A type as the picker draws it: its name on the type color.
 struct WristTypeTile: View {
     let type: WristType
     var minHeight: CGFloat = 48
@@ -595,15 +641,19 @@ struct WristTypeTile: View {
 /// Time by category for today or the last 3, 7 or 30 days — tap the
 /// period line for the next one. The clock row carries the period's
 /// share logged and its hours, like the today page's. What counts, and how
-/// overlapping events are credited, is the phone's Settings → Apple Watch.
+/// overlapping events are credited, is the phone's Settings → Apple Watch
+/// (the overlap rule and background types can be changed on the settings
+/// page too).
 struct WristStatsView: View {
-    /// Already marked with the types the settings leave out
-    /// (`WristSnapshot.wristStats`).
+    /// Already marked with the types the settings leave out.
     let stats: CategoryStatsPayload?
-    let settings: WristStatsSettings
+    let overlap: WristOverlapRule
+    /// The watch's pick, else the phone's
+    /// (`WristLocalSettings.openingPeriod`).
+    let openingPeriod: WristStatsPeriod
     let now: Date
     let strings: WristStrings
-    /// Nil until a tap: the page follows the phone's default period.
+    /// Nil until a tap: the page follows the opening period.
     @State private var chosen: WristStatsPeriod? = Self.launchPeriod
 
     /// Debug builds accept `-wristStatsPeriod today|threeDays|sevenDays|thirtyDays`,
@@ -619,11 +669,11 @@ struct WristStatsView: View {
         return nil
     }
 
-    private var period: WristStatsPeriod { chosen ?? settings.defaultPeriod }
+    private var period: WristStatsPeriod { chosen ?? openingPeriod }
 
     /// Debug builds accept `-wristOverlap split|full|latestStart` over the
     /// phone's choice, to compare the rules on one fixture.
-    private var overlap: WristOverlapRule {
+    private var rule: WristOverlapRule {
 #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
         if let i = arguments.firstIndex(of: "-wristOverlap"), i + 1 < arguments.count,
@@ -631,11 +681,11 @@ struct WristStatsView: View {
             return rule
         }
 #endif
-        return settings.overlap
+        return overlap
     }
 
     var body: some View {
-        let figures = WristStatsFigures.of(stats, period: period, asOf: now, overlap: overlap)
+        let figures = WristStatsFigures.of(stats, period: period, asOf: now, overlap: rule)
         let rows = CategoryStats.breakdown(figures.categories, maxRows: 5, unlogged: figures.unloggedHours)
         WristPageFrame(header: WristStatsHeader.text(stats, period: period, asOf: now, strings: strings)) { top in
             ScrollView {
@@ -729,7 +779,7 @@ struct WristStatsView: View {
     /// how much of the period each took: each row is its own share of the
     /// elapsed time instead, and they can sum past 100%.
     private func percentText(_ row: CategoryStatsRow, figures: WristStatsFigures) -> String {
-        guard overlap == .full, figures.elapsedHours > 0 else { return row.percentText }
+        guard rule == .full, figures.elapsedHours > 0 else { return row.percentText }
         let percent = Int((row.hours / figures.elapsedHours * 100).rounded())
         return percent == 0 && row.hours > 0 ? "<1%" : "\(percent)%"
     }
@@ -755,6 +805,137 @@ struct WristStatsView: View {
     }
 }
 
+/// The watch's settings. Zoom and the period stats open on live on the
+/// watch. The overlap rule and the background switch are the phone's
+/// Settings → Apple Watch, edited from here: the change shows at once and
+/// goes to the phone, whose next snapshot carries it. Which types count
+/// stays on the phone — a list of every type is a phone-sized choice — and
+/// the page says so. Every choice is one row; a tap moves to its next value.
+struct WristSettingsView: View {
+    @Binding var zoomRaw: String
+    @Binding var periodRaw: String
+    let settings: WristStatsSettings
+    let hasPhoneData: Bool
+    /// The phone applies settings edits (`WristSnapshot.takesSettingsEdits`).
+    let phoneTakesEdits: Bool
+    let snapshotAge: TimeInterval?
+    let strings: WristStrings
+    let onEditOverlap: (WristOverlapRule) -> Void
+    let onEditBackground: (Bool) -> Void
+
+    private var zoom: WristLocalSettings.Zoom { WristLocalSettings.Zoom(stored: zoomRaw) }
+    /// Nil while the phone's period applies.
+    private var watchPeriod: WristStatsPeriod? { WristStatsPeriod(rawValue: periodRaw) }
+
+    var body: some View {
+        WristPageFrame(header: Text(strings.settingsTitle)) { top in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    section(strings.settingsOnWatch)
+                    cycleRow(
+                        strings.zoom, value: strings.zoomLabel(zoom),
+                        index: WristLocalSettings.Zoom.allCases.firstIndex(of: zoom) ?? 0,
+                        count: WristLocalSettings.Zoom.allCases.count
+                    ) {
+                        zoomRaw = Self.next(after: zoom, in: WristLocalSettings.Zoom.allCases).rawValue
+                    }
+                    let periods: [WristStatsPeriod?] = [nil] + WristStatsPeriod.allCases
+                    cycleRow(
+                        strings.statsOpensOn,
+                        value: watchPeriod.map(strings.periodLabel) ?? strings.followPhone(settings.defaultPeriod),
+                        index: periods.firstIndex(of: watchPeriod) ?? 0, count: periods.count
+                    ) {
+                        periodRaw = Self.next(after: watchPeriod, in: periods)?.rawValue ?? ""
+                    }
+
+                    section(strings.settingsFromPhone).padding(.top, 6)
+                    if hasPhoneData {
+                        cycleRow(
+                            strings.overlap, value: strings.overlapLabel(settings.overlap),
+                            index: WristOverlapRule.allCases.firstIndex(of: settings.overlap) ?? 0,
+                            count: WristOverlapRule.allCases.count
+                        ) {
+                            onEditOverlap(Self.next(after: settings.overlap, in: WristOverlapRule.allCases))
+                        }
+                        .disabled(!phoneTakesEdits)
+                        Toggle(isOn: Binding(get: { settings.excludesBackground }, set: { onEditBackground($0) })) {
+                            Text(strings.leaveOutBackground)
+                                .font(.system(size: 14, weight: .medium, design: .rounded))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color(white: 0.16), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .disabled(!phoneTakesEdits)
+                        if !phoneTakesEdits { note(strings.updatePhoneForSettings) }
+                        note(strings.typesOnPhone(leftOut: settings.excludedTypes.count))
+                    } else {
+                        note(strings.noPhoneData)
+                    }
+                    if let age = snapshotAge, age > 24 * 3600 {
+                        note(strings.stale(age))
+                    }
+                }
+                .padding(.top, top + 2)
+                .padding(.horizontal, 6)
+                .padding(.bottom, 18)
+            }
+            .mask(WristEdgeFade(top: 0, bottom: 10))
+        }
+    }
+
+    static func next<T: Equatable>(after value: T, in all: [T]) -> T {
+        guard let i = all.firstIndex(of: value) else { return all[0] }
+        return all[(i + 1) % all.count]
+    }
+
+    private func section(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12, weight: .semibold, design: .rounded))
+            .foregroundStyle(.secondary)
+            .padding(.leading, 4)
+    }
+
+    /// A setting's name over its value, with a dot per value.
+    private func cycleRow(_ title: String, value: String, index: Int, count: Int, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    Text(value)
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.8)
+                    Spacer(minLength: 4)
+                    HStack(spacing: 3) {
+                        ForEach(0..<count, id: \.self) { option in
+                            Circle()
+                                .fill(Color.white.opacity(option == index ? 0.9 : 0.25))
+                                .frame(width: 4, height: 4)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(white: 0.16), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func note(_ text: String) -> some View {
+        Text(text)
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
 struct WristEmptyView: View {
     let strings: WristStrings
 
@@ -773,57 +954,12 @@ struct WristEmptyView: View {
     }
 }
 
-struct WristIdleView: View {
-    let types: [WristType]
-    let sinceLastRecord: TimeInterval?
-    let snapshotAge: TimeInterval?
-    let strings: WristStrings
-    let onStart: (WristType) -> Void
+/// The running session at the foot of the today page: its name, the
+/// counter, +15 and Finish (the double tap). A session the phone cannot
+/// end from here (a repeating event, a phone timer) shows no buttons.
+struct WristRunningBar: View {
+    static let height: CGFloat = 46
 
-    private let columns = [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)]
-
-    var body: some View {
-        WristPageFrame(header: header) { top in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 6) {
-                    if types.isEmpty {
-                        Text(strings.noTypes)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                    LazyVGrid(columns: columns, spacing: 6) {
-                        ForEach(types) { type in
-                            Button {
-                                onStart(type)
-                            } label: {
-                                WristTypeTile(type: type)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    if let age = snapshotAge, age > 24 * 3600 {
-                        Text(strings.stale(age))
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .padding(.top, top + 2)
-                .padding(.horizontal, 6)
-                .padding(.bottom, 18)
-            }
-            .mask(WristEdgeFade(top: 0, bottom: 10))
-        }
-    }
-
-    /// "2h16m since last" in the clock row; nothing after half a day, when
-    /// the gap is no longer news.
-    private var header: Text? {
-        guard let since = sinceLastRecord, since < 12 * 3600 else { return nil }
-        return strings.sinceLastHeader(hours: since / 3600)
-    }
-}
-
-struct WristActiveView: View {
     let occurrence: WristOccurrence
     let pending: Bool
     let strings: WristStrings
@@ -833,52 +969,56 @@ struct WristActiveView: View {
     private var color: Color { WristColor.color(occurrence.colorHex) }
 
     var body: some View {
-        VStack(spacing: 4) {
-            if occurrence.type != occurrence.title, !occurrence.type.isEmpty {
-                Text(occurrence.type)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            Text(occurrence.title)
-                .font(.headline)
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
-            Text(occurrence.start, style: .timer)
-                .font(.system(size: 36, weight: .semibold, design: .rounded))
-                .monospacedDigit()
-            if !occurrence.isOpenEnded {
-                Text(strings.endsAt(occurrence.end))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            if occurrence.quickActionsEnabled {
-                HStack(spacing: 8) {
-                    Button(strings.extend, action: onExtend)
-                    Button(strings.finish, action: onFinish)
-                        .tint(color)
-                        .handGestureShortcut(.primaryAction)
+        HStack(spacing: 4) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(occurrence.title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                Group {
+                    if pending {
+                        Text("\(Text(occurrence.start, style: .timer)) · \(strings.sending)")
+                    } else if occurrence.quickActionsEnabled {
+                        Text(occurrence.start, style: .timer)
+                    } else {
+                        Text("\(Text(occurrence.start, style: .timer)) · \(strings.editOnPhoneShort)")
+                    }
                 }
-                .buttonStyle(.bordered)
-                .padding(.top, 4)
-            } else {
-                Text(strings.editOnPhone)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.white.opacity(0.75))
+                .lineLimit(1)
             }
-            if pending {
-                Text(strings.sending)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if occurrence.quickActionsEnabled {
+                Button(action: onExtend) {
+                    Text(strings.extend)
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .frame(width: 38, height: 30)
+                        .background(Color.white.opacity(0.18), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                Button(action: onFinish) {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 14, weight: .bold))
+                        .frame(width: 38, height: 30)
+                        .background(color.opacity(0.85), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(strings.finish)
+                .handGestureShortcut(.primaryAction)
             }
         }
-        .padding(.horizontal, 6)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // A plain background, not `containerBackground(for: .navigation)`:
-        // inside the paged TabView that one re-invalidates the page every
-        // frame and pins the main thread for as long as a session runs.
-        .background(Rectangle().fill(color.opacity(0.3).gradient).background(.black).ignoresSafeArea())
-        .toolbar(.hidden, for: .navigationBar)
+        .padding(.leading, 10)
+        .padding(.trailing, 6)
+        .frame(height: Self.height)
+        // Plain fills, no material: the bar sits over a scroll view, and a
+        // blur there would be redrawn whenever the day moves.
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(color.opacity(0.35))
+                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.black))
+        )
+        .padding(.horizontal, 4)
     }
 }
 

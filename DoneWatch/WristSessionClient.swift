@@ -164,6 +164,24 @@ final class WristSessionClient: NSObject, ObservableObject {
         )
     }
 
+    /// The stats settings as the pages show them: the phone's, with the
+    /// edits made here that the phone has not reflected yet.
+    var statsSettings: WristStatsSettings {
+        WristStateReducer.statsSettings(snapshot, pending: pending)
+    }
+
+    /// An edit to the phone-owned stats settings from the settings page:
+    /// only the fields given change.
+    func editStatsSettings(overlap: WristOverlapRule? = nil, excludesBackground: Bool? = nil, now: Date = Date()) {
+        guard overlap != nil || excludesBackground != nil else { return }
+        send(
+            WristCommand(
+                id: UUID(), issuedAt: now,
+                kind: .statsSettings(overlap: overlap, excludesBackground: excludesBackground)
+            )
+        )
+    }
+
     /// Housekeeping the views drive on a slow timer: drop settled or stale
     /// pendings and dismissals that no longer matter.
     func tick(now: Date) {

@@ -303,9 +303,25 @@ nonisolated enum WristStateReducer {
                 occurrences[i].end = WristTiming.clampedEnd(
                     start: occurrences[i].start, requested: occurrences[i].end.addingTimeInterval(by)
                 )
+            case .statsSettings:
+                continue
             }
         }
         return (occurrences.sorted { $0.start < $1.start }, pendingIDs)
+    }
+
+    /// The snapshot's stats settings with the settings edits still in
+    /// flight laid over them, oldest first: the watch's settings page shows
+    /// the user's choice at once, and stops overlaying it once a snapshot
+    /// settles the edit (`settle`) — by then that snapshot carries it.
+    static func statsSettings(_ snapshot: WristSnapshot?, pending: [WristPendingCommand]) -> WristStatsSettings {
+        var settings = snapshot?.statsSettings ?? .standard
+        for entry in pending.sorted(by: { $0.command.issuedAt < $1.command.issuedAt }) {
+            guard case .statsSettings(let overlap, let excludesBackground) = entry.command.kind else { continue }
+            if let overlap { settings.overlap = overlap }
+            if let excludesBackground { settings.excludesBackground = excludesBackground }
+        }
+        return settings
     }
 
     static func display(
