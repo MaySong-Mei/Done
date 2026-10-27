@@ -254,9 +254,18 @@ final class TelemetryConsentAndBatchTests: XCTestCase {
     /// real store and read back at t: it must still pass. Mutant: compare
     /// against the raw `consentAt` → the record is dropped and this fails.
     func testTheWatermarkIsComparedAtTheStoresWholeSecondGranularity() throws {
+        // Both halves of the second (review P1-1): a watermark ROUNDED to
+        // the nearest second instead of floored keeps the record at .4 and
+        // drops it at .6.
+        for fraction in [0.4, 0.6] {
+            try assertWatermarkFloorsTheConsentSecond(consentFraction: fraction)
+        }
+    }
+
+    private func assertWatermarkFloorsTheConsentSecond(consentFraction: Double) throws {
         let location = SpikeRunStorageLocation.ephemeral(id: UUID())
         defer { try? FileManager.default.removeItem(at: location.directory) }
-        let consentAt = t.addingTimeInterval(0.4)
+        let consentAt = t.addingTimeInterval(consentFraction)
         let mintedAfter = TelemetryFixtures.run(startedAt: t.addingTimeInterval(0.7), revision: nil)
         let secondBefore = TelemetryFixtures.run(startedAt: t.addingTimeInterval(-0.6), revision: nil)
         XCTAssertTrue(SpikeRunStore.finishRun(mintedAfter, location: location))
@@ -267,7 +276,8 @@ final class TelemetryConsentAndBatchTests: XCTestCase {
         XCTAssertLessThan(readBack.startedAt, consentAt, "so the raw comparison would have rejected it")
 
         let kept = TelemetryConsent.filter(onDisk, consentAt: consentAt, currentOwner: TelemetryFixtures.uid)
-        XCTAssertEqual(kept.map(\.id), [mintedAfter.id], "minted after consent → consented; the second before → not")
+        XCTAssertEqual(kept.map(\.id), [mintedAfter.id],
+                       "consent at .\(Int(consentFraction * 10)): minted after → consented; the second before → not")
     }
 
     func testBackgroundEdgeCarriesEventsAlwaysAndTheDailyOnlyPastFifteenMinutes() {
@@ -580,6 +590,19 @@ final class TelemetrySourceScanTests: XCTestCase {
         let lines = try codeLines("Done/Services/TelemetryUploader.swift")
         XCTAssertFalse(lines.isEmpty, "liveness")
         XCTAssertFalse(lines.contains { $0.contains("URLSession") })
+    }
+
+    /// Review P2-2: the wiring itself is `TelemetryUploader.connect(center:)`,
+    /// which the uploader tests call; DoneApp must still CALL it, after
+    /// creating the center. Read as code with comments stripped, so a
+    /// comment naming the call cannot stand in for it.
+    func testDoneAppConnectsTheResidentToTheUploader() throws {
+        let source = try String(contentsOf: repoRoot.appendingPathComponent("Done/DoneApp.swift"), encoding: .utf8)
+        let code = EraseWiringScan.strippingComments(source)
+        let creation = try XCTUnwrap(code.range(of: "ResidentObservationCenter(coordinator:"), "liveness: DoneApp creates the center")
+        let connect = try XCTUnwrap(code.range(of: "uploader.connect(center: center)"),
+                                    "DoneApp must wire the resident through connect(center:)")
+        XCTAssertLessThan(creation.lowerBound, connect.lowerBound, "wired after the center exists")
     }
 }
 

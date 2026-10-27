@@ -761,9 +761,7 @@ struct DoneApp: App {
                 if residentObservation == nil, !EventStorageLocation.isRunningUnderXCTest, let uploader = telemetryUploader {
                     let center = ResidentObservationCenter(coordinator: spikeSession, store: store,
                                                            ownerUID: { [weak uploader] in uploader?.ownerUID })
-                    center.onUploadTrigger = { [weak uploader] trigger in uploader?.schedule(trigger) }
-                    uploader.onConsentGranted = { [weak center] in center?.remintDailyForConsent() }
-                    uploader.flushBeforeManualUpload = { [weak center] in center?.flushForManualUpload() }
+                    uploader.connect(center: center)
                     center.activate()
                     uploader.activate()
                     residentObservation = center
