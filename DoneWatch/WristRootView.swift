@@ -9,6 +9,7 @@
 //  `Text(_:style: .timer)`.
 //
 
+import Combine
 import SwiftUI
 import WatchKit
 
@@ -153,7 +154,13 @@ struct WristTodayView: View {
     /// near an edge the day scrolls under a still finger, and the draft's
     /// moving end follows the time that passes under it.
     @State private var fingerY: CGFloat?
-    private let edgeTick = Timer.publish(every: 1.0 / 30, on: .main, in: .common).autoconnect()
+    /// Ticks only while a finger is drawing: the watch does not wake for it
+    /// otherwise.
+    private var edgeTicks: AnyPublisher<Date, Never> {
+        holding
+            ? Timer.publish(every: 1.0 / 30, on: .main, in: .common).autoconnect().eraseToAnyPublisher()
+            : Empty().eraseToAnyPublisher()
+    }
 
     private let hourHeight: CGFloat = 64
     private let gutter: CGFloat = 28
@@ -237,7 +244,7 @@ struct WristTodayView: View {
                     viewportHeight = size.width
                     contentHeight = size.height
                 }
-                .onReceive(edgeTick) { _ in scrollAtEdge(mapping, top: top) }
+                .onReceive(edgeTicks) { _ in scrollAtEdge(mapping, top: top) }
                 // On the scroll view, not its content: any drag on the
                 // content takes every pan from the scroll view, while one
                 // here leaves it its scrolls until the hold is recognized.
