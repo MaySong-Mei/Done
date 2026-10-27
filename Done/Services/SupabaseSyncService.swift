@@ -330,14 +330,14 @@ final class SupabaseREST: SyncGateway {
     }
 
     /// gh#273 §16 rule 3: one page of this account's observatory rows from
-    /// `v_my_spike_runs` (RLS: own rows only), release only, in the view's
-    /// stable order, paged by `TelemetryCloudPager`. A read: no epoch
-    /// header, and a refusal logs status and code only (the rows are the
-    /// user's).
-    func fetchMySpikeRunsPage(spikeIDs: [String], limit: Int, offset: Int) async throws -> [[String: Any]] {
+    /// `v_my_spike_runs` (RLS: own rows only), release only, on or after
+    /// `sinceDayKey` (review P1-3), in the view's stable order, paged by
+    /// `TelemetryCloudPager`. A read: no epoch header, and a refusal logs
+    /// status and code only (the rows are the user's).
+    func fetchMySpikeRunsPage(spikeIDs: [String], sinceDayKey: String, limit: Int, offset: Int) async throws -> [[String: Any]] {
         let table = "v_my_spike_runs"
         let path = "\(table)?select=*&build_configuration=eq.release&spike_id=in.(\(spikeIDs.joined(separator: ",")))"
-            + "&order=day_key.desc,run_id.asc&limit=\(limit)&offset=\(offset)"
+            + "&day_key=gte.\(sinceDayKey)&order=day_key.desc,run_id.asc&limit=\(limit)&offset=\(offset)"
         let data = try await send(method: "GET", path: path, body: nil, headers: [:], table: table,
                                   isWrite: false, logsResponseBody: false)
         guard let rows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {

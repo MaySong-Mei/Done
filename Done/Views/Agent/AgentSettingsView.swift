@@ -1048,7 +1048,15 @@ enum TelemetrySettingsCopy {
         guard let lastUploadAt = uploader.lastUploadAt else { return L(.telemetryStatusNever) }
         let when = RelativeDateTimeFormatter.telemetryShort.localizedString(for: lastUploadAt, relativeTo: now)
         let build = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "?"
-        return String(format: L(.telemetryStatusFormat), when, "\(uploader.lastBatchCount)", "\(uploader.totalAcknowledged)", build)
+        return statusLine(when: when, rows: uploader.lastBatchCount, total: uploader.totalAcknowledged, build: build,
+                          language: .current)
+    }
+
+    /// "1 row", not "1 rows" (English has a singular; Chinese spells both
+    /// the same).
+    static func statusLine(when: String, rows: Int, total: Int, build: String, language: AppLanguage) -> String {
+        let format = (rows == 1 ? LKey.telemetryStatusFormatOne : .telemetryStatusFormat).text(for: language)
+        return String(format: format, when, "\(rows)", "\(total)", build)
     }
 
     /// What the most recent attempt concluded, for EVERY outcome (review
@@ -1059,6 +1067,7 @@ enum TelemetrySettingsCopy {
         switch outcome {
         case nil, .uploaded?: return nil
         case .switchOff?: return L(.telemetryOutcomeSwitchOff)
+        case .defaultNotConfirmed?: return L(.telemetryOutcomeDefaultNotConfirmed)
         case .notAttached?: return L(.telemetryOutcomeNotAttached)
         case .blockedByBuild?: return L(.telemetryOutcomeBlockedByBuild)
         case .noConsent?: return L(.telemetryOutcomeNoConsent)

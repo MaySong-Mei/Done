@@ -400,6 +400,8 @@ enum LKey {
     case telemetryOutcomeSwitchOff, telemetryOutcomeNotAttached, telemetryOutcomeBlockedByBuild
     case telemetryOutcomeNoConsent, telemetryOutcomeSignedOut, telemetryOutcomeNothingPending
     case telemetryOutcomeStale, telemetryOutcomePartialFormat, telemetryQuarantinedFormat
+    // gh#273 review round: "1 rows", and the by-default gate's own line.
+    case telemetryStatusFormatOne, telemetryOutcomeDefaultNotConfirmed
     case telemetryMovedHint, telemetryOpenFixWatch, fixWatchSourceCloudFormat, fixWatchSourceLocal
     case hintLocalDataSharing
     case fixWatchDataLocalOnly, fixWatchDataSharing
@@ -1179,6 +1181,8 @@ enum LKey {
         case .telemetryNoteHint: return "The note typed on a manual Spike run is the only free text that can ever be uploaded, and only while this is on."
         case .telemetryStatusNever: return "Nothing uploaded yet"
         case .telemetryStatusFormat: return "Last upload %@ · %@ rows · %@ total · build %@"
+        case .telemetryStatusFormatOne: return "Last upload %@ · %@ row · %@ total · build %@"
+        case .telemetryOutcomeDefaultNotConfirmed: return "Last attempt: sharing was turned on by the TestFlight default and this install is not confirmed as TestFlight, so nothing was sent."
         case .telemetryLastFailureFormat: return "Last attempt failed: %@"
         case .telemetryViewSample: return "View sample"
         case .telemetrySampleTitle: return "Last attempt (formatted copy)"
@@ -1881,6 +1885,8 @@ enum LKey {
         case .telemetryNoteHint: return "手动 Spike 运行时输入的备注是唯一可能上传的自由文字,且仅在此开关打开时。"
         case .telemetryStatusNever: return "尚未上传"
         case .telemetryStatusFormat: return "上次上传 %@ · %@ 条 · 累计 %@ · 构建 %@"
+        case .telemetryStatusFormatOne: return "上次上传 %@ · %@ 条 · 累计 %@ · 构建 %@"
+        case .telemetryOutcomeDefaultNotConfirmed: return "上次尝试:分享是 TestFlight 默认打开的,本安装未确认是 TestFlight,未发送。"
         case .telemetryLastFailureFormat: return "上次尝试失败:%@"
         case .telemetryViewSample: return "查看样本"
         case .telemetrySampleTitle: return "最近一次尝试(格式化副本)"

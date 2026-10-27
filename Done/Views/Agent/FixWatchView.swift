@@ -259,9 +259,8 @@ struct FixWatchView: View {
         storageBytes = spikeRunsDirectoryBytes()
         guard let telemetryUploader else { return }
         Task {
-            let cloud = await telemetryUploader.fetchObservatoryCloudRuns()
-            let read = FixWatchAttention.observatory(localDailies: local.dailies, localWindows: local.windows,
-                                                     cloud: cloud, localInstall: SpikeRunStore.installID())
+            let read = await FixWatchAttention.loadObservatory(local: local, uploader: telemetryUploader, now: Date(),
+                                                               localInstall: SpikeRunStore.installID())
             verdicts = read.verdicts
             source = read.source
         }
@@ -314,19 +313,49 @@ enum FixWatchAttention {
         ]
     }
 
+    /// How far back the deck reads once the cloud is involved (review P1-3):
+    /// recent weeks, not the account's lifetime.
+    static let observatoryWindowDays = 60
+
+    /// The first day inside the window: today minus `observatoryWindowDays`,
+    /// on the device calendar, as a day key.
+    static func observatorySinceDayKey(now: Date, calendar: Calendar = .current) -> String {
+        let today = calendar.startOfDay(for: now)
+        let first = calendar.date(byAdding: .day, value: -observatoryWindowDays, to: today) ?? today
+        return TelemetryClaimKey.dayKey(forDayStart: first, calendar: calendar).dayKey
+    }
+
+    /// The deck's cloud half in one place — the view only assigns what comes
+    /// back: the window is computed ONCE and handed to both the cloud read
+    /// and the merge, so the two halves always cover the same days.
+    @MainActor
+    static func loadObservatory(
+        local: (dailies: [SpikeRun], windows: [SpikeRun]), uploader: TelemetryUploader,
+        now: Date, calendar: Calendar = .current, localInstall: UUID
+    ) async -> (verdicts: [FixVerdict], source: FixWatchSource) {
+        let since = observatorySinceDayKey(now: now, calendar: calendar)
+        let cloud = await uploader.fetchObservatoryCloudRuns(sinceDayKey: since)
+        return observatory(localDailies: local.dailies, localWindows: local.windows, cloud: cloud,
+                           localInstall: localInstall, sinceDayKey: since, calendar: calendar)
+    }
+
     /// §16 rule 3, pure: the deck's verdicts and its source line from this
     /// device's records and — when there is one — this account's cloud
     /// rows. No cloud (offline, signed out, a failed read) or an empty one
     /// falls back to this device and says "this device only"; otherwise the
-    /// two are merged (`TelemetryObservatoryMerge`) and the line names how
-    /// many installs the release records came from.
+    /// two are merged (`TelemetryObservatoryMerge`), both halves cut to the
+    /// window starting at `sinceDayKey`, and the line names how many
+    /// installs the release records came from.
     static func observatory(
-        localDailies: [SpikeRun], localWindows: [SpikeRun], cloud: [SpikeRun]?, localInstall: UUID
+        localDailies: [SpikeRun], localWindows: [SpikeRun], cloud: [SpikeRun]?, localInstall: UUID,
+        sinceDayKey: String, calendar: Calendar = .current
     ) -> (verdicts: [FixVerdict], source: FixWatchSource) {
         guard let cloud, !cloud.isEmpty else {
             return (evaluate(dailies: localDailies, windows: localWindows), .localOnly)
         }
-        let merged = TelemetryObservatoryMerge.merge(local: localDailies + localWindows, cloud: cloud)
+        let inWindow: (SpikeRun) -> Bool = { FixWatchVerdictEvaluator.dayKey(of: $0, calendar: calendar) >= sinceDayKey }
+        let merged = TelemetryObservatoryMerge.merge(local: (localDailies + localWindows).filter(inWindow),
+                                                     cloud: cloud.filter(inWindow))
         let dailies = merged.filter { $0.spikeID == FixObservationRegistry.residentDailySpikeID }
         let windows = merged.filter { $0.spikeID == FixObservationRegistry.effortPathFixID }
         let installs = TelemetryObservatoryMerge.installCount(merged.filter(FixWatchVerdictEvaluator.isRelease),

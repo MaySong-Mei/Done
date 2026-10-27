@@ -315,16 +315,17 @@ enum AppSettingsKeys {
 
     // MARK: - Telemetry (gh#273 design §8.2)
 
-    /// "Share performance & usage statistics (no content)". Default OFF
-    /// (#197 ruling, not re-opened). Independent of `syncUploadsEnabled`:
+    /// "Share performance & usage statistics (no content)". OFF on the App
+    /// Store; a TestFlight install whose user has not ruled starts ON (§16
+    /// rule 2, `telemetryEnabledByDefault`). Independent of `syncUploadsEnabled`:
     /// a device that syncs its data does not thereby share statistics, and
     /// one that shares statistics need not sync. Per device; **DO NOT add
     /// to `SyncedSettings.allKeys`** — consent is given on a device.
     static let telemetryUploadsEnabled = "telemetryUploadsEnabled"
-    /// The consent watermark: the `Date` the switch last went OFF → ON.
-    /// Only records minted at or after it are uploaded; the observatory's
-    /// weeks of history before consent never leave the device. Kept when
-    /// the switch goes OFF (the gap stays local either way).
+    /// The `Date` the switch last went OFF → ON — the user's flip, or the
+    /// TestFlight default's launch — always a real moment (review P1-1).
+    /// The upload watermark reads it through `TelemetryDefaultPolicy.
+    /// watermark`. Kept when the switch goes OFF.
     static let telemetryConsentAt = "telemetryConsentAt"
     /// The second switch (decision point 1, option A): the manual Spike
     /// `note` — the ONE free-text field — rides along only with this on.
@@ -334,6 +335,11 @@ enum AppSettingsKeys {
     /// once set, nothing but the user turns it on. Not registered (unset
     /// reads false) and swept by the erase, like the switch itself.
     static let telemetryUserDecided = "telemetryUserDecided"
+    /// gh#273 review P1-1: the switch is ON because the TestFlight default
+    /// turned it on, not the user. The user's own flip clears it; a definite
+    /// App Store answer withdraws the default (switch and bit removed).
+    /// Not registered (unset reads false) and swept by the erase.
+    static let telemetryEnabledByDefault = "telemetryEnabledByDefault"
 
     /// What an unset key reads as (design D9: sync is on by default). Only
     /// the registration domain: nothing is written, so a value the user
@@ -362,6 +368,7 @@ enum AppSettingsKeys {
         telemetryConsentAt,
         telemetryNoteUploadsEnabled,
         telemetryUserDecided,
+        telemetryEnabledByDefault,
         calendarAgenticCreateEnabled,
         agentAskBeforeCreatingEventTypeTemplates,
         rememberLastTab,

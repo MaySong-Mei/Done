@@ -77,9 +77,9 @@ final class EraseWiringQATests: XCTestCase {
              "the uploader's in-memory status — last upload time, row counts, the request sample, the last "
              + "outcome and the daily throttle clock — describing the previous owner's uploads (gh#273)"),
             ("AppSettingsKeys.removeResettableKeys(from: defaults)",
-             "the by-name sweep, which now also carries the telemetry switch, its consent watermark and "
-             + "the note opt-in (gh#273): the next account on this phone would inherit the previous "
-             + "owner's consent to share statistics"),
+             "the by-name sweep, which now also carries the telemetry switch, its consent moment, "
+             + "the note opt-in, the decided bit and the by-default bit (gh#273): the next account on "
+             + "this phone would inherit the previous owner's consent to share statistics"),
             ("syncService.forgetAccountGone()",
              "the in-memory \"account erased elsewhere\" card and choice, describing data the erase removed"),
             ("ConflictShelf.wipe()",

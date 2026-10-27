@@ -1327,6 +1327,16 @@ final class TelemetryUploaderTests: XCTestCase {
         XCTAssertEqual(lines.compactMap { try? decoder.decode(SpikeRun.self, from: Data($0.utf8)).revision }, [1, 2, 3, 4])
         XCTAssertEqual(SpikeRunStore.spikeIDsOnDisk(location: location), [run.spikeID], "dotfiles are not record files")
     }
+
+    /// The status line says "1 row", not "1 rows"; Chinese has one form.
+    func testTheStatusLineSaysOneRowNotOneRows() {
+        let one = TelemetrySettingsCopy.statusLine(when: "now", rows: 1, total: 7, build: "20", language: .english)
+        let two = TelemetrySettingsCopy.statusLine(when: "now", rows: 2, total: 7, build: "20", language: .english)
+        XCTAssertEqual(one, "Last upload now · 1 row · 7 total · build 20")
+        XCTAssertEqual(two, "Last upload now · 2 rows · 7 total · build 20")
+        XCTAssertEqual(TelemetrySettingsCopy.statusLine(when: "刚刚", rows: 1, total: 7, build: "20", language: .chinese),
+                       "上次上传 刚刚 · 1 条 · 累计 7 · 构建 20")
+    }
 }
 
 // MARK: - 9 — claim key at the center

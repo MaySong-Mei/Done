@@ -584,18 +584,55 @@ enum TelemetryRedactor {
 /// ("可以补传") — which still leaves out what §16 does not adopt: records
 /// with no account (signed-out stretches never match the current owner)
 /// and lines older than the chassis (no `revision`, never pending).
+/// Where this install came from, as far as the statistics default cares
+/// (§16 rule 2, review P1-2).
+enum TelemetryDistribution: Equatable {
+    case testFlight
+    case appStore
+    /// Signed with a provisioning profile (Xcode, devicectl, ad hoc), or
+    /// StoreKit's `.xcode`.
+    case development
+    /// StoreKit could not say: offline, an error, an unverified transaction.
+    case unknown(reason: String)
+
+    /// The token on the launch's `Telemetry environment=` trail line.
+    var traceLabel: String {
+        switch self {
+        case .testFlight: return "testflight"
+        case .appStore: return "appstore"
+        case .development: return "development"
+        case .unknown(let reason): return "unknown(\(reason))"
+        }
+    }
+}
+
 enum TelemetryDefaultPolicy {
     static let testFlightWatermark = Date.distantPast
 
-    static func autoEnables(isTestFlight: Bool, userHasDecided: Bool) -> Bool {
-        isTestFlight && !userHasDecided
+    static func autoEnables(distribution: TelemetryDistribution, userHasDecided: Bool) -> Bool {
+        distribution == .testFlight && !userHasDecided
+    }
+
+    /// Only a DEFINITE App Store answer withdraws a switch the default turned
+    /// on (review P1-1): `unknown` leaves it alone, so an offline TestFlight
+    /// launch cannot flip it off and on again.
+    static func withdrawsDefault(distribution: TelemetryDistribution, enabledByDefault: Bool) -> Bool {
+        distribution == .appStore && enabledByDefault
+    }
+
+    /// Whether an ON switch may upload: one the user turned on, always; one
+    /// the default turned on, only once this launch has heard "TestFlight" —
+    /// a batch that runs before StoreKit answers, or on any other answer,
+    /// sends nothing.
+    static func mayUpload(enabledByDefault: Bool, distribution: TelemetryDistribution?) -> Bool {
+        !enabledByDefault || distribution == .testFlight
     }
 
     /// The watermark a batch filters against (decision 2026-10-27 ①): in
     /// TestFlight EVERY consent backfills — the default's and the user's own
     /// ON alike, build 17's included — so it is the distant past whatever
-    /// moment is stored; on the App Store it is the consent moment. The
-    /// stored value stays the user's real moment either way.
+    /// moment is stored; elsewhere it is the stored consent moment, which
+    /// is always a real one (review P1-1).
     static func watermark(consentAt: Date, isTestFlight: Bool) -> Date {
         isTestFlight ? testFlightWatermark : consentAt
     }
