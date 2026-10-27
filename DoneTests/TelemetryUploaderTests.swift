@@ -937,16 +937,21 @@ final class TelemetryUploaderTests: XCTestCase {
             now: { [unowned self] in self.clock }, mediaNow: { CACurrentMediaTime() },
             ownerUID: { [uid] in uid }
         )
-        center.onUploadTrigger = { [weak uploader] trigger in uploader?.schedule(trigger) }
-        uploader.onConsentGranted = { [weak center] in center?.remintDailyForConsent() }
+        uploader.connect(center: center)   // the same call DoneApp makes
         center.activate()
         return center
     }
 
-    private func capturedRows(_ index: Int) throws -> [[String: Any]] {
+    /// The rows of captured request #index. A missing request is a FAILURE,
+    /// never a skip (review P1-1: an `XCTSkip` here let a mutant pass as
+    /// "skipped"); callers assert the request count first as well.
+    private func capturedRows(_ index: Int, file: StaticString = #filePath, line: UInt = #line) throws -> [[String: Any]] {
         let all = TelemetryHTTPStub.all
-        guard index < all.count else { throw XCTSkip("no captured request #\(index)") }
-        return try XCTUnwrap(JSONSerialization.jsonObject(with: all[index].body) as? [[String: Any]])
+        guard index < all.count else {
+            XCTFail("no captured request #\(index) (have \(all.count))", file: file, line: line)
+            return []
+        }
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: all[index].body) as? [[String: Any]], file: file, line: line)
     }
 
     private static let isoParser: ISO8601DateFormatter = {
@@ -968,6 +973,18 @@ final class TelemetryUploaderTests: XCTestCase {
     /// its whole second → 0 requests, `.nothingPending` (the sub-second
     /// clock below is what makes the second one observable).
     func testSwitchingOnUploadsTheConsentDailyAtOnceWithoutAnyFlushEdge() async throws {
+        try await assertSwitchingOnUploadsTheConsentDailyAtOnce(consentFraction: 0.4)
+    }
+
+    /// The same in the upper half of the second (review P1-1): a watermark
+    /// ROUNDED to the nearest second instead of floored passes at .4 and
+    /// silences the day here — at .6 the consent daily, stored at the
+    /// floor, sits a whole second below a rounded-up watermark.
+    func testSwitchingOnUploadsTheConsentDailyInTheUpperHalfOfTheSecondToo() async throws {
+        try await assertSwitchingOnUploadsTheConsentDailyAtOnce(consentFraction: 0.6)
+    }
+
+    private func assertSwitchingOnUploadsTheConsentDailyAtOnce(consentFraction: Double) async throws {
         TelemetryHTTPStub.install()
         TelemetryHTTPStub.reset()
         let uploader = makeUploader()
@@ -987,7 +1004,7 @@ final class TelemetryUploaderTests: XCTestCase {
         // Switch on through the view's own edge, at a sub-second moment (a
         // real clock always has a fraction; the store keeps whole seconds).
         // Nothing else happens — no background, no deck, no flush.
-        clock = t0.addingTimeInterval(600.4)
+        clock = t0.addingTimeInterval(600 + consentFraction)
         let consentAt = clock
         defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
         TelemetrySwitchEdge.apply(from: false, to: true, defaults: defaults, now: clock, uploader: uploader)
@@ -1040,6 +1057,7 @@ final class TelemetryUploaderTests: XCTestCase {
         defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
         TelemetrySwitchEdge.apply(from: false, to: true, defaults: defaults, now: clock, uploader: uploader)
         await uploader.drain()
+        XCTAssertEqual(TelemetryHTTPStub.all.count, 1, "the switch batch went out (consent at .7 of its second)")
         let first = try capturedRows(0)
         guard first.count == 1 else { return XCTFail("one row in the switch batch; got \(first.count)") }
         let dailyID = try XCTUnwrap(first[0]["run_id"] as? String)
@@ -1049,13 +1067,15 @@ final class TelemetryUploaderTests: XCTestCase {
         clock = clock.addingTimeInterval(60)
         for _ in 0..<3 { SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible)) }
 
-        // Positive control: no flush hook → the counts are not on disk.
+        // `connect(center:)` — DoneApp's own wiring — installed the hook.
+        // Positive control: without it the counts are not on disk.
+        let hook = try XCTUnwrap(uploader.flushBeforeManualUpload, "connect(center:) wires the manual-upload flush")
+        uploader.flushBeforeManualUpload = nil
         let bare = await uploader.uploadNow()
         XCTAssertEqual(bare, .nothingPending, "without the hook the tap reads a stale disk")
         XCTAssertEqual(TelemetryHTTPStub.all.count, 1)
 
-        // Wired as DoneApp wires it.
-        uploader.flushBeforeManualUpload = { [weak center] in center?.flushForManualUpload() }
+        uploader.flushBeforeManualUpload = hook
         let flushed = await uploader.uploadNow()
         XCTAssertEqual(flushed, .uploaded(rows: 1))
         XCTAssertEqual(TelemetryHTTPStub.all.count, 2, "exactly one more request")
@@ -1065,7 +1085,8 @@ final class TelemetryUploaderTests: XCTestCase {
         XCTAssertEqual((second[0]["revision"] as? NSNumber)?.intValue, 2, "revision + 1")
         XCTAssertEqual(((second[0]["metrics"] as? [String: Any])?["meComputedVisible"] as? NSNumber)?.intValue, 3)
 
-        // The flush itself scheduled nothing: no further request follows.
+        // (A flush that also scheduled a batch would leave that batch's
+        // `.nothingPending` as the outcome — `flushed` above pins it.)
         await uploader.drain()
         XCTAssertEqual(TelemetryHTTPStub.all.count, 2)
     }

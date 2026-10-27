@@ -391,6 +391,17 @@ final class TelemetryUploader: ObservableObject {
         ))
     }
 
+    /// The app's wiring of the resident to this uploader, in ONE place so the
+    /// tests run exactly what DoneApp runs (review P2-2 — a hand-copied
+    /// wiring let the "Upload now" flush go unwired with every test green):
+    /// the center's flush edges schedule batches, the consent edge re-mints
+    /// the day's record, and "Upload now" writes the counts so far first.
+    func connect(center: ResidentObservationCenter) {
+        center.onUploadTrigger = { [weak self] trigger in self?.schedule(trigger) }
+        onConsentGranted = { [weak center] in center?.remintDailyForConsent() }
+        flushBeforeManualUpload = { [weak center] in center?.flushForManualUpload() }
+    }
+
     func attach(_ attachment: Attachment) {
         self.attachment = attachment
     }

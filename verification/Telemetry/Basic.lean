@@ -151,7 +151,10 @@ end Server
 /-- §8.2 / wire §5 "只发 `started_at ≥ consent_at` 且 `ownerUID == 当前 uid`
 的记录"; §8.2 "打开记 `consent_at`" — no `consent_at` means the switch was
 never on, so nothing is eligible. A `nil` current owner is the signed-out
-state and uploads nothing (§4.1; see the module comment). -/
+state and uploads nothing (§4.1; see the module comment). Times here are
+whole seconds (`Int`); the Swift side floors `consent_at` to the store's
+whole second before comparing (device build 17, 2026-10-27), so this model
+is the post-floor comparison and its fixtures are unaffected. -/
 def consentFilter {Id : Type} (records : List (Record Id))
     (consentAt : Option Int) (currentOwner : Option String) : List (Record Id) :=
   match consentAt, currentOwner with
