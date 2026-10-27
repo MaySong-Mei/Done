@@ -17,21 +17,50 @@ nonisolated struct WristDayBlock: Equatable, Identifiable, Sendable {
     /// the tap for a session finished on this watch.
     var start: Date
     var end: Date
-    /// Column within its cluster of overlapping blocks, and the cluster's
-    /// column count. Interrupts sit on top of whatever they interrupt and
-    /// always take the full width (lane 0 of 1).
-    var lane: Int
-    var lanes: Int
+    /// Across the day's width and in stacking order, as the phone's day
+    /// timeline places it (`WristOverlapLayout`). An interrupt embedded in
+    /// a parent on the page takes the parent's slot, one level up, and is
+    /// drawn inset on it (`parentID`).
+    var slot: WristOverlapSlot
+    var parentID: String?
     var isCurrent: Bool
+    /// The block's identity from one snapshot to the next: the event and
+    /// which of its blocks on the page this is. An occurrence id changes
+    /// with the range (and a block created here changes it once more when
+    /// the phone's copy replaces the watch's own), so motion follows this.
+    var motionKey: String
+}
+
+/// One day's blocks, and where the draft being drawn sits among them.
+nonisolated struct WristDayPage: Equatable, Sendable {
+    var blocks: [WristDayBlock]
+    var draftSlot: WristOverlapSlot?
 }
 
 nonisolated enum WristDayLayout {
+    static let draftID = "wrist.draft"
+
     static func blocks(
         _ occurrences: [WristOccurrence], dismissed: [WristDismissal],
         dayStart: Date, dayEnd: Date, now: Date, currentID: String?
     ) -> [WristDayBlock] {
+        page(occurrences, dismissed: dismissed, dayStart: dayStart, dayEnd: dayEnd,
+             now: now, currentID: currentID).blocks
+    }
+
+    /// The day as the phone's day timeline would draw it. With a `draft`,
+    /// the draft takes a column of its own and everything equal-splits
+    /// around it — the phone's drag to create — so no block becomes a
+    /// stack-peek host mid-draw.
+    static func page(
+        _ occurrences: [WristOccurrence], dismissed: [WristDismissal],
+        dayStart: Date, dayEnd: Date, now: Date, currentID: String?,
+        draft: WristTimeSpan? = nil
+    ) -> WristDayPage {
         var placed: [WristDayBlock] = []
-        for occurrence in occurrences {
+        var storeOrder: [String: Int] = [:]
+        for (index, occurrence) in occurrences.enumerated() {
+            storeOrder[occurrence.id] = storeOrder[occurrence.id] ?? index
             var end = occurrence.isOpenEnded ? min(now, dayEnd) : occurrence.end
             if let dismissal = dismissed.first(where: { $0.applies(to: occurrence) }) {
                 end = min(end, max(dismissal.tappedAt, occurrence.start))
@@ -41,37 +70,74 @@ nonisolated enum WristDayLayout {
             guard end > start else { continue }
             placed.append(WristDayBlock(
                 id: occurrence.id, occurrence: occurrence, start: start, end: end,
-                lane: 0, lanes: 1, isCurrent: occurrence.id == currentID
+                slot: .full, parentID: nil, isCurrent: occurrence.id == currentID, motionKey: ""
             ))
         }
-        // Start ascending, longer first, then id: the same input in any
-        // order gives the same columns.
+        // A fixed order, so the same day in any order lays out the same.
         placed.sort { ($0.start, $1.end, $0.id) < ($1.start, $0.end, $1.id) }
 
-        // Greedy columns per cluster of overlapping (non-interrupt) blocks.
-        var clusterIndices: [Int] = []
-        var laneEnds: [Date] = []
-        var clusterEnd = Date.distantPast
-        func closeCluster() {
-            for i in clusterIndices { placed[i].lanes = max(1, laneEnds.count) }
-            clusterIndices = []
-            laneEnds = []
+        // Motion keys: the event, then its blocks in order down the page.
+        var seen: [UUID: Int] = [:]
+        for i in placed.indices {
+            let eventID = placed[i].occurrence.eventID
+            let ordinal = seen[eventID, default: 0]
+            seen[eventID] = ordinal + 1
+            placed[i].motionKey = "\(eventID.uuidString)#\(ordinal)"
         }
-        for i in placed.indices where !placed[i].occurrence.isInterrupt {
-            if placed[i].start >= clusterEnd { closeCluster() }
-            if let free = laneEnds.firstIndex(where: { $0 <= placed[i].start }) {
-                placed[i].lane = free
-                laneEnds[free] = placed[i].end
-            } else {
-                placed[i].lane = laneEnds.count
-                laneEnds.append(placed[i].end)
-            }
-            clusterIndices.append(i)
-            clusterEnd = max(clusterEnd, placed[i].end)
+
+        // The phone's interrupt context: an embedded interrupt whose parent
+        // is on the page and overlaps it is drawn on that parent. Of two
+        // blocks of one series, the one later in the phone's store order
+        // (the input's) is the parent, as on the phone.
+        var parents: [UUID: Int] = [:]
+        let inStoreOrder = placed.indices.sorted {
+            (storeOrder[placed[$0].id] ?? 0, $0) < (storeOrder[placed[$1].id] ?? 0, $1)
         }
-        closeCluster()
-        // Interrupts last, so they draw on top.
-        return placed.filter { !$0.occurrence.isInterrupt } + placed.filter { $0.occurrence.isInterrupt }
+        for i in inStoreOrder where !placed[i].occurrence.isInterrupt {
+            parents[placed[i].occurrence.anchorID] = i
+        }
+        var embeddedIn: [Int: Int] = [:]
+        for i in placed.indices {
+            let occurrence = placed[i].occurrence
+            guard occurrence.isInterrupt, let parentID = occurrence.interruptParentID,
+                  let p = parents[parentID],
+                  placed[i].end > placed[p].start && placed[i].start < placed[p].end else { continue }
+            embeddedIn[i] = p
+        }
+
+        var items = placed.indices.filter { embeddedIn[$0] == nil }.map { i -> WristOverlapItem in
+            let occurrence = placed[i].occurrence
+            return WristOverlapItem(
+                id: placed[i].id, start: placed[i].start, end: placed[i].end,
+                createdAt: occurrence.createdAt, anchorID: occurrence.anchorID,
+                embeddedParentID: occurrence.interruptParentID, isInterrupt: occurrence.isInterrupt
+            )
+        }
+        if let draft {
+            items.append(WristOverlapItem(
+                id: draftID, start: draft.start, end: draft.end, createdAt: .distantFuture, anchorID: UUID()
+            ))
+        }
+        let slots = WristOverlapLayout.slots(
+            for: items, visibleStart: dayStart, visibleEnd: dayEnd, mode: draft == nil ? .auto : .equalSplit
+        )
+        for i in placed.indices where embeddedIn[i] == nil {
+            placed[i].slot = slots[placed[i].id] ?? .full
+        }
+        for (child, parent) in embeddedIn {
+            var slot = placed[parent].slot
+            slot.zIndex += 1
+            slot.coverRanges = []
+            placed[child].slot = slot
+            placed[child].parentID = placed[parent].id
+        }
+        // Drawn bottom to top: stacking order, then down the page.
+        let drawn = placed.enumerated().sorted { a, b in
+            a.element.slot.zIndex != b.element.slot.zIndex
+                ? a.element.slot.zIndex < b.element.slot.zIndex
+                : a.offset < b.offset
+        }.map(\.element)
+        return WristDayPage(blocks: drawn, draftSlot: draft == nil ? nil : slots[draftID])
     }
 
     /// The hour rows of the day starting at `dayStart`: each row's start and

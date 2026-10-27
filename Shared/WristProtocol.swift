@@ -88,10 +88,20 @@ nonisolated struct WristOccurrence: Codable, Hashable, Identifiable, Sendable {
     /// A running phone-side timer: `end` is a placeholder far in the future
     /// and the watch shows no "until" time.
     var isOpenEnded: Bool
+    /// What the phone's day timeline lays overlapping blocks out by
+    /// (`WristOverlapLayout`): the event's creation time, which orders
+    /// blocks that start together; the series an exception instance belongs
+    /// to; and the event an interrupt is embedded in, whatever its kind.
+    /// Nil from a phone before the fields: the blocks then order by id and
+    /// no interrupt is drawn on a parent.
+    var createdAt: Date?
+    var seriesID: UUID?
+    var interruptParentID: UUID?
 
     init(
         id: String, eventID: UUID, title: String, type: String, colorHex: String,
-        start: Date, end: Date, isInterrupt: Bool, quickActionsEnabled: Bool, isOpenEnded: Bool = false
+        start: Date, end: Date, isInterrupt: Bool, quickActionsEnabled: Bool, isOpenEnded: Bool = false,
+        createdAt: Date? = nil, seriesID: UUID? = nil, interruptParentID: UUID? = nil
     ) {
         self.id = id
         self.eventID = eventID
@@ -103,10 +113,17 @@ nonisolated struct WristOccurrence: Codable, Hashable, Identifiable, Sendable {
         self.isInterrupt = isInterrupt
         self.quickActionsEnabled = quickActionsEnabled
         self.isOpenEnded = isOpenEnded
+        self.createdAt = createdAt
+        self.seriesID = seriesID
+        self.interruptParentID = interruptParentID
     }
+
+    /// The event a series' occurrences and its exception instances share.
+    var anchorID: UUID { seriesID ?? eventID }
 
     private enum CodingKeys: String, CodingKey {
         case id, eventID, title, type, colorHex, start, end, isInterrupt, quickActionsEnabled, isOpenEnded
+        case createdAt, seriesID, interruptParentID
     }
 
     init(from decoder: Decoder) throws {
@@ -121,6 +138,28 @@ nonisolated struct WristOccurrence: Codable, Hashable, Identifiable, Sendable {
         isInterrupt = try c.decodeIfPresent(Bool.self, forKey: .isInterrupt) ?? false
         quickActionsEnabled = try c.decodeIfPresent(Bool.self, forKey: .quickActionsEnabled) ?? false
         isOpenEnded = try c.decodeIfPresent(Bool.self, forKey: .isOpenEnded) ?? false
+        createdAt = try? c.decodeIfPresent(Date.self, forKey: .createdAt)
+        seriesID = try? c.decodeIfPresent(UUID.self, forKey: .seriesID)
+        interruptParentID = try? c.decodeIfPresent(UUID.self, forKey: .interruptParentID)
+    }
+
+    /// A false flag is left out — it decodes as false, here and on every
+    /// watch before — so a busy day spends its bytes on what it has.
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(eventID, forKey: .eventID)
+        try c.encode(title, forKey: .title)
+        try c.encode(type, forKey: .type)
+        try c.encode(colorHex, forKey: .colorHex)
+        try c.encode(start, forKey: .start)
+        try c.encode(end, forKey: .end)
+        if isInterrupt { try c.encode(isInterrupt, forKey: .isInterrupt) }
+        if quickActionsEnabled { try c.encode(quickActionsEnabled, forKey: .quickActionsEnabled) }
+        if isOpenEnded { try c.encode(isOpenEnded, forKey: .isOpenEnded) }
+        try c.encodeIfPresent(createdAt, forKey: .createdAt)
+        try c.encodeIfPresent(seriesID, forKey: .seriesID)
+        try c.encodeIfPresent(interruptParentID, forKey: .interruptParentID)
     }
 }
 
@@ -148,6 +187,10 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
     /// device locale.
     var language: String?
     var types: [WristType]
+    /// In the order of the phone's store — the order focus mode reads
+    /// them in, so "the first in progress" means the same on both — each
+    /// event's ranges by start. (A phone before that order sent them by
+    /// start.)
     var occurrences: [WristOccurrence]
     var receipts: [WristReceipt]
     /// The phone's category-time payload — the one the "Time by Category"
@@ -166,6 +209,10 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
     /// The phone applies `WristCommand.Kind.statsSettings`. False from a
     /// phone before the kind: the watch shows those settings read-only.
     var takesSettingsEdits: Bool
+    /// The phone's timeline motions and their styles, for the watch's page
+    /// to play the same ones (`WristMotion.swift`). Off from a phone before
+    /// the field.
+    var motions: WristMotionSettings
 
     init(
         version: Int = WristSnapshot.currentVersion,
@@ -177,7 +224,8 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
         stats: CategoryStatsPayload? = nil,
         statsSettings: WristStatsSettings = .standard,
         titleHints: [String: [WristTitleHint]] = [:],
-        takesSettingsEdits: Bool = false
+        takesSettingsEdits: Bool = false,
+        motions: WristMotionSettings = .off
     ) {
         self.version = version
         self.generatedAt = generatedAt
@@ -189,11 +237,12 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
         self.statsSettings = statsSettings
         self.titleHints = titleHints
         self.takesSettingsEdits = takesSettingsEdits
+        self.motions = motions
     }
 
     private enum CodingKeys: String, CodingKey {
         case version, generatedAt, language, types, occurrences, receipts, stats, statsSettings, titleHints
-        case takesSettingsEdits
+        case takesSettingsEdits, motions
     }
 
     init(from decoder: Decoder) throws {
@@ -211,6 +260,8 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
             .flatMap { $0 } ?? [:]
         takesSettingsEdits = (try? container.decodeIfPresent(Bool.self, forKey: .takesSettingsEdits))
             .flatMap { $0 } ?? false
+        motions = (try? container.decodeIfPresent(WristMotionSettings.self, forKey: .motions))
+            .flatMap { $0 } ?? .off
     }
 
     /// No hints, no key: a snapshot that drops them to fit is byte for byte
@@ -231,6 +282,9 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
         if takesSettingsEdits {
             try container.encode(takesSettingsEdits, forKey: .takesSettingsEdits)
         }
+        if motions != .off {
+            try container.encode(motions, forKey: .motions)
+        }
     }
 
     /// Equality that ignores `generatedAt` — what the phone uses to skip a
@@ -245,6 +299,7 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
             && statsSettings == other.statsSettings
             && titleHints == other.titleHints
             && takesSettingsEdits == other.takesSettingsEdits
+            && motions == other.motions
     }
 }
 

@@ -388,6 +388,13 @@
 		WATCH000000000000000B016 /* WristSnapshotBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F014 /* WristSnapshotBuilderTests.swift */; };
 		WATCH000000000000000B017 /* WristCommandApplierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F015 /* WristCommandApplierTests.swift */; };
 		WATCH000000000000000EMB1 /* DoneWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000PRD1 /* DoneWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		WOVL00000000000000000B01 /* WristOverlap.swift in Sources */ = {isa = PBXBuildFile; fileRef = WOVL00000000000000000F01 /* WristOverlap.swift */; };
+		WOVL00000000000000000B02 /* WristOverlap.swift in Sources */ = {isa = PBXBuildFile; fileRef = WOVL00000000000000000F01 /* WristOverlap.swift */; };
+		WMOT00000000000000000B01 /* WristMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = WMOT00000000000000000F01 /* WristMotion.swift */; };
+		WMOT00000000000000000B02 /* WristMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = WMOT00000000000000000F01 /* WristMotion.swift */; };
+		WMOV00000000000000000B01 /* WristMotionViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = WMOV00000000000000000F01 /* WristMotionViews.swift */; };
+		WOPT00000000000000000B01 /* WristOverlapParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WOPT00000000000000000F01 /* WristOverlapParityTests.swift */; };
+		WPET00000000000000000B01 /* WristParallelEventsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WPET00000000000000000F01 /* WristParallelEventsTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -810,6 +817,11 @@
 		WATCH000000000000000F015 /* WristCommandApplierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristCommandApplierTests.swift; sourceTree = "<group>"; };
 		WATCH000000000000000F011 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		WATCH000000000000000PRD1 /* DoneWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DoneWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		WOVL00000000000000000F01 /* WristOverlap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristOverlap.swift; sourceTree = "<group>"; };
+		WMOT00000000000000000F01 /* WristMotion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristMotion.swift; sourceTree = "<group>"; };
+		WMOV00000000000000000F01 /* WristMotionViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristMotionViews.swift; sourceTree = "<group>"; };
+		WOPT00000000000000000F01 /* WristOverlapParityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristOverlapParityTests.swift; sourceTree = "<group>"; };
+		WPET00000000000000000F01 /* WristParallelEventsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristParallelEventsTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -877,6 +889,8 @@
 				WATCH000000000000000F012 /* WristProtocolTests.swift */,
 				WATCHQA00000000000000F01 /* WristAdversarialQATests.swift */,
 				DAYQA0000000000000000F01 /* WristDayViewQATests.swift */,
+				WPET00000000000000000F01 /* WristParallelEventsTests.swift */,
+				WOPT00000000000000000F01 /* WristOverlapParityTests.swift */,
 				DRAFTMAP00000000000000F01 /* WristDraftMappingTests.swift */,
 				WSETCMD000000000000000F01 /* WristSettingsCommandTests.swift */,
 				WATCHTTL0000000000000F02 /* WristTitleSuggestionTests.swift */,
@@ -1292,6 +1306,8 @@
 				WATCHDAY0000000000000F01 /* WristDay.swift */,
 				WATCHTTL0000000000000F01 /* WristTitles.swift */,
 				WSTR00000000000000000F01 /* WristStatsRules.swift */,
+				WMOT00000000000000000F01 /* WristMotion.swift */,
+				WOVL00000000000000000F01 /* WristOverlap.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -1303,6 +1319,7 @@
 				WATCH000000000000000F008 /* WristSessionClient.swift */,
 				WATCH000000000000000F009 /* WristRootView.swift */,
 				WATCH000000000000000F010 /* WristStrings.swift */,
+				WMOV00000000000000000F01 /* WristMotionViews.swift */,
 				WATCH000000000000000F011 /* Assets.xcassets */,
 			);
 			path = DoneWatch;
@@ -1500,6 +1517,8 @@
 				WATCHDAY0000000000000B01 /* WristDay.swift in Sources */,
 				WATCHTTL0000000000000B01 /* WristTitles.swift in Sources */,
 				WSTR00000000000000000B01 /* WristStatsRules.swift in Sources */,
+				WMOT00000000000000000B01 /* WristMotion.swift in Sources */,
+				WOVL00000000000000000B01 /* WristOverlap.swift in Sources */,
 				WATCH000000000000000B003 /* WristSnapshotBuilder.swift in Sources */,
 				WATCH000000000000000B004 /* WristCommandApplier.swift in Sources */,
 				WATCH000000000000000B005 /* WristBridge.swift in Sources */,
@@ -1705,6 +1724,8 @@
 				WATCH000000000000000B014 /* WristProtocolTests.swift in Sources */,
 				WATCHQA00000000000000B01 /* WristAdversarialQATests.swift in Sources */,
 				DAYQA0000000000000000B01 /* WristDayViewQATests.swift in Sources */,
+				WPET00000000000000000B01 /* WristParallelEventsTests.swift in Sources */,
+				WOPT00000000000000000B01 /* WristOverlapParityTests.swift in Sources */,
 				DRAFTMAP00000000000000B01 /* WristDraftMappingTests.swift in Sources */,
 				WSETCMD000000000000000B01 /* WristSettingsCommandTests.swift in Sources */,
 				WATCHTTL0000000000000B03 /* WristTitleSuggestionTests.swift in Sources */,
@@ -1882,12 +1903,15 @@
 				WATCHDAY0000000000000B02 /* WristDay.swift in Sources */,
 				WATCHTTL0000000000000B02 /* WristTitles.swift in Sources */,
 				WSTR00000000000000000B02 /* WristStatsRules.swift in Sources */,
+				WMOT00000000000000000B02 /* WristMotion.swift in Sources */,
+				WOVL00000000000000000B02 /* WristOverlap.swift in Sources */,
 				WATCHDAY0000000000000B03 /* CategoryStats.swift in Sources */,
 				WATCHDAY0000000000000B04 /* SharedEventSnapshot.swift in Sources */,
 				WATCH000000000000000B009 /* DoneWatchApp.swift in Sources */,
 				WATCH000000000000000B010 /* WristSessionClient.swift in Sources */,
 				WATCH000000000000000B011 /* WristRootView.swift in Sources */,
 				WATCH000000000000000B012 /* WristStrings.swift in Sources */,
+				WMOV00000000000000000B01 /* WristMotionViews.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

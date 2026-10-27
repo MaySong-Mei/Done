@@ -108,6 +108,7 @@ struct WristRootView: View {
                 occurrences: timeline, dismissed: client.dismissed, stats: stats,
                 now: now, currentID: running?.occurrence.id, strings: strings, types: snapshot.types,
                 titleHints: snapshot.titleHints,
+                localCreates: client.localCreates, motions: snapshot.motions,
                 hourHeight: CGFloat(WristLocalSettings.Zoom(stored: zoomRaw).hourHeight),
                 bottomInset: barInset(running != nil),
                 onCreate: { type, title, start, end in client.create(type, title: title, start: start, end: end) },
@@ -159,12 +160,17 @@ struct WristTodayView: View {
     let strings: WristStrings
     var types: [WristType] = []
     var titleHints: [String: [WristTitleHint]] = [:]
+    /// The events this watch started that the phone has not reflected yet,
+    /// and the phone's motion switches (`WristMotionPlan`).
+    var localCreates: Set<UUID> = []
+    var motions: WristMotionSettings = .off
     /// Points per hour (`WristLocalSettings.Zoom`).
     var hourHeight: CGFloat = CGFloat(WristLocalSettings.Zoom.standard.hourHeight)
     /// What the running bar covers at the foot of the page: the day scrolls
     /// clear of it, and drawing scrolls at its top edge.
     var bottomInset: CGFloat = 0
-    var onCreate: (WristType, String?, Date, Date) -> Void = { _, _, _, _ in }
+    /// Returns the created event's id.
+    var onCreate: (WristType, String?, Date, Date) -> UUID? = { _, _, _, _ in nil }
     /// A sideways flick: -1 for the page to the left, +1 to the right. The
     /// hold-and-drag on the day is a drag gesture, and any drag gesture here
     /// keeps the paged TabView from turning the page itself.
@@ -178,6 +184,32 @@ struct WristTodayView: View {
 
     @State private var draft: Draft?
     @State private var picking = false
+    /// The draft a block was just created from, and the event it made: the
+    /// block starts in the draft's place and look. `sheetUp` holds it there
+    /// until the picker is gone.
+    private struct Landing: Equatable {
+        var eventID: UUID
+        var span: WristTimeSpan
+        var slot: WristOverlapSlot
+    }
+    @State private var landing: Landing?
+    /// The created draft's range, for the picker while it slides away.
+    @State private var landingRange: WristDraftMapping.Range?
+    @State private var sheetUp = false
+    /// The page as last drawn, for the next change's motions.
+    private struct MotionInput: Equatable {
+        var blocks: [WristDayBlock]
+        var occurrences: [WristOccurrence]
+        var dayStart: Date
+    }
+    @State private var drawn: MotionInput?
+    private struct Ghost: Identifiable {
+        let id = UUID()
+        let block: WristDayBlock
+        let motion: WristMotionPlan.Departure
+    }
+    @State private var ghosts: [Ghost] = []
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// True from the moment the hold is recognized until the finger lifts
     /// (or the system takes the touch): the page does not scroll meanwhile.
     @GestureState private var holding = false
@@ -211,9 +243,13 @@ struct WristTodayView: View {
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart.addingTimeInterval(86_400)
         let rows = WristDayLayout.hourRows(dayStart: dayStart, dayEnd: dayEnd, calendar: calendar)
         let height = CGFloat(dayEnd.timeIntervalSince(dayStart) / 3600) * hourHeight
-        let blocks = WristDayLayout.blocks(
-            occurrences, dismissed: dismissed, dayStart: dayStart, dayEnd: dayEnd, now: now, currentID: currentID
+        let page = WristDayLayout.page(
+            occurrences, dismissed: dismissed, dayStart: dayStart, dayEnd: dayEnd, now: now, currentID: currentID,
+            draft: draft.map { WristTimeSpan(start: $0.range.start, end: $0.range.end) }
         )
+        let blocks = page.blocks
+        let input = MotionInput(blocks: blocks, occurrences: occurrences, dayStart: dayStart)
+        let plan = motionPlan(to: input)
         let nowY = CGFloat(WristDayLayout.fraction(now, dayStart: dayStart, dayEnd: dayEnd)) * height
         let nowRow = rows.lastIndex { $0.start <= now } ?? 0
         let mapping = WristDraftMapping(
@@ -242,28 +278,41 @@ struct WristTodayView: View {
                     .overlay(alignment: .topLeading) {
                         GeometryReader { geometry in
                             let width = geometry.size.width - gutter
-                            ForEach(blocks) { block in
-                                blockView(block)
-                                    .frame(
-                                        width: max(4, width / CGFloat(block.lanes) - 2 - (block.occurrence.isInterrupt ? 6 : 0)),
-                                        height: max(3, CGFloat(block.end.timeIntervalSince(block.start) / 3600) * hourHeight - 1)
-                                    )
-                                    .offset(
-                                        x: gutter + width / CGFloat(block.lanes) * CGFloat(block.lane)
-                                            + (block.occurrence.isInterrupt ? 6 : 0),
-                                        y: CGFloat(WristDayLayout.fraction(block.start, dayStart: dayStart, dayEnd: dayEnd)) * height
-                                    )
+                            let place = { (slot: WristOverlapSlot, start: Date, end: Date, embedded: Bool) in
+                                rect(slot: slot, start: start, end: end, embedded: embedded,
+                                     width: width, dayStart: dayStart, dayEnd: dayEnd, height: height)
+                            }
+                            ZStack(alignment: .topLeading) {
+                                ForEach(blocks, id: \.motionKey) { block in
+                                    let frame = place(block.slot, block.start, block.end, block.parentID != nil)
+                                    let fromDraft = landing.flatMap { landing in
+                                        landing.eventID == block.occurrence.eventID
+                                            ? place(landing.slot, landing.span.start, landing.span.end, false) : nil
+                                    }
+                                    blockView(block, size: frame.size)
+                                        .modifier(WristArrivalEffect(
+                                            arrival: plan.arrivals[block.motionKey], frame: frame,
+                                            draftFrame: fromDraft, holding: sheetUp
+                                        ))
+                                }
+                            }
+                            .animation(
+                                plan.tween.map { .timingCurve(0.25, 0.8, 0.35, 1, duration: $0.duration) },
+                                value: blocks
+                            )
+                            // Over the blocks that reflow into the space.
+                            ForEach(ghosts) { ghost in
+                                let frame = place(ghost.block.slot, ghost.block.start, ghost.block.end, ghost.block.parentID != nil)
+                                WristDepartureView(
+                                    block: ghost.block, motion: ghost.motion, frame: frame,
+                                    content: AnyView(blockView(ghost.block, size: frame.size))
+                                )
                             }
                             if let draft {
+                                let frame = place(page.draftSlot ?? .full, draft.range.start, draft.range.end, false)
                                 draftView(draft.range)
-                                    .frame(
-                                        width: max(4, width - 2),
-                                        height: max(3, CGFloat(draft.range.end.timeIntervalSince(draft.range.start) / 3600) * hourHeight - 1)
-                                    )
-                                    .offset(
-                                        x: gutter,
-                                        y: CGFloat(WristDayLayout.fraction(draft.range.start, dayStart: dayStart, dayEnd: dayEnd)) * height
-                                    )
+                                    .frame(width: frame.width, height: frame.height)
+                                    .offset(x: frame.minX, y: frame.minY)
                             }
                             // Over the draft too: a block drawn across the
                             // present still shows where the present is.
@@ -295,7 +344,7 @@ struct WristTodayView: View {
                 .scrollDisabled(holding || draft != nil)
                 .mask(WristEdgeFade(top: 0, bottom: 10))
                 .onAppear {
-                    DispatchQueue.main.async { proxy.scrollTo(nowRow, anchor: .center) }
+                    DispatchQueue.main.async { proxy.scrollTo(Self.debugScrollRow ?? nowRow, anchor: .center) }
                 }
                 // A new zoom puts the same hour row elsewhere: back to now.
                 .onChange(of: hourHeight) { _, _ in
@@ -311,13 +360,39 @@ struct WristTodayView: View {
                 if draft != nil { picking = true }
             }
         }
-        .sheet(isPresented: $picking, onDismiss: { draft = nil }) {
-            if let range = draft?.range {
+        .onChange(of: picking) { _, isPicking in
+            if isPicking { sheetUp = true }
+        }
+        .onAppear { if drawn == nil { drawn = input } }
+        .onChange(of: input) { _, new in
+            for departure in motionPlan(to: new).departures {
+                let ghost = Ghost(block: departure.block, motion: departure.motion)
+                ghosts.append(ghost)
+                DispatchQueue.main.asyncAfter(deadline: .now() + WristDepartureView.duration(of: ghost.motion) + 0.05) {
+                    ghosts.removeAll { $0.id == ghost.id }
+                }
+            }
+            drawn = new
+        }
+        .sheet(isPresented: $picking, onDismiss: {
+            draft = nil
+            sheetUp = false
+        }) {
+            if let range = (draft?.range ?? landingRange) {
                 WristDraftTypePicker(
                     types: types, titleHints: titleHints, occurrences: occurrences, range: range,
                     calendar: calendar, strings: strings
                 ) { type, title in
-                    onCreate(type, title, range.start, range.end)
+                    // The draft goes in the same update its block arrives,
+                    // so the two never share the page.
+                    if let eventID = onCreate(type, title, range.start, range.end) {
+                        landing = Landing(
+                            eventID: eventID, span: WristTimeSpan(start: range.start, end: range.end),
+                            slot: page.draftSlot ?? .full
+                        )
+                        landingRange = range
+                    }
+                    draft = nil
                     picking = false
                 }
             }
@@ -428,6 +503,16 @@ struct WristTodayView: View {
             .allowsHitTesting(false)
     }
 
+    /// `-wristScrollHour <hour>` opens the page on that hour instead of
+    /// now, for a screenshot of a given stretch. Debug builds only.
+    private static var debugScrollRow: Int? {
+#if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        if let i = arguments.firstIndex(of: "-wristScrollHour"), i + 1 < arguments.count { return Int(arguments[i + 1]) }
+#endif
+        return nil
+    }
+
 #if DEBUG
     /// `-wristDraft <start hour> <end hour>` (fractions allowed) opens the
     /// page with a draft drawn and the picker up, for a check that cannot
@@ -443,10 +528,43 @@ struct WristTodayView: View {
     }
 #endif
 
-    private func blockView(_ block: WristDayBlock) -> some View {
+    /// What changes from the page as last drawn to `input` play.
+    private func motionPlan(to input: MotionInput) -> WristMotionPlan {
+        guard let drawn else { return WristMotionPlan() }
+        return WristMotionPlan.make(
+            old: drawn.blocks, new: input.blocks, oldAll: drawn.occurrences, newAll: input.occurrences,
+            localCreates: localCreates, settings: motions, sameDay: drawn.dayStart == input.dayStart,
+            drawing: draft != nil, reduceMotion: reduceMotion
+        )
+    }
+
+    /// A slot and range in the page's points. A column beside another
+    /// keeps a 2pt gutter on its right; an interrupt embedded in a parent
+    /// sits on the parent's column, inset from its left edge so the
+    /// parent shows beside it — the phone's child overlay.
+    private func rect(
+        slot: WristOverlapSlot, start: Date, end: Date, embedded: Bool,
+        width: CGFloat, dayStart: Date, dayEnd: Date, height: CGFloat
+    ) -> CGRect {
+        let inset: CGFloat = embedded ? Self.interruptInset : 0
+        let x = gutter + width * CGFloat(slot.x) + inset
+        let w = max(4, width * CGFloat(slot.width) - 2 - inset)
+        let y = CGFloat(WristDayLayout.fraction(start, dayStart: dayStart, dayEnd: dayEnd)) * height
+        let h = max(3, CGFloat(end.timeIntervalSince(start) / 3600) * hourHeight - 1)
+        return CGRect(x: x, y: y, width: w, height: h)
+    }
+
+    private static let interruptInset: CGFloat = 6
+
+    private func blockView(_ block: WristDayBlock, size: CGSize) -> some View {
         let hex = block.occurrence.colorHex
-        let height = CGFloat(block.end.timeIntervalSince(block.start) / 3600) * hourHeight
-        return RoundedRectangle(cornerRadius: 4, style: .continuous)
+        let height = size.height
+        // A stack-peek host's title stays in the half the blocks over it
+        // leave clear, where they reach its top — the phone's text region.
+        let titleBand = block.start.addingTimeInterval(Double(min(height, 30) / hourHeight) * 3600)
+        let titleCovered = block.slot.coverRanges.contains { $0.start < titleBand && $0.end > block.start }
+        let embedded = block.parentID != nil
+        return RoundedRectangle(cornerRadius: embedded ? 3 : 4, style: .continuous)
             .fill(WristColor.fill(hex, strength: block.isCurrent ? 0.6 : 0.4))
             .overlay(alignment: .topLeading) {
                 if height >= 13 {
@@ -465,14 +583,24 @@ struct WristTodayView: View {
                     }
                     .padding(.horizontal, 3)
                     .padding(.top, 1)
+                    .frame(maxWidth: titleCovered ? max(0, size.width * 0.5 - 2) : .infinity, alignment: .leading)
                 }
             }
             .overlay {
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                RoundedRectangle(cornerRadius: embedded ? 3 : 4, style: .continuous)
                     .strokeBorder(
                         block.isCurrent ? .white.opacity(0.9) : WristColor.border(hex),
                         lineWidth: block.isCurrent || block.occurrence.isInterrupt ? 1 : 0.75
                     )
+            }
+            // The moat the phone cuts round an embedded interrupt: a ring of
+            // the page's black between it and its parent.
+            .background {
+                if embedded {
+                    RoundedRectangle(cornerRadius: 4.5, style: .continuous)
+                        .fill(.black)
+                        .padding(-1.5)
+                }
             }
     }
 }

@@ -402,13 +402,15 @@ final class WristStateReducerTests: XCTestCase {
         let lone = occurrence("E", start: minutes(0), end: minutes(30))
         let blocks = layout([lone, d, c, b, a])
         let byTitle = Dictionary(uniqueKeysWithValues: blocks.map { ($0.occurrence.title, $0) })
-        XCTAssertEqual(byTitle["A"]?.lane, 0)
-        XCTAssertEqual(byTitle["B"]?.lane, 1)
-        XCTAssertEqual(byTitle["C"]?.lane, 2)
-        XCTAssertEqual(byTitle["D"]?.lane, 2, "C's column is free again by D's start")
-        XCTAssertEqual(Set(["A", "B", "C", "D"].compactMap { byTitle[$0]?.lanes }), [3], "one cluster, three columns")
-        XCTAssertEqual(byTitle["E"]?.lane, 0)
-        XCTAssertEqual(byTitle["E"]?.lanes, 1, "a block that touches no other takes the full width")
+        // A and B are an hour each: no block is dominant, so equal columns.
+        XCTAssertEqual(byTitle["A"]?.slot.x ?? -1, 0, accuracy: 1e-9)
+        XCTAssertEqual(byTitle["B"]?.slot.x ?? -1, 1.0 / 3, accuracy: 1e-9)
+        XCTAssertEqual(byTitle["C"]?.slot.x ?? -1, 2.0 / 3, accuracy: 1e-9)
+        XCTAssertEqual(byTitle["D"]?.slot.x ?? -1, 2.0 / 3, accuracy: 1e-9, "C's column is free again by D's start")
+        for title in ["A", "B", "C", "D"] {
+            XCTAssertEqual(byTitle[title]?.slot.width ?? -1, 1.0 / 3, accuracy: 1e-9, "one cluster, three columns")
+        }
+        XCTAssertEqual(byTitle["E"]?.slot, .full, "a block that touches no other takes the full width")
     }
 
     func testDayLayoutClipsToTheDayAndDrawsRunningAndFinishedSessionsToTheRightInstant() {
@@ -433,13 +435,19 @@ final class WristStateReducerTests: XCTestCase {
     func testDayLayoutDrawsInterruptsLastAndFullWidthAndMarksTheCurrentBlock() {
         let parent = occurrence("Deep work", start: minutes(-60), end: minutes(60))
         let other = occurrence("Call", start: minutes(-30), end: minutes(30))
-        let interrupt = occurrence("Phone rang", start: minutes(-5), end: minutes(10), isInterrupt: true)
+        var interrupt = occurrence("Phone rang", start: minutes(-5), end: minutes(10), isInterrupt: true)
+        interrupt.interruptParentID = parent.eventID
         let blocks = layout([interrupt, parent, other], current: interrupt.id)
         XCTAssertEqual(blocks.last?.occurrence.title, "Phone rang", "drawn on top")
-        XCTAssertEqual(blocks.last?.lanes, 1)
-        XCTAssertEqual(blocks.last?.lane, 0)
+        XCTAssertEqual(blocks.last?.parentID, parent.id, "drawn on its parent")
+        XCTAssertEqual(blocks.last?.slot.x, 0)
+        XCTAssertEqual(blocks.last?.slot.width, 1)
         XCTAssertEqual(blocks.filter(\.isCurrent).map(\.occurrence.title), ["Phone rang"])
-        XCTAssertEqual(Set(blocks.dropLast().map(\.lanes)), [2], "the interrupt takes no column of its own")
+        // Deep work (2h) is twice the Call (1h): the phone's stack-peek host,
+        // full width, with the Call in the right half over it.
+        XCTAssertEqual(blocks.first { $0.occurrence.title == "Deep work" }?.slot.width, 1)
+        XCTAssertEqual(blocks.first { $0.occurrence.title == "Call" }?.slot.x, 0.5)
+        XCTAssertEqual(blocks.count, 3, "the interrupt takes no column of its own")
     }
 
     func testDayFractionIsClampedToTheDay() {
