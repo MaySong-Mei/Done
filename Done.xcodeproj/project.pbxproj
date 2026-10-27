@@ -244,6 +244,7 @@
 		TELE10012FE8000000000003 /* TelemetryModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TELE00012FE8000000000003 /* TelemetryModelTests.swift */; };
 		TELE10012FE8000000000004 /* TelemetryUploaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TELE00012FE8000000000004 /* TelemetryUploaderTests.swift */; };
 		TELE10012FE8000000000007 /* TelemetryObservatoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TELE00012FE8000000000007 /* TelemetryObservatoryTests.swift */; };
+		QA0273OBS000000000000B01 /* TelemetryObservatoryQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QA0273OBS000000000000F01 /* TelemetryObservatoryQATests.swift */; };
 		TELE10012FE8000000000005 /* TelemetryQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TELE00012FE8000000000005 /* TelemetryQATests.swift */; };
 		TELE10012FE8000000000006 /* TelemetryWireConformanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TELE00012FE8000000000006 /* TelemetryWireConformanceTests.swift */; };
 		FA57000000000000000B0002 /* SpikeRunStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0002 /* SpikeRunStore.swift */; };
@@ -670,6 +671,7 @@
 		TELE00012FE8000000000003 /* TelemetryModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryModelTests.swift; sourceTree = "<group>"; };
 		TELE00012FE8000000000004 /* TelemetryUploaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryUploaderTests.swift; sourceTree = "<group>"; };
 		TELE00012FE8000000000007 /* TelemetryObservatoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryObservatoryTests.swift; sourceTree = "<group>"; };
+		QA0273OBS000000000000F01 /* TelemetryObservatoryQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryObservatoryQATests.swift; sourceTree = "<group>"; };
 		TELE00012FE8000000000005 /* TelemetryQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryQATests.swift; sourceTree = "<group>"; };
 		TELE00012FE8000000000006 /* TelemetryWireConformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryWireConformanceTests.swift; sourceTree = "<group>"; };
 		FA57000000000000000A0002 /* SpikeRunStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeRunStore.swift; sourceTree = "<group>"; };
@@ -933,6 +935,7 @@
 				TELE00012FE8000000000003 /* TelemetryModelTests.swift */,
 				TELE00012FE8000000000004 /* TelemetryUploaderTests.swift */,
 				TELE00012FE8000000000007 /* TelemetryObservatoryTests.swift */,
+				QA0273OBS000000000000F01 /* TelemetryObservatoryQATests.swift */,
 				TELE00012FE8000000000005 /* TelemetryQATests.swift */,
 				TELE00012FE8000000000006 /* TelemetryWireConformanceTests.swift */,
 				AGCT00012FFA000000000001 /* AgentToolContainmentTests.swift */,
@@ -1775,6 +1778,7 @@
 				TELE10012FE8000000000003 /* TelemetryModelTests.swift in Sources */,
 				TELE10012FE8000000000004 /* TelemetryUploaderTests.swift in Sources */,
 				TELE10012FE8000000000007 /* TelemetryObservatoryTests.swift in Sources */,
+				QA0273OBS000000000000B01 /* TelemetryObservatoryQATests.swift in Sources */,
 				TELE10012FE8000000000005 /* TelemetryQATests.swift in Sources */,
 				TELE10012FE8000000000006 /* TelemetryWireConformanceTests.swift in Sources */,
 				AGCT10012FFA000000000001 /* AgentToolContainmentTests.swift in Sources */,
