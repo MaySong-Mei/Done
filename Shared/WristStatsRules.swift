@@ -207,3 +207,39 @@ nonisolated enum WristForeground {
         }?.category
     }
 }
+
+/// The watch's own settings, kept on the watch (its `@AppStorage`) and
+/// never sent to the phone: how tall an hour is on the today page, and the
+/// period the stats page opens on when the user picked one on the watch.
+nonisolated enum WristLocalSettings {
+    static let zoomKey = "wrist.zoom"
+    static let statsPeriodKey = "wrist.statsPeriod"
+
+    /// The today page's scale. Medium is the page as it always was.
+    enum Zoom: String, CaseIterable, Sendable {
+        case small, medium, large
+
+        static let standard = Zoom.medium
+
+        /// Points per hour of the day.
+        var hourHeight: Double {
+            switch self {
+            case .small: return 44
+            case .medium: return 64
+            case .large: return 88
+            }
+        }
+
+        /// A stored value; anything unknown (or nothing) is the standard.
+        init(stored: String?) {
+            self = stored.flatMap(Zoom.init(rawValue:)) ?? .standard
+        }
+    }
+
+    /// The period the stats page opens on: the one picked on the watch,
+    /// else the phone's (Settings → Apple Watch). Empty or unknown stored
+    /// text means none was picked on the watch.
+    static func openingPeriod(watch stored: String?, phone: WristStatsPeriod) -> WristStatsPeriod {
+        stored.flatMap(WristStatsPeriod.init(rawValue:)) ?? phone
+    }
+}

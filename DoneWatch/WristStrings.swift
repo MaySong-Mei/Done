@@ -2,7 +2,7 @@
 //  WristStrings.swift
 //  DoneWatch
 //
-//  The handful of strings the watch shows, in the language the phone app is
+//  The strings the watch shows, in the language the phone app is
 //  set to (`WristSnapshot.language`), falling back to the watch's locale.
 //
 
@@ -22,28 +22,11 @@ struct WristStrings {
     var noTypes: String { isChinese ? "iPhone 上还没有类型" : "No types on iPhone yet" }
     var finish: String { isChinese ? "结束" : "Finish" }
     var extend: String { "+15" }
-    var editOnPhone: String { isChinese ? "重复事件请在 iPhone 上调整" : "Adjust repeating events on iPhone" }
     var sending: String { isChinese ? "发送中…" : "Sending…" }
     /// The names step's last row: the block named after its type alone.
     func justType(_ type: String) -> String { isChinese ? "仅「\(type)」" : "Just \(type)" }
 
-    /// The record page's clock row: "距上次 2小时16分" / "2h16m since last",
-    /// the time in white.
-    func sinceLastHeader(hours: Double) -> Text {
-        let span = Text(compactDuration(hours: hours)).foregroundStyle(.white)
-        return isChinese
-            ? Text("距上次 ").foregroundStyle(.secondary) + span
-            : span + Text(" since last").foregroundStyle(.secondary)
-    }
-
-    func endsAt(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = locale
-        formatter.timeStyle = .short
-        formatter.dateStyle = .none
-        let time = formatter.string(from: date)
-        return isChinese ? "到 \(time)" : "until \(time)"
-    }
+    var editOnPhoneShort: String { isChinese ? "在 iPhone 上调整" : "Adjust on iPhone" }
 
     /// "10:15–11:00": a drawn block's range, on the block and over the
     /// type picker.
@@ -78,6 +61,49 @@ struct WristStrings {
             return h > 0 ? (m > 0 ? "\(h)小时\(m)分" : "\(h)小时") : "\(m)分钟"
         }
         return h > 0 ? (m > 0 ? "\(h)h\(m)m" : "\(h)h") : "\(m)m"
+    }
+
+    // MARK: Settings page
+
+    var settingsTitle: String { isChinese ? "设置" : "Settings" }
+    var settingsOnWatch: String { isChinese ? "手表" : "On This Watch" }
+    var settingsFromPhone: String { isChinese ? "统计(与 iPhone 同步)" : "Stats (Shared with iPhone)" }
+    var zoom: String { isChinese ? "时间轴缩放" : "Timeline Zoom" }
+    func zoomLabel(_ zoom: WristLocalSettings.Zoom) -> String {
+        switch zoom {
+        case .small: return isChinese ? "小" : "Small"
+        case .medium: return isChinese ? "中" : "Medium"
+        case .large: return isChinese ? "大" : "Large"
+        }
+    }
+    var statsOpensOn: String { isChinese ? "统计默认周期" : "Stats Opens On" }
+    /// The period choice that defers to the phone, naming what the phone
+    /// chose: "跟随 iPhone(今天)" / "As iPhone (Today)".
+    func followPhone(_ period: WristStatsPeriod) -> String {
+        isChinese ? "跟随 iPhone(\(periodLabel(period)))" : "As iPhone (\(periodLabel(period)))"
+    }
+    var overlap: String { isChinese ? "重叠事件" : "Overlapping Events" }
+    func overlapLabel(_ rule: WristOverlapRule) -> String {
+        switch rule {
+        case .split: return isChinese ? "平分" : "Split Equally"
+        case .full: return isChinese ? "各自全算" : "Count Each in Full"
+        case .latestStart: return isChinese ? "后开始的优先" : "Latest Started Wins"
+        }
+    }
+    var leaveOutBackground: String { isChinese ? "不统计背景类型" : "Leave Out Background Types" }
+    /// Which types count is chosen on the phone only.
+    func typesOnPhone(leftOut: Int) -> String {
+        if leftOut > 0 {
+            return isChinese
+                ? "已有 \(leftOut) 个类型不统计。统计哪些类型在 iPhone 的 设置 → Apple Watch 里选。"
+                : "\(leftOut) \(leftOut == 1 ? "type" : "types") left out. Pick which types count in Settings → Apple Watch on iPhone."
+        }
+        return isChinese
+            ? "统计哪些类型在 iPhone 的 设置 → Apple Watch 里选。"
+            : "Pick which types count in Settings → Apple Watch on iPhone."
+    }
+    var updatePhoneForSettings: String {
+        isChinese ? "更新 iPhone 上的 Done 后可在这里修改" : "Update Done on iPhone to change these here"
     }
 
     func hourLabel(_ hour: Int) -> String { String(format: "%02d", hour) }

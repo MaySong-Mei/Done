@@ -2,8 +2,8 @@
 //  DoneWatchApp.swift
 //  DoneWatch
 //
-//  Focus mode on the wrist: start a type, see the running session, finish or
-//  extend it. The phone owns every event; this app only renders the last
+//  The day on the wrist: draw a block to log or start one, see the running
+//  session, finish or extend it. The phone owns every event; this app only renders the last
 //  `WristSnapshot` it was pushed and sends `WristCommand`s back — see
 //  Shared/WristProtocol.swift.
 //

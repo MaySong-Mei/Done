@@ -5,7 +5,9 @@
 //  Settings → Apple Watch: what the watch's stats page counts, how it
 //  credits overlapping events, and which period it opens on. Stored on the
 //  phone (`AppSettingsKeys.watchStatsSettings`) and sent in every
-//  `WristSnapshot`; the watch has no settings of its own.
+//  `WristSnapshot`. The watch's settings page edits the overlap rule and
+//  the background switch here too (`WristCommandApplier`); the period it
+//  opens on can also be picked on the watch, which then wins there.
 //
 
 import SwiftUI

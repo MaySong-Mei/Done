@@ -11,14 +11,22 @@
 //  timers. Unlike focus mode, the range edited is the one the command names
 //  (`rangeStart`), so a multi-range event's other ranges are left alone.
 //
+//  A settings edit writes the fields it carries into Settings → Apple Watch
+//  (`AppSettingsKeys.watchStatsSettings`), the storage the phone's own page
+//  edits; the bridge pushes the changed snapshot. An edit issued before the
+//  last one applied is refused: when two edits cross on different channels
+//  the later choice stands.
+//
 
 import Foundation
 
 enum WristCommandApplier {
     static let minimumDuration: TimeInterval = 15 * 60
+    /// When (watch clock) the last settings edit applied was issued.
+    static let settingsEditedAtKey = "wrist.settingsEditedAt"
 
     @discardableResult
-    static func apply(_ command: WristCommand, to store: EventStore) -> WristReceipt {
+    static func apply(_ command: WristCommand, to store: EventStore, defaults: UserDefaults = .standard) -> WristReceipt {
         switch command.kind {
         case .start(let eventID, let typeTitle, let start, let end, let title):
             if store.findCalendarEvent(id: eventID) != nil {
@@ -45,6 +53,20 @@ enum WristCommandApplier {
             return setEnd(of: eventID, rangeStart: rangeStart, command: command, store: store) { range in
                 range.end.addingTimeInterval(by)
             }
+
+        case .statsSettings(let overlap, let excludesBackground):
+            let issued = command.issuedAt.timeIntervalSince1970
+            if let last = defaults.object(forKey: settingsEditedAtKey) as? Double, issued < last {
+                return rejected(command, "superseded")
+            }
+            var settings = WristStatsSettings.load(from: defaults)
+            if let overlap { settings.overlap = overlap }
+            if let excludesBackground { settings.excludesBackground = excludesBackground }
+            defaults.set(issued, forKey: settingsEditedAtKey)
+            if settings != WristStatsSettings.load(from: defaults) {
+                defaults.set(settings.encoded, forKey: AppSettingsKeys.watchStatsSettings)
+            }
+            return WristReceipt(id: command.id, outcome: .applied, reason: nil)
         }
     }
 

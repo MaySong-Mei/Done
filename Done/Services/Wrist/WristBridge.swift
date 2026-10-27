@@ -260,7 +260,7 @@ final class WristBridge: NSObject {
         if ledger.contains(command.id) {
             receipt = WristReceipt(id: command.id, outcome: .duplicate, reason: nil)
         } else {
-            receipt = WristCommandApplier.apply(command, to: store)
+            receipt = WristCommandApplier.apply(command, to: store, defaults: defaults)
             // A finish or extend that outran its start is answered "not
             // found"; the watch gets the receipt, but the id is deliberately
             // not remembered: the durable copy that arrives after the start

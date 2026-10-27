@@ -39,7 +39,8 @@ enum WristSnapshotBuilder {
             receipts: receipts,
             stats: stats.flatMap { trimmed($0, now: now, reach: .thirtyDays) },
             statsSettings: statsSettings,
-            titleHints: titleHints(events: events, types: types, now: now, calendar: calendar)
+            titleHints: titleHints(events: events, types: types, now: now, calendar: calendar),
+            takesSettingsEdits: true
         )
     }
 
