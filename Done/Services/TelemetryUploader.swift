@@ -121,13 +121,24 @@ enum TelemetrySwitchEdge {
 
 // MARK: - Distribution (design §16 rule 2, review P1-2)
 
-/// Where this install came from. A build carrying `embedded.mobileprovision`
-/// — Xcode, devicectl, ad hoc — is `.development` and StoreKit is never
-/// asked (a development install talks to the sandbox too, and may prompt
-/// for a sandbox sign-in). Otherwise StoreKit 2's VERIFIED app transaction
-/// decides: `.sandbox` is TestFlight, `.production` the App Store, `.xcode`
-/// development; an unverified one or an error is `.unknown`, which never
-/// turns the default on. Cached for the process once asked.
+/// Where this install came from, decided by the first of these that
+/// speaks, and said on the trail (`environment.source=`):
+/// 1. `embedded.mobileprovision` — Xcode, devicectl, ad hoc — is
+///    `.development` (a development install talks to the sandbox too).
+/// 2. The simulator is `.development`. Measured: its receipt is named
+///    `receipt`, so without this rule a simulator run would read as the
+///    App Store.
+/// 3. The App Store receipt's NAME, read synchronously: `sandboxReceipt` is
+///    TestFlight, `receipt` the App Store. Build 20 on a real TestFlight
+///    install: `AppTransaction.shared` threw (StoreKitError), the install
+///    read as unknown, and the backfill never ran. App Review runs a
+///    submitted build in the sandbox too, so its machine reads as
+///    TestFlight here — the known risk recorded in design §14.
+/// 4. Only then StoreKit 2's VERIFIED app transaction: `.sandbox`
+///    TestFlight, `.production` App Store, `.xcode` development; an
+///    unverified one or an error is `.unknown` — with StoreKit's own reason
+///    — which never turns the default on.
+/// Cached for the process once asked.
 @MainActor
 enum TelemetryDistributionDetector {
     /// StoreKit's answer, reduced to what the rule reads (a test cannot
@@ -138,48 +149,127 @@ enum TelemetryDistributionDetector {
         case failed(reason: String)
     }
 
+    /// Which evidence decided.
+    enum Source: String {
+        case provisioning, simulator, receipt, storekit
+    }
+
+    struct Answer: Equatable {
+        let distribution: TelemetryDistribution
+        let source: Source
+    }
+
     private static var cached: TelemetryDistribution?
 
     static func live() async -> TelemetryDistribution {
         if let cached { return cached }
-        let answer = await classify(
+        let answer = await resolve(
             hasProvisioningProfile: Bundle.main.path(forResource: "embedded", ofType: "mobileprovision") != nil,
-            storeKit: storeKitAnswer
+            isSimulator: isSimulator,
+            receiptName: receiptName(),
+            storeKit: { await storeKitAnswer() }
         )
         cached = answer
         return answer
     }
 
-    static func classify(hasProvisioningProfile: Bool,
-                         storeKit: @MainActor () async -> StoreKitAnswer) async -> TelemetryDistribution {
-        if hasProvisioningProfile { return .development }
+    /// `classify`, then one `Telemetry environment.source=` line on the trail
+    /// — once per launch, since `live()` caches — so a device shows which
+    /// evidence decided.
+    static func resolve(hasProvisioningProfile: Bool, isSimulator: Bool, receiptName: String?,
+                        storeKit: @MainActor () async -> StoreKitAnswer) async -> TelemetryDistribution {
+        let answer = await classify(hasProvisioningProfile: hasProvisioningProfile, isSimulator: isSimulator,
+                                    receiptName: receiptName, storeKit: storeKit)
+        DiagnosticTrail.record("Telemetry", "environment.source=\(answer.source.rawValue)")
+        return answer.distribution
+    }
+
+    static func classify(hasProvisioningProfile: Bool, isSimulator: Bool, receiptName: String?,
+                         storeKit: @MainActor () async -> StoreKitAnswer) async -> Answer {
+        if hasProvisioningProfile { return Answer(distribution: .development, source: .provisioning) }
+        if isSimulator { return Answer(distribution: .development, source: .simulator) }
+        switch receiptName {
+        case "sandboxReceipt": return Answer(distribution: .testFlight, source: .receipt)
+        case "receipt": return Answer(distribution: .appStore, source: .receipt)
+        default: break
+        }
+        let distribution: TelemetryDistribution
         switch await storeKit() {
         case .verified(let environment):
             switch environment {
-            case AppStore.Environment.sandbox.rawValue: return .testFlight
-            case AppStore.Environment.production.rawValue: return .appStore
-            case AppStore.Environment.xcode.rawValue: return .development
-            default: return .unknown(reason: "environment_\(environment)")
+            case AppStore.Environment.sandbox.rawValue: distribution = .testFlight
+            case AppStore.Environment.production.rawValue: distribution = .appStore
+            case AppStore.Environment.xcode.rawValue: distribution = .development
+            default: distribution = .unknown(reason: "environment_\(environment)")
             }
         case .unverified:
-            return .unknown(reason: "unverified")
+            distribution = .unknown(reason: "unverified")
         case .failed(let reason):
-            return .unknown(reason: reason)
+            distribution = .unknown(reason: reason)
         }
+        return Answer(distribution: distribution, source: .storekit)
     }
 
-    static func storeKitAnswer() async -> StoreKitAnswer {
+    private static var isSimulator: Bool {
+        #if targetEnvironment(simulator)
+        return true
+        #else
+        return false
+        #endif
+    }
+
+    /// The receipt file's name — `Bundle.appStoreReceiptURL`, deprecated
+    /// (iOS 18) but still answering, read through a local protocol so this
+    /// one call site does not warn.
+    static func receiptName(_ bundle: any AppStoreReceiptLocating = Bundle.main) -> String? {
+        bundle.appStoreReceiptURL?.lastPathComponent
+    }
+
+    /// `appTransaction` is StoreKit's call; a test hands in a throwing one.
+    static func storeKitAnswer(
+        _ appTransaction: @MainActor () async throws -> VerificationResult<AppTransaction> = { try await AppTransaction.shared }
+    ) async -> StoreKitAnswer {
         do {
-            switch try await AppTransaction.shared {
+            switch try await appTransaction() {
             case .verified(let transaction): return .verified(environment: transaction.environment.rawValue)
             case .unverified: return .unverified
             }
         } catch {
-            let ns = error as NSError
-            return .failed(reason: "\(ns.domain)#\(ns.code)")
+            return .failed(reason: failureReason(error))
         }
     }
+
+    /// StoreKit's own case — and, for the two that wrap another error, that
+    /// error's `domain#code` — for `environment=unknown(<this>)`. Build 20's
+    /// trail said only "StoreKit.StoreKitError#1".
+    nonisolated static func failureReason(_ error: any Error) -> String {
+        guard let storeKit = error as? StoreKitError else { return domainAndCode(error) }
+        switch storeKit {
+        case .networkError(let underlying): return "StoreKitError.networkError:\(domainAndCode(underlying))"
+        case .systemError(let underlying): return "StoreKitError.systemError:\(domainAndCode(underlying))"
+        case .unknown: return "StoreKitError.unknown"
+        case .userCancelled: return "StoreKitError.userCancelled"
+        case .notAvailableInStorefront: return "StoreKitError.notAvailableInStorefront"
+        case .notEntitled: return "StoreKitError.notEntitled"
+        case .unsupported: return "StoreKitError.unsupported"
+        @unknown default: return "StoreKitError.\(domainAndCode(storeKit))"
+        }
+    }
+
+    nonisolated private static func domainAndCode(_ error: any Error) -> String {
+        let ns = error as NSError
+        return "\(ns.domain)#\(ns.code)"
+    }
 }
+
+/// Where `Bundle.appStoreReceiptURL` is read from: `Bundle` in the app,
+/// a stub in a test. The requirement itself is not deprecated, so the one
+/// read of the deprecated property does not warn.
+protocol AppStoreReceiptLocating {
+    var appStoreReceiptURL: URL? { get }
+}
+
+extension Bundle: AppStoreReceiptLocating {}
 
 // MARK: - Observatory cloud read (design §16 rule 3)
 

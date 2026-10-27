@@ -63,6 +63,7 @@ private final class ObservatoryRig {
     /// `isTestFlight` false is a definite App Store answer; `distribution`
     /// overrides it.
     func uploader(isTestFlight: Bool = false, distribution: TelemetryDistribution? = nil,
+                  detect: (@MainActor () async -> TelemetryDistribution)? = nil,
                   cloudReader: TelemetryCloudReading? = nil,
                   signedIn: Bool = true, attached: Bool = true) -> TelemetryUploader {
         var deps = TelemetryUploader.Dependencies()
@@ -74,6 +75,7 @@ private final class ObservatoryRig {
         let answer = distribution ?? (isTestFlight ? .testFlight : .appStore)
         deps.distribution = { [unowned self] in
             self.detectorCalls += 1
+            if let detect { return await detect() }
             return answer
         }
         let uploader = TelemetryUploader(dependencies: deps)
@@ -422,22 +424,26 @@ final class TelemetryTestFlightDefaultTests: XCTestCase {
     func testTheDistributionAnswer() async {
         var storeKitCalls = 0
         let sandbox = TelemetryDistributionDetector.StoreKitAnswer.verified(environment: AppStore.Environment.sandbox.rawValue)
-        let provisioned = await TelemetryDistributionDetector.classify(hasProvisioningProfile: true) {
+        let provisioned = await TelemetryDistributionDetector.classify(hasProvisioningProfile: true, isSimulator: false,
+                                                                       receiptName: nil) {
             storeKitCalls += 1
             return sandbox
         }
-        XCTAssertEqual(provisioned, .development)
+        XCTAssertEqual(provisioned, .init(distribution: .development, source: .provisioning))
         XCTAssertEqual(storeKitCalls, 0, "a provisioned build never asks StoreKit")
 
-        let testFlight = await TelemetryDistributionDetector.classify(hasProvisioningProfile: false) {
+        let testFlight = await TelemetryDistributionDetector.classify(hasProvisioningProfile: false, isSimulator: false,
+                                                                      receiptName: nil) {
             storeKitCalls += 1
             return sandbox
         }
-        XCTAssertEqual(testFlight, .testFlight, "positive control: the same sandbox answer without a profile")
+        XCTAssertEqual(testFlight, .init(distribution: .testFlight, source: .storekit),
+                       "positive control: the same sandbox answer without a profile")
         XCTAssertEqual(storeKitCalls, 1)
 
         func answer(_ storeKit: TelemetryDistributionDetector.StoreKitAnswer) async -> TelemetryDistribution {
-            await TelemetryDistributionDetector.classify(hasProvisioningProfile: false) { storeKit }
+            await TelemetryDistributionDetector.classify(hasProvisioningProfile: false, isSimulator: false,
+                                                         receiptName: nil) { storeKit }.distribution
         }
         let production = await answer(.verified(environment: AppStore.Environment.production.rawValue))
         let xcode = await answer(.verified(environment: AppStore.Environment.xcode.rawValue))
@@ -468,7 +474,8 @@ final class TelemetryTestFlightDefaultTests: XCTestCase {
             deps.launchDelay = 0
             deps.makeKeepAlive = { nil }
             deps.distribution = {
-                await TelemetryDistributionDetector.classify(hasProvisioningProfile: provisioned) { storeKit }
+                await TelemetryDistributionDetector.classify(hasProvisioningProfile: provisioned, isSimulator: false,
+                                                             receiptName: nil) { storeKit }.distribution
             }
             let uploader = TelemetryUploader(dependencies: deps)
             let defaulted = await uploader.applyTestFlightDefaultIfNeeded()
@@ -477,6 +484,142 @@ final class TelemetryTestFlightDefaultTests: XCTestCase {
             XCTAssertEqual(defaults.bool(forKey: AppSettingsKeys.telemetryUploadsEnabled), expected == .testFlight, "\(expected)")
             await uploader.drain()
         }
+    }
+
+    /// Build 20 on a real TestFlight install: StoreKit threw, the install
+    /// read as unknown, nothing was backfilled. The receipt's name now
+    /// decides first and StoreKit is not asked: `sandboxReceipt` is
+    /// TestFlight, `receipt` the App Store. No name (or another one) asks
+    /// StoreKit. A provisioning profile, and the simulator, come before the
+    /// receipt.
+    func testTheReceiptNameDecidesBeforeStoreKitIsAsked() async {
+        var storeKitCalls = 0
+        func classify(provisioned: Bool = false, simulator: Bool = false, receipt: String?)
+            async -> TelemetryDistributionDetector.Answer {
+            await TelemetryDistributionDetector.classify(hasProvisioningProfile: provisioned, isSimulator: simulator,
+                                                         receiptName: receipt) {
+                storeKitCalls += 1
+                return .verified(environment: AppStore.Environment.production.rawValue)
+            }
+        }
+        let sandbox = await classify(receipt: "sandboxReceipt")
+        XCTAssertEqual(sandbox, .init(distribution: .testFlight, source: .receipt))
+        let store = await classify(receipt: "receipt")
+        XCTAssertEqual(store, .init(distribution: .appStore, source: .receipt))
+        XCTAssertEqual(storeKitCalls, 0, "a receipt name decides; StoreKit is never asked")
+
+        let none = await classify(receipt: nil)
+        XCTAssertEqual(none, .init(distribution: .appStore, source: .storekit), "no receipt name: StoreKit decides")
+        let other = await classify(receipt: "somethingElse")
+        XCTAssertEqual(other.source, .storekit)
+        XCTAssertEqual(storeKitCalls, 2)
+
+        let provisioned = await classify(provisioned: true, receipt: "sandboxReceipt")
+        XCTAssertEqual(provisioned, .init(distribution: .development, source: .provisioning), "the profile comes first")
+        let simulator = await classify(simulator: true, receipt: "sandboxReceipt")
+        XCTAssertEqual(simulator, .init(distribution: .development, source: .simulator), "so does the simulator")
+        XCTAssertEqual(storeKitCalls, 2)
+    }
+
+    /// The receipt's name is the last path component of the receipt URL,
+    /// read through the local protocol; no URL is no name. On this test host
+    /// (a simulator, where the receipt is named `receipt`) the live detector
+    /// says development — the simulator rule — not the App Store.
+    func testTheReceiptNameIsTheURLsLastComponentAndTheSimulatorIsDevelopment() async {
+        struct Stub: AppStoreReceiptLocating { let appStoreReceiptURL: URL? }
+        let tf = Stub(appStoreReceiptURL: URL(fileURLWithPath: "/var/mobile/Containers/Data/Application/X/StoreKit/sandboxReceipt"))
+        XCTAssertEqual(TelemetryDistributionDetector.receiptName(tf), "sandboxReceipt")
+        XCTAssertNil(TelemetryDistributionDetector.receiptName(Stub(appStoreReceiptURL: nil)))
+        XCTAssertNotNil(TelemetryDistributionDetector.receiptName(), "liveness: the bundle answers on this host")
+        let live = await TelemetryDistributionDetector.live()
+        XCTAssertEqual(live, .development,
+                       "the simulator (receipt named \(TelemetryDistributionDetector.receiptName() ?? "nil")) is development")
+    }
+
+    /// When StoreKit fails, the trail says how: StoreKit's own case, and for
+    /// the two that wrap another error, that error's domain and code.
+    func testAStoreKitFailureNamesItsCaseAndWhatItWrapped() async {
+        let system = await TelemetryDistributionDetector.storeKitAnswer {
+            throw StoreKitError.systemError(NSError(domain: "X", code: 7))
+        }
+        guard case .failed(let reason) = system else { return XCTFail("a throw is a failure: \(system)") }
+        XCTAssertTrue(reason.contains("systemError"), reason)
+        XCTAssertTrue(reason.contains("X#7"), reason)
+        XCTAssertEqual(TelemetryDistributionDetector.failureReason(StoreKitError.networkError(URLError(.notConnectedToInternet))),
+                       "StoreKitError.networkError:NSURLErrorDomain#-1009")
+        XCTAssertEqual(TelemetryDistributionDetector.failureReason(StoreKitError.userCancelled), "StoreKitError.userCancelled")
+        XCTAssertEqual(TelemetryDistributionDetector.failureReason(StoreKitError.notEntitled), "StoreKitError.notEntitled")
+        XCTAssertEqual(TelemetryDistributionDetector.failureReason(NSError(domain: "Y", code: 3)), "Y#3")
+
+        let unknown = await TelemetryDistributionDetector.classify(hasProvisioningProfile: false, isSimulator: false,
+                                                                   receiptName: nil) { system }
+        XCTAssertEqual(unknown, .init(distribution: .unknown(reason: reason), source: .storekit))
+        XCTAssertEqual(unknown.distribution.traceLabel, "unknown(StoreKitError.systemError:X#7)")
+    }
+
+    /// Each launch says which evidence decided (`live()` resolves once).
+    func testTheTrailSaysWhichEvidenceDecided() async {
+        func lastSource() -> String? {
+            DiagnosticTrail.combinedText().split(separator: "\n").last { $0.contains("Telemetry environment.source=") }
+                .map { String($0.split(separator: "=").last ?? "") }
+        }
+        let tf = await TelemetryDistributionDetector.resolve(hasProvisioningProfile: false, isSimulator: false,
+                                                             receiptName: "sandboxReceipt") { .unverified }
+        XCTAssertEqual(tf, .testFlight)
+        XCTAssertEqual(lastSource(), "receipt")
+        _ = await TelemetryDistributionDetector.resolve(hasProvisioningProfile: false, isSimulator: false,
+                                                        receiptName: nil) { .unverified }
+        XCTAssertEqual(lastSource(), "storekit")
+        _ = await TelemetryDistributionDetector.resolve(hasProvisioningProfile: true, isSimulator: false,
+                                                        receiptName: "receipt") { .unverified }
+        XCTAssertEqual(lastSource(), "provisioning")
+    }
+
+    /// The device, reproduced: build 17 left the switch ON by the user's own
+    /// hand with a consent moment; StoreKit throws. With no receipt name the
+    /// launch reads unknown — the App Store rule — and the owned history
+    /// from before the consent stays home (what build 20 did). The next
+    /// launch, on a `sandboxReceipt` install, backfills it without asking
+    /// StoreKit at all.
+    func testABuild17ManualOnOnATestFlightReceiptBackfillsEvenWhenStoreKitThrows() async {
+        let day: TimeInterval = 86_400
+        let history = TelemetryFixtures.run(startedAt: rig.clock - 30 * day, endedAt: rig.clock - 30 * day + 60, revision: nil)
+        XCTAssertTrue(SpikeRunStore.finishRun(history, location: rig.location))
+        XCTAssertEqual(history.ownerUID, rig.uid, "rig: the history is this account's")
+        let moment = rig.clock.addingTimeInterval(-600)
+        rig.defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        TelemetryConsentStore.recordGrant(rig.defaults, at: moment)
+        let after = TelemetryFixtures.run(startedAt: moment + 60, endedAt: moment + 120, revision: nil)
+        XCTAssertTrue(SpikeRunStore.finishRun(after, location: rig.location))
+
+        var storeKitCalls = 0
+        func detector(receipt: String?) -> @MainActor () async -> TelemetryDistribution {
+            {
+                await TelemetryDistributionDetector.resolve(hasProvisioningProfile: false, isSimulator: false,
+                                                            receiptName: receipt) {
+                    storeKitCalls += 1
+                    return await TelemetryDistributionDetector.storeKitAnswer {
+                        throw StoreKitError.systemError(NSError(domain: "X", code: 7))
+                    }
+                }
+            }
+        }
+
+        let build20 = rig.uploader(detect: detector(receipt: nil))
+        _ = await build20.applyTestFlightDefaultIfNeeded()
+        _ = await build20.uploadNow(trigger: .launch)
+        XCTAssertEqual(build20.distribution, .unknown(reason: "StoreKitError.systemError:X#7"))
+        XCTAssertNotNil(rig.server.telemetryRow(runID: after.id), "rig: what came after the consent went up")
+        XCTAssertNil(rig.server.telemetryRow(runID: history.id), "the device's bug: no backfill on an unknown answer")
+        XCTAssertEqual(storeKitCalls, 1)
+
+        let fixed = rig.uploader(detect: detector(receipt: "sandboxReceipt"))
+        _ = await fixed.applyTestFlightDefaultIfNeeded()
+        await fixed.drain()
+        XCTAssertEqual(fixed.distribution, .testFlight)
+        XCTAssertNotNil(rig.server.telemetryRow(runID: history.id), "the receipt says TestFlight: the history goes up")
+        XCTAssertEqual(storeKitCalls, 1, "and StoreKit was not asked")
+        XCTAssertEqual(TelemetryConsentStore.consentAt(rig.defaults), moment, "the user's moment is untouched")
     }
 
     /// The answer is on the device's trail, whatever it is — one line per
