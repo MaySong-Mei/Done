@@ -163,6 +163,9 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
     /// for the watch to offer when naming a new block (`WristTitles.swift`).
     /// Empty from a phone before the field: the watch offers none.
     var titleHints: [String: [WristTitleHint]]
+    /// The phone applies `WristCommand.Kind.statsSettings`. False from a
+    /// phone before the kind: the watch shows those settings read-only.
+    var takesSettingsEdits: Bool
 
     init(
         version: Int = WristSnapshot.currentVersion,
@@ -173,7 +176,8 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
         receipts: [WristReceipt],
         stats: CategoryStatsPayload? = nil,
         statsSettings: WristStatsSettings = .standard,
-        titleHints: [String: [WristTitleHint]] = [:]
+        titleHints: [String: [WristTitleHint]] = [:],
+        takesSettingsEdits: Bool = false
     ) {
         self.version = version
         self.generatedAt = generatedAt
@@ -184,10 +188,12 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
         self.stats = stats
         self.statsSettings = statsSettings
         self.titleHints = titleHints
+        self.takesSettingsEdits = takesSettingsEdits
     }
 
     private enum CodingKeys: String, CodingKey {
         case version, generatedAt, language, types, occurrences, receipts, stats, statsSettings, titleHints
+        case takesSettingsEdits
     }
 
     init(from decoder: Decoder) throws {
@@ -203,6 +209,8 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
             .flatMap { $0 } ?? .standard
         titleHints = (try? container.decodeIfPresent([String: [WristTitleHint]].self, forKey: .titleHints))
             .flatMap { $0 } ?? [:]
+        takesSettingsEdits = (try? container.decodeIfPresent(Bool.self, forKey: .takesSettingsEdits))
+            .flatMap { $0 } ?? false
     }
 
     /// No hints, no key: a snapshot that drops them to fit is byte for byte
@@ -220,12 +228,9 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
         if !titleHints.isEmpty {
             try container.encode(titleHints, forKey: .titleHints)
         }
-    }
-
-    /// The stats as the watch's pages read them: with the types the
-    /// settings leave out marked.
-    var wristStats: CategoryStatsPayload? {
-        stats?.markingLeftOut(statsSettings)
+        if takesSettingsEdits {
+            try container.encode(takesSettingsEdits, forKey: .takesSettingsEdits)
+        }
     }
 
     /// Equality that ignores `generatedAt` — what the phone uses to skip a
@@ -239,6 +244,7 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
             && stats?.withoutWriteStamp == other.stats?.withoutWriteStamp
             && statsSettings == other.statsSettings
             && titleHints == other.titleHints
+            && takesSettingsEdits == other.takesSettingsEdits
     }
 }
 
@@ -254,21 +260,34 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
 /// after its type. It is optional so a phone that predates it still decodes
 /// the start (an unknown key is ignored) and stores the type as the title,
 /// and a start queued by an older watch still decodes here.
+///
+/// `statsSettings` is an edit made on the watch's settings page to the
+/// phone-owned part of `WristStatsSettings`: each field it carries replaces
+/// the phone's, a nil field is left alone. A phone that predates the kind
+/// cannot decode the command at all and drops it (the reply is empty, the
+/// transfer is discarded); the watch only offers the edit when the snapshot
+/// says the phone takes it (`WristSnapshot.takesSettingsEdits`).
 nonisolated struct WristCommand: Codable, Hashable, Identifiable, Sendable {
     enum Kind: Codable, Hashable, Sendable {
         case start(eventID: UUID, typeTitle: String, start: Date, end: Date, title: String? = nil)
         case finish(eventID: UUID, rangeStart: Date?, at: Date)
         case extend(eventID: UUID, rangeStart: Date?, by: TimeInterval)
+        case statsSettings(overlap: WristOverlapRule? = nil, excludesBackground: Bool? = nil)
     }
 
     var id: UUID
     var issuedAt: Date
     var kind: Kind
 
+    /// The event the command is about. A settings edit is about no event:
+    /// its own id, so it never waits behind, or holds up, an event's
+    /// commands.
     var eventID: UUID {
         switch kind {
         case .start(let eventID, _, _, _, _), .finish(let eventID, _, _), .extend(let eventID, _, _):
             return eventID
+        case .statsSettings:
+            return id
         }
     }
 
@@ -282,6 +301,7 @@ nonisolated struct WristCommand: Codable, Hashable, Identifiable, Sendable {
         switch kind {
         case .start(_, _, let start, _, _): return start
         case .finish(_, let rangeStart, _), .extend(_, let rangeStart, _): return rangeStart
+        case .statsSettings: return nil
         }
     }
 }
