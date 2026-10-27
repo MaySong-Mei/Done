@@ -102,8 +102,9 @@ enum WristPage: String, Hashable {
     }
 }
 
-/// The day from midnight to midnight, one hour per `hourHeight` points,
-/// scrolled to the present on open (the Digital Crown scrolls it).
+/// The day from midnight to midnight at about a point a minute — a quarter
+/// hour is a fingertip, and a half-hour block has room for its name and
+/// times — centered on the present on open (the Digital Crown scrolls it).
 ///
 /// Press and hold on empty time, then drag, to draw a block — the phone's
 /// drag to create (`WristDraftMapping`). The page holds still while the
@@ -135,9 +136,19 @@ struct WristTodayView: View {
     /// How far the day is scrolled, to turn a touch on the scroll view into
     /// a point of the day.
     @State private var scrollY: CGFloat = 0
+    /// The visible height of the day and its full height, for the drag's
+    /// edge scrolling.
+    @State private var viewportHeight: CGFloat = 0
+    @State private var contentHeight: CGFloat = 0
+    @State private var position = ScrollPosition(edge: .top)
+    /// Where the finger is while drawing, in the scroll view's coordinates:
+    /// near an edge the day scrolls under a still finger, and the draft's
+    /// moving end follows the time that passes under it.
+    @State private var fingerY: CGFloat?
+    private let edgeTick = Timer.publish(every: 1.0 / 30, on: .main, in: .common).autoconnect()
 
-    private let hourHeight: CGFloat = 34
-    private let gutter: CGFloat = 22
+    private let hourHeight: CGFloat = 64
+    private let gutter: CGFloat = 28
     /// The watch's own zone — the one its face shows. The stats payload
     /// carries the phone's zone at its last write, which may be another.
     private var calendar: Calendar { .current }
@@ -166,9 +177,9 @@ struct WristTodayView: View {
                         ForEach(rows.indices, id: \.self) { index in
                             HStack(alignment: .top, spacing: 2) {
                                 Text(strings.hourLabel(rows[index].hour))
-                                    .font(.system(size: 9, weight: .medium, design: .rounded))
+                                    .font(.system(size: 11, weight: .medium, design: .rounded))
                                     .foregroundStyle(.secondary)
-                                    .frame(width: gutter - 2, alignment: .leading)
+                                    .frame(width: gutter - 2, alignment: .trailing)
                                 Rectangle().fill(.white.opacity(0.12)).frame(height: 0.5)
                             }
                             .frame(height: hourHeight, alignment: .top)
@@ -212,7 +223,13 @@ struct WristTodayView: View {
                     // Midnight can still scroll clear of the clock row.
                     .padding(.top, top)
                 }
+                .scrollPosition($position)
                 .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { _, y in scrollY = y }
+                .onScrollGeometryChange(for: CGSize.self, of: { CGSize(width: $0.containerSize.height, height: $0.contentSize.height) }) { _, size in
+                    viewportHeight = size.width
+                    contentHeight = size.height
+                }
+                .onReceive(edgeTick) { _ in scrollAtEdge(mapping, top: top) }
                 // On the scroll view, not its content: any drag on the
                 // content takes every pan from the scroll view, while one
                 // here leaves it its scrolls until the hold is recognized.
@@ -220,14 +237,17 @@ struct WristTodayView: View {
                 .scrollDisabled(holding || draft != nil)
                 .mask(WristEdgeFade(top: 0, bottom: 10))
                 .onAppear {
-                    DispatchQueue.main.async { proxy.scrollTo(max(0, nowRow - 1), anchor: .top) }
+                    DispatchQueue.main.async { proxy.scrollTo(nowRow, anchor: .center) }
                 }
             }
         }
         // Lifting the finger ends the drag the same way whether the gesture
         // ended or was taken away: a drawn draft goes to the picker.
         .onChange(of: holding) { _, isHolding in
-            if !isHolding, draft != nil { picking = true }
+            if !isHolding {
+                fingerY = nil
+                if draft != nil { picking = true }
+            }
         }
         .sheet(isPresented: $picking, onDismiss: { draft = nil }) {
             if let range = draft?.range {
@@ -258,6 +278,7 @@ struct WristTodayView: View {
             .onChanged { value in
                 guard case .second(true, let drag?) = value else { return }
                 let dayY = { (y: CGFloat) in Double(y + scrollY - top) }
+                fingerY = drag.location.y
                 if let current = draft {
                     let range = mapping.range(anchorY: current.anchorY, currentY: dayY(drag.location.y))
                     guard range != current.range else { return }
@@ -274,6 +295,38 @@ struct WristTodayView: View {
             }
     }
 
+    /// Points from either edge of the visible day where a held finger
+    /// scrolls it, and the fastest it scrolls, in points per tick.
+    private let edgeZone: CGFloat = 28
+    private let edgeSpeed: CGFloat = 9
+
+    /// While drawing with the finger near the top or bottom edge, scroll the
+    /// day toward it — faster the deeper in — and carry the draft's moving
+    /// end to the time now under the finger, as the phone's drag does.
+    private func scrollAtEdge(_ mapping: WristDraftMapping, top: CGFloat) {
+        guard holding, let current = draft, let fingerY, viewportHeight > 0 else { return }
+        let depth: CGFloat
+        // The top edge is under the clock row's glass.
+        if fingerY < top + edgeZone {
+            depth = -(top + edgeZone - fingerY) / edgeZone
+        } else if fingerY > viewportHeight - edgeZone {
+            depth = (fingerY - (viewportHeight - edgeZone)) / edgeZone
+        } else {
+            return
+        }
+        let maxY = max(0, contentHeight - viewportHeight)
+        let target = min(max(0, scrollY + edgeSpeed * min(1, depth)), maxY)
+        guard abs(target - scrollY) >= 0.5 else { return }
+        scrollY = target
+        position.scrollTo(y: target)
+        let range = mapping.range(anchorY: current.anchorY, currentY: Double(fingerY + target - top))
+        guard range != current.range else { return }
+        if range.moving.time != current.range.moving.time {
+            WKInterfaceDevice.current().play(.click)
+        }
+        draft?.range = range
+    }
+
     /// The draft in the blocks' shape, neutral until it has a type: grey
     /// fill, a white border, and its range in place of a title.
     private func draftView(_ range: WristDraftMapping.Range) -> some View {
@@ -283,7 +336,7 @@ struct WristTodayView: View {
             .overlay(alignment: .topLeading) {
                 if height >= 13 {
                     Text(strings.timeRange(range.start, range.end))
-                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
                         .monospacedDigit()
                         .lineLimit(1)
                         .foregroundStyle(.white)
@@ -320,12 +373,21 @@ struct WristTodayView: View {
             .fill(WristColor.fill(hex, strength: block.isCurrent ? 0.6 : 0.4))
             .overlay(alignment: .topLeading) {
                 if height >= 13 {
-                    Text(block.occurrence.title)
-                        .font(.system(size: 10, weight: .semibold))
-                        .lineLimit(height >= 26 ? 2 : 1)
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 3)
-                        .padding(.top, 1)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(block.occurrence.title)
+                            .font(.system(size: 12, weight: .semibold))
+                            .lineLimit(height >= 46 ? 2 : 1)
+                            .foregroundStyle(.white)
+                        if height >= 30 {
+                            Text(strings.timeRange(block.start, block.end))
+                                .font(.system(size: 10, weight: .medium, design: .rounded))
+                                .monospacedDigit()
+                                .lineLimit(1)
+                                .foregroundStyle(.white.opacity(0.7))
+                        }
+                    }
+                    .padding(.horizontal, 3)
+                    .padding(.top, 1)
                 }
             }
             .overlay {
