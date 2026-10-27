@@ -174,14 +174,45 @@ enum WristSnapshotBuilder {
         }
         var names: [String: [String: Name]] = [:]
         var timelineItems: [WristTitleTimeline.Item] = []
+        func weight(of start: Date) -> Double {
+            let ageDays = max(0, today.timeIntervalSince(calendar.startOfDay(for: start)) / 86_400)
+            return pow(0.5, ageDays / WristTitleRanking.halfLifeDays)
+        }
+
+        // A series counts once per occurrence in the window, through the same
+        // per-day expansion the watch's timeline comes from — so its uses age
+        // like hand-entered ones, an ended series drops out, and the phone
+        // learns the neighbors the watch will see.
+        let series = events.filter { $0.isRecurringSeries && !$0.isAllDay && $0.timerStartedAt == nil }
+        var seriesUses: [UUID: [Use]] = [:]
+        if !series.isEmpty {
+            var seen = Set<String>()
+            var day = calendar.date(byAdding: .day, value: -1, to: windowStart) ?? windowStart
+            while day <= today {
+                for occurrence in CalendarLayout.occurrencesForDate(series, date: day, calendar: calendar, now: now)
+                where seen.insert(occurrence.id).inserted && occurrence.range.end > occurrence.range.start {
+                    let event = occurrence.event
+                    let range = occurrence.range
+                    timelineItems.append(WristTitleTimeline.Item(
+                        id: occurrence.id, start: range.start, end: range.end,
+                        title: event.title.trimmingCharacters(in: .whitespacesAndNewlines), type: event.type
+                    ))
+                    guard range.start >= windowStart, range.start <= now else { continue }
+                    seriesUses[event.id, default: []].append(Use(
+                        id: occurrence.id, start: range.start, end: range.end,
+                        weight: weight(of: range.start), hasContext: true
+                    ))
+                }
+                guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
+                day = next
+            }
+        }
 
         for event in events where !event.isAllDay && event.timerStartedAt == nil {
             let title = event.title.trimmingCharacters(in: .whitespacesAndNewlines)
             var uses: [Use] = []
             if event.isRecurringSeries {
-                if let range = event.primaryTimeRange, range.end > range.start {
-                    uses.append(Use(id: "", start: range.start, end: range.end, weight: 1, hasContext: false))
-                }
+                uses = seriesUses[event.id] ?? []
             } else {
                 for (index, range) in event.timeRanges.enumerated()
                 where range.end > range.start && range.start >= windowStart.addingTimeInterval(-86_400) {
@@ -190,10 +221,9 @@ enum WristSnapshotBuilder {
                         id: id, start: range.start, end: range.end, title: title, type: event.type
                     ))
                     guard range.start >= windowStart, range.start <= now else { continue }
-                    let ageDays = max(0, today.timeIntervalSince(calendar.startOfDay(for: range.start)) / 86_400)
                     uses.append(Use(
                         id: id, start: range.start, end: range.end,
-                        weight: pow(0.5, ageDays / WristTitleRanking.halfLifeDays), hasContext: true
+                        weight: weight(of: range.start), hasContext: true
                     ))
                 }
             }
@@ -212,13 +242,19 @@ enum WristSnapshotBuilder {
 
         // The names that make the cut, then their context: neighbors are
         // named through the table those very names form.
+        // The table's order must be the order the hints are sent in — the
+        // watch rebuilds the table from them, and neighbors are indices into
+        // it — so the kept names are ordered by the weight as sent.
         func total(_ name: Name) -> Double { name.uses.reduce(0) { $0 + $1.weight } }
         let chosen: [String: [Name]] = names.mapValues { byKey -> [Name] in
             let ranked: [Name] = byKey.values.sorted { lhs, rhs in
                 let l = total(lhs), r = total(rhs)
                 return l != r ? l > r : lhs.title < rhs.title
             }
-            return Array(ranked.prefix(maxTitlesPerType))
+            return Array(ranked.prefix(maxTitlesPerType)).sorted { lhs, rhs in
+                let l = sentWeight(total(lhs)), r = sentWeight(total(rhs))
+                return l != r ? l > r : lhs.title < rhs.title
+            }
         }
         let table = WristTitleTable(
             typeOrder: types.map(\.title),
@@ -243,6 +279,11 @@ enum WristSnapshotBuilder {
         var minutes: Double
         var weight: Double
         var context: WristTitleContext?
+    }
+
+    /// A name's recency weight as it goes on the wire.
+    static func sentWeight(_ total: Double) -> Double {
+        max(0.1, (total * 10).rounded() / 10)
     }
 
     /// Pairs kept per neighbor list.
@@ -291,7 +332,7 @@ enum WristSnapshotBuilder {
         }
         return WristTitleHint(
             title: title,
-            weight: max(0.1, (weight * 10).rounded() / 10),
+            weight: sentWeight(weight),
             startMinute: Int((meanAngle / (2 * .pi) * 1440).rounded()) % 1440,
             concentration: weight > 0 ? Int((hypot(x, y) / weight * 100).rounded()) : 0,
             minutes: max(1, Int((weightedMedian(uses.map { ($0.minutes, $0.weight) }) ?? 60).rounded())),

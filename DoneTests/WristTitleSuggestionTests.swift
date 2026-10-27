@@ -247,6 +247,47 @@ final class WristTitleSuggestionTests: XCTestCase {
         XCTAssertNotNil(hints["Sport"]?.first?.next, "the gym is followed by the shower")
     }
 
+    /// The watch numbers names in the order the hints arrive; the phone must
+    /// learn neighbors in that same order. Zeta outweighs Alpha before
+    /// rounding, but both go out as the same weight and so sort by title.
+    func testNeighborsPointAtTheNameTheWatchSees() throws {
+        let events = [
+            event("Zeta", "Work", at(0, 8), minutes: 60),
+            event("After", "Life", at(0, 9), minutes: 30),
+            event("Alpha", "Work", at(-1, 8), minutes: 60),
+        ]
+        let list = types("Work", "Life")
+        let hints = WristSnapshotBuilder.titleHints(events: events, types: list, now: now, calendar: calendar)
+        XCTAssertEqual(hints["Work"]?.map(\.title), ["Alpha", "Zeta"], "precondition: a tie on the wire")
+        let table = WristTitleTable(typeOrder: list.map(\.title), hints: hints)
+        let after = try XCTUnwrap(hints["Life"]?.first { $0.title == "After" })
+        XCTAssertEqual(after.previous?.first, table.ref(title: "Zeta", type: "Work"))
+    }
+
+    /// A daily series is learned per occurrence: it ages like hand-entered
+    /// events and is a neighbor, as it is on the watch's timeline.
+    func testASeriesIsLearnedPerOccurrenceAndAsANeighbor() throws {
+        var standup = event("Standup", "Work", at(-20, 9), minutes: 15)
+        standup.repeatUnit = .day
+        standup.repeatInterval = 1
+        var events = [standup]
+        for d in 1...5 { events.append(event("Deep work", "Work", at(-d, 9, 15), minutes: 105)) }
+        let list = types("Work")
+        let hints = try XCTUnwrap(WristSnapshotBuilder.titleHints(events: events, types: list, now: now, calendar: calendar)["Work"])
+        let table = WristTitleTable(typeOrder: list.map(\.title), hints: ["Work": hints])
+        let deep = try XCTUnwrap(hints.first { $0.title == "Deep work" })
+        XCTAssertEqual(deep.previous?.first, table.ref(title: "Standup", type: "Work"), "the series ends right before it")
+        let standupHint = try XCTUnwrap(hints.first { $0.title == "Standup" })
+        XCTAssertGreaterThan(standupHint.weight, deep.weight, "twenty-one daily uses outweigh five")
+
+        var ended = standup
+        ended.repeatEndType = .onDate
+        ended.repeatEndDate = at(-200, 12)
+        ended.timeRanges = [.init(start: at(-400, 9), end: at(-400, 9, 15))]
+        let old = WristSnapshotBuilder.titleHints(events: [ended], types: list, now: now, calendar: calendar)
+        XCTAssertNil(old["Work"]?.first { $0.title == "Standup" }, "a series that ended long ago teaches nothing")
+    }
+
     // MARK: Learning (phone)
 
     func testHintsSkipEmptyAndTypeNamedTitlesAndUnlistedTypes() {
