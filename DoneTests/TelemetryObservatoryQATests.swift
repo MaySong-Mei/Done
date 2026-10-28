@@ -75,6 +75,10 @@ private final class ObservatoryQARig {
 /// every fixture day — 2026-09-21 and the day before — is inside it.
 private let qaWindowStart = "2026-07-23"
 
+/// The segment `TelemetryFixtures.run` stamps (model and OS), read as this
+/// phone's: the deck's timing verdicts are judged on it.
+private let qaSegment = FixWatchSegment(deviceModel: "iPhone17,2", osVersion: "26.0")
+
 /// A daily whose Me-tab liveness counter reads `visible` — the number the
 /// deck shows as "visible computes (liveness)", so which copy of a record
 /// the deck evaluated is visible in its output.
@@ -233,11 +237,11 @@ final class TelemetryObservatoryMergeQATests: XCTestCase {
         XCTAssertEqual(merged.count, 1)
         XCTAssertEqual(merged.first?.revision, 3, "the local copy is newer")
         XCTAssertEqual(merged.first?.metrics["meComputedVisible"], .number(9))
-        let deck = FixWatchAttention.observatory(localDailies: [local], localWindows: [], cloud: [staleCloud], localInstall: install, sinceDayKey: qaWindowStart)
+        let deck = FixWatchAttention.observatory(localDailies: [local], localWindows: [], cloud: [staleCloud], localInstall: install, sinceDayKey: qaWindowStart, currentSegment: qaSegment)
         XCTAssertEqual(meTabVisible(deck.verdicts), "9", "the deck reads the fresher local count")
 
         let newerCloud = try rig.viaCloud(daily(id: id, visible: 5, revision: 4, install: install))
-        let replaced = FixWatchAttention.observatory(localDailies: [local], localWindows: [], cloud: [newerCloud], localInstall: install, sinceDayKey: qaWindowStart)
+        let replaced = FixWatchAttention.observatory(localDailies: [local], localWindows: [], cloud: [newerCloud], localInstall: install, sinceDayKey: qaWindowStart, currentSegment: qaSegment)
         XCTAssertEqual(meTabVisible(replaced.verdicts), "5", "positive control: a newer cloud copy does win")
     }
 
@@ -252,11 +256,11 @@ final class TelemetryObservatoryMergeQATests: XCTestCase {
         let theirs = try rig.viaCloud(daily(visible: 2, revision: 1, install: otherPhone,
                                             startedAt: rig.clock.addingTimeInterval(-86_400)))
         let debugHere = daily(visible: 4, revision: 1, install: here, configuration: "debug")
-        let debugOnly = FixWatchAttention.observatory(localDailies: [debugHere], localWindows: [], cloud: [theirs], localInstall: here, sinceDayKey: qaWindowStart)
+        let debugOnly = FixWatchAttention.observatory(localDailies: [debugHere], localWindows: [], cloud: [theirs], localInstall: here, sinceDayKey: qaWindowStart, currentSegment: qaSegment)
         XCTAssertEqual(debugOnly.source, .cloud(devices: 1), "a Debug build's own records are not a device the verdicts came from")
 
         let releaseHere = daily(visible: 4, revision: 1, install: here)
-        let both = FixWatchAttention.observatory(localDailies: [releaseHere], localWindows: [], cloud: [theirs], localInstall: here, sinceDayKey: qaWindowStart)
+        let both = FixWatchAttention.observatory(localDailies: [releaseHere], localWindows: [], cloud: [theirs], localInstall: here, sinceDayKey: qaWindowStart, currentSegment: qaSegment)
         XCTAssertEqual(both.source, .cloud(devices: 2), "positive control: a release record here is a second device")
     }
 }

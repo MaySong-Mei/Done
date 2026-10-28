@@ -256,9 +256,10 @@ struct FixWatchView: View {
         let local = FixWatchAttention.loadLocalRecords()
         let now = Date()
         let installID = SpikeRunStore.installID()
+        let segment = FixWatchSegment.thisDevice()
         let firstPaint = FixWatchAttention.observatory(
             localDailies: local.dailies, localWindows: local.windows, cloud: nil, localInstall: installID,
-            sinceDayKey: FixWatchAttention.observatorySinceDayKey(now: now))
+            sinceDayKey: FixWatchAttention.observatorySinceDayKey(now: now), currentSegment: segment)
         verdicts = firstPaint.verdicts
         source = firstPaint.source
         storageBytes = spikeRunsDirectoryBytes()
@@ -266,7 +267,7 @@ struct FixWatchView: View {
         Task {
             let read = await FixWatchAttention.loadObservatory(
                 local: local, readCloud: { await telemetryUploader.fetchObservatoryCloudRuns(sinceDayKey: $0) },
-                now: now, localInstall: installID)
+                now: now, localInstall: installID, currentSegment: segment)
             verdicts = read.verdicts
             source = read.source
         }
@@ -299,9 +300,9 @@ enum FixWatchAttention {
     /// resident (if any) flushes today-so-far first, so the evaluator
     /// never reads a stale day.
     @MainActor
-    static func loadVerdicts() -> [FixVerdict] {
+    static func loadVerdicts(currentSegment: FixWatchSegment) -> [FixVerdict] {
         let local = loadLocalRecords()
-        return evaluate(dailies: local.dailies, windows: local.windows)
+        return evaluate(dailies: local.dailies, windows: local.windows, currentSegment: currentSegment)
     }
 
     /// The local half of the deck's read: flush today so far, then this
@@ -313,11 +314,14 @@ enum FixWatchAttention {
                 SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.effortPathFixID))
     }
 
-    static func evaluate(dailies: [SpikeRun], windows: [SpikeRun]) -> [FixVerdict] {
+    /// `currentSegment` is the phone doing the reading — the timing
+    /// criteria are judged on its records only (`FixWatchSegment`); the
+    /// Me-tab tripwire reads every segment.
+    static func evaluate(dailies: [SpikeRun], windows: [SpikeRun], currentSegment: FixWatchSegment) -> [FixVerdict] {
         [
-            FixWatchVerdictEvaluator.evaluateEffortPath(dailies: dailies, windows: windows),
+            FixWatchVerdictEvaluator.evaluateEffortPath(dailies: dailies, windows: windows, currentSegment: currentSegment),
             FixWatchVerdictEvaluator.evaluateMeTabGate(dailies: dailies),
-            FixWatchVerdictEvaluator.evaluateTouchDelivery(dailies: dailies),
+            FixWatchVerdictEvaluator.evaluateTouchDelivery(dailies: dailies, currentSegment: currentSegment),
         ]
     }
 
@@ -346,12 +350,13 @@ enum FixWatchAttention {
     static func loadObservatory(
         local: (dailies: [SpikeRun], windows: [SpikeRun]),
         readCloud: (_ sinceDayKey: String) async throws -> [SpikeRun]?,
-        now: Date, calendar: Calendar = .current, localInstall: UUID
+        now: Date, calendar: Calendar = .current, localInstall: UUID, currentSegment: FixWatchSegment
     ) async -> (verdicts: [FixVerdict], source: FixWatchSource) {
         let since = observatorySinceDayKey(now: now, calendar: calendar)
         let cloud = try? await readCloud(since)
         return observatory(localDailies: local.dailies, localWindows: local.windows, cloud: cloud,
-                           localInstall: localInstall, sinceDayKey: since, calendar: calendar)
+                           localInstall: localInstall, sinceDayKey: since, calendar: calendar,
+                           currentSegment: currentSegment)
     }
 
     /// §16 rule 3, pure: the deck's verdicts and its source line from this
@@ -360,30 +365,33 @@ enum FixWatchAttention {
     /// cloud (offline, signed out, a failed read) or an empty one falls
     /// back to this device and says "this device only"; otherwise the two
     /// are merged (`TelemetryObservatoryMerge`) and the line names how many
-    /// installs the release records came from.
+    /// installs the release records came from. Cloud rows carry their
+    /// own model and OS, so another phone's records land in their own
+    /// segment, report-only beside `currentSegment`'s verdict.
     static func observatory(
         localDailies: [SpikeRun], localWindows: [SpikeRun], cloud: [SpikeRun]?, localInstall: UUID,
-        sinceDayKey: String, calendar: Calendar = .current
+        sinceDayKey: String, calendar: Calendar = .current, currentSegment: FixWatchSegment
     ) -> (verdicts: [FixVerdict], source: FixWatchSource) {
         let inWindow: (SpikeRun) -> Bool = { FixWatchVerdictEvaluator.dayKey(of: $0, calendar: calendar) >= sinceDayKey }
         let dailiesHere = localDailies.filter(inWindow)
         let windowsHere = localWindows.filter(inWindow)
         guard let cloud, !cloud.isEmpty else {
-            return (evaluate(dailies: dailiesHere, windows: windowsHere), .localOnly)
+            return (evaluate(dailies: dailiesHere, windows: windowsHere, currentSegment: currentSegment), .localOnly)
         }
         let merged = TelemetryObservatoryMerge.merge(local: dailiesHere + windowsHere, cloud: cloud.filter(inWindow))
         let dailies = merged.filter { $0.spikeID == FixObservationRegistry.residentDailySpikeID }
         let windows = merged.filter { $0.spikeID == FixObservationRegistry.effortPathFixID }
         let installs = TelemetryObservatoryMerge.installCount(merged.filter(FixWatchVerdictEvaluator.isRelease),
                                                               localInstall: localInstall)
-        return (evaluate(dailies: dailies, windows: windows), .cloud(devices: max(installs, 1)))
+        return (evaluate(dailies: dailies, windows: windows, currentSegment: currentSegment),
+                .cloud(devices: max(installs, 1)))
     }
 
     /// The settings row's indicator: this device's records only — the deck
     /// may read otherwise once it has merged the cloud (§16 decision ③).
     @MainActor
     static func needsAttention(now: Date = Date()) -> Bool {
-        needsAttention(verdicts: loadVerdicts(), entries: FixObservationRegistry.all, now: now)
+        needsAttention(verdicts: loadVerdicts(currentSegment: .thisDevice()), entries: FixObservationRegistry.all, now: now)
     }
 
     /// Pure half, pinned by fixture: any firing alarm, or any entry past
@@ -406,6 +414,20 @@ enum FixWatchAttention {
     }
 }
 
+
+// MARK: - This phone's segment
+
+extension FixWatchSegment {
+    /// The segment of the phone doing the reading, from the same stamp
+    /// the records it writes now are stamped with — so those always fall
+    /// in it. The only device read on the verdict path; the evaluator
+    /// itself takes the segment as a parameter.
+    @MainActor
+    static func thisDevice() -> FixWatchSegment {
+        let stamp = SpikeRunContext.stamp()
+        return FixWatchSegment(deviceModel: stamp.deviceModel, osVersion: stamp.osVersion)
+    }
+}
 
 // MARK: - Source (design §16 rule 3)
 
