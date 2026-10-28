@@ -153,17 +153,19 @@ enum WristPage: String, Hashable {
 /// hour is a fingertip, and a half-hour block has room for its name and
 /// times — centered on the present on open (the Digital Crown scrolls it).
 ///
-/// Press and hold on empty time, then drag, to draw a block — the phone's
-/// drag to create (`WristDraftMapping`). The page holds still while the
-/// finger is down; on release a type picker names the block — then, when
-/// the phone knows names for that type, the likeliest few for this range —
-/// and closing it discards the draft. Drawing from the now line is how a
-/// session starts now.
+/// Press and hold on empty time to draw a block — the phone's drag to
+/// create (`WristDraftMapping`). The hold shows a quarter-hour draft under
+/// the still finger with a click (`WristHold`); dragging then sets its
+/// other end. The page holds still while the finger is down; on release a
+/// type picker names the block — then, when the phone knows names for that
+/// type, the likeliest few for this range — and closing it discards the
+/// draft. Drawing from the now line is how a session starts now.
 ///
 /// Tap a block to select it: a card names it and offers its quick changes
 /// (+15 and Finish for the running one, the end a quarter hour earlier or
-/// later for the rest). Press and hold a block, then drag, to move it — or,
-/// pressed near its top or bottom edge, to resize that edge — the phone's
+/// later for the rest). Press and hold a block — it lifts with a click under
+/// the still finger — then drag to move it, or, pressed near its top or
+/// bottom edge, to resize that edge — the phone's
 /// edit on its day timeline (`WristBlockEdit`); the release sends the new
 /// range to the phone (`WristCommand.Kind.setRange`), shown at once and
 /// put back if the phone refuses it.
@@ -219,9 +221,6 @@ struct WristTodayView: View {
         var range: WristDraftMapping.Range
     }
     @State private var edit: Edit?
-    /// The hold under the finger has been read (a draft, an edit, a hint or
-    /// nothing): later samples of the same hold only follow the finger.
-    @State private var holdRead = false
     /// The release of an edit: the change it makes lands in the preview's
     /// place without a tween, as the phone's drop does.
     @State private var editLanding = false
@@ -262,9 +261,14 @@ struct WristTodayView: View {
     }
     @State private var ghosts: [Ghost] = []
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// True from the moment the hold is recognized until the finger lifts
-    /// (or the system takes the touch): the page does not scroll meanwhile.
-    @GestureState private var holding = false
+    /// True while a finger is on the day, until it lifts or the system
+    /// takes the touch.
+    @GestureState private var touching = false
+    /// The finger on the day, from touch-down: pending until it has been
+    /// held still long enough, then armed until it lifts.
+    @State private var hold: WristHold?
+    /// The hold has armed: the page does not scroll until the finger lifts.
+    private var holding: Bool { hold?.isArmed == true }
     /// How far the day is scrolled, to turn a touch on the scroll view into
     /// a point of the day.
     @State private var scrollY: CGFloat = 0
@@ -398,7 +402,16 @@ struct WristTodayView: View {
                     .padding(.bottom, bottomInset)
                 }
                 .scrollPosition($position)
-                .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { _, y in scrollY = y }
+                .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { _, y in
+                    scrollY = y
+                    if hold?.isPending == true { cancelHold { $0.scrolled(to: Double(y)) } }
+                }
+                // A pan the scroll view takes is no hold, however slowly the
+                // finger goes.
+                .onScrollPhaseChange { old, new in
+                    if hold != nil { WristGestureTrail.note("scroll \(old) → \(new)") }
+                    if new == .interacting, hold?.isPending == true { cancelHold { $0.scrollBegan() } }
+                }
                 .onScrollGeometryChange(for: CGSize.self, of: { CGSize(width: $0.containerSize.height, height: $0.contentSize.height) }) { _, size in
                     viewportHeight = size.width
                     contentHeight = size.height
@@ -408,7 +421,7 @@ struct WristTodayView: View {
                 // On the scroll view, not its content: any drag on the
                 // content takes every pan from the scroll view, while one
                 // here leaves it its scrolls until the hold is recognized.
-                .simultaneousGesture(createGesture(mapping, blocks: blocks, top: top, height: height))
+                .simultaneousGesture(holdGesture(mapping, blocks: blocks, top: top, height: height))
                 .simultaneousGesture(flickGesture)
                 .simultaneousGesture(
                     SpatialTapGesture().onEnded { value in
@@ -462,17 +475,26 @@ struct WristTodayView: View {
                 }
             }
         }
-        // Lifting the finger ends the drag the same way whether the gesture
-        // ended or was taken away: a drawn draft goes to the picker.
-        .onChange(of: holding) { _, isHolding in
-            if !isHolding {
+        // Lifting the finger ends the hold the same way whether the gesture
+        // ended or was taken away: a draft — drawn or only held — goes to
+        // the picker, a changed edit is sent.
+        .onChange(of: touching) { _, isTouching in
+            if !isTouching {
+                let armed = holding
+                let editChanged = edit.map {
+                    $0.range.start != $0.model.original.start || $0.range.end != $0.model.original.end
+                } ?? false
+                let release = WristHold.release(hasDraft: draft != nil, editChanged: editChanged)
+                WristGestureTrail.note("release armed=\(armed) phase=\(hold?.phase.name ?? "none") → \(release)")
+                hold = nil
                 fingerY = nil
-                if holdRead { holdEndedAt = Date() }
-                holdRead = false
-                if draft != nil { picking = true }
+                if armed { holdEndedAt = Date() }
+                if release == .pick {
+                    picking = true
+                    WristGestureTrail.note("picker shown \(draft.map { strings.timeRange($0.range.start, $0.range.end) } ?? "")")
+                }
                 if let current = edit {
-                    let original = current.model.original
-                    if current.range.start != original.start || current.range.end != original.end {
+                    if release == .sendEdit {
                         editLanding = true
                         onEditRange(current.occurrence, current.range.start, current.range.end)
                         // Should the edit change nothing on the page, the next
@@ -527,50 +549,121 @@ struct WristTodayView: View {
 #endif
     }
 
-    /// Hold, then drag. What the hold is on is read once the hold is
-    /// recognized and the first drag sample names where the finger went
-    /// down: empty time starts a draft at the press, a block the phone lets
-    /// the watch edit is grabbed (`WristBlockEdit` — its edge or the whole
-    /// block), any other block says why not. Each move after that sets the
-    /// finger's end; a click marks every new grid mark or block edge it
-    /// lands on.
-    private func createGesture(
+    /// Hold, then drag. A drag of no minimum distance follows the finger
+    /// from touch-down (the scroll view keeps its pans meanwhile); a timer
+    /// started then arms the hold if the finger has stayed within the slop
+    /// and the day has not scrolled (`WristHold`). Armed, the hold reads
+    /// what the press is on under the still finger: empty time starts a
+    /// draft at the press, a block the phone lets the watch edit is grabbed
+    /// (`WristBlockEdit` — its edge or the whole block), any other block
+    /// says why not. Each move after that sets the finger's end; a click
+    /// marks the hold and every new grid mark or block edge it lands on.
+    private func holdGesture(
         _ mapping: WristDraftMapping, blocks: [WristDayBlock], top: CGFloat, height: CGFloat
     ) -> some Gesture {
-        LongPressGesture(minimumDuration: 0.4, maximumDistance: 8)
-            .sequenced(before: DragGesture(minimumDistance: 0))
-            .updating($holding) { value, state, _ in
-                if case .second(true, _) = value { state = true }
-            }
+        DragGesture(minimumDistance: 0)
+            .updating($touching) { _, state, _ in state = true }
             .onChanged { value in
-                guard case .second(true, let drag?) = value else { return }
-                let dayY = { (y: CGFloat) in Double(y + scrollY - top) }
-                fingerY = drag.location.y
-                if let current = draft {
-                    let range = mapping.range(anchorY: current.anchorY, currentY: dayY(drag.location.y))
-                    guard range != current.range else { return }
-                    if range.moving.time != current.range.moving.time {
-                        WKInterfaceDevice.current().play(.click)
-                    }
-                    draft?.range = range
-                } else if let current = edit {
-                    let range = current.model.range(currentY: dayY(drag.location.y))
-                    guard range != current.range else { return }
-                    if range.moving.time != current.range.moving.time {
-                        WKInterfaceDevice.current().play(.click)
-                    }
-                    edit?.range = range
-                } else if !holdRead, !picking {
-                    holdRead = true
-                    let y = dayY(drag.startLocation.y)
-                    if let (block, frame) = blockHit(x: drag.startLocation.x, dayY: y, blocks: blocks, mapping: mapping, height: height) {
-                        grab(block, frame: frame, pressY: y, fingerY: dayY(drag.location.y), blocks: blocks, mapping: mapping)
-                    } else if mapping.isEmpty(atY: y, blocks: blocks) {
-                        draft = Draft(anchorY: y, range: mapping.range(anchorY: y, currentY: dayY(drag.location.y)))
-                        WKInterfaceDevice.current().play(.click)
-                    }
+                guard let current = hold else {
+                    // A touch while the picker is up starts nothing.
+                    guard !picking else { return }
+                    beginHold(at: value.startLocation, mapping: mapping, blocks: blocks, top: top, height: height)
+                    return
                 }
+                if current.isPending {
+                    cancelHold { $0.track(x: Double(value.location.x), y: Double(value.location.y)) }
+                    return
+                }
+                guard current.isArmed else { return }
+                follow(value.location, mapping: mapping, top: top)
             }
+    }
+
+    /// A finger went down on the day: note it, and start the hold's timer.
+    private func beginHold(
+        at location: CGPoint, mapping: WristDraftMapping, blocks: [WristDayBlock], top: CGFloat, height: CGFloat
+    ) {
+        let downAt = Date()
+        hold = WristHold(downAt: downAt, x: Double(location.x), y: Double(location.y), scroll: Double(scrollY))
+        WristGestureTrail.note(String(
+            format: "down x=%.0f y=%.0f dayY=%.0f scroll=%.0f",
+            Double(location.x), Double(location.y), Double(location.y + scrollY - top), Double(scrollY)
+        ))
+        DispatchQueue.main.asyncAfter(deadline: .now() + WristHold.duration) {
+            guard var current = hold, current.downAt == downAt, current.arm(at: Date()) else { return }
+            hold = current
+            armHold(current, mapping: mapping, blocks: blocks, top: top, height: height)
+        }
+    }
+
+    /// Applies `change` to the pending hold and notes why it was given up.
+    private func cancelHold(_ change: (inout WristHold) -> Void) {
+        guard var current = hold else { return }
+        let before = current.phase
+        change(&current)
+        guard current.phase != before else { return }
+        hold = current
+        if case .cancelled(let reason) = current.phase {
+            WristGestureTrail.note("cancel \(reason.rawValue) after \(Int(Date().timeIntervalSince(current.downAt) * 1000))ms")
+        }
+    }
+
+    /// The hold armed with the finger still where it went down: read what
+    /// it is on, and answer at once.
+    private func armHold(
+        _ hold: WristHold, mapping: WristDraftMapping, blocks: [WristDayBlock], top: CGFloat, height: CGFloat
+    ) {
+        guard !picking, draft == nil, edit == nil else { return }
+        let y = hold.downY + Double(scrollY - top)
+        let hit = blockHit(x: CGFloat(hold.downX), dayY: y, blocks: blocks, mapping: mapping, height: height)
+        let target = hit.map { block, frame in
+            WristHold.Target(
+                minY: Double(frame.minY), height: Double(frame.height),
+                editable: isEditable(block.occurrence),
+                canResizeTop: block.occurrence.start >= mapping.dayStart,
+                canResizeBottom: block.occurrence.end <= mapping.dayEnd
+            )
+        }
+        let reading = WristHold.read(pressY: y, target: target, emptyAtPress: mapping.isEmpty(atY: y, blocks: blocks), mapping: mapping)
+        fingerY = CGFloat(hold.downY)
+        switch reading {
+        case .draft(let range):
+            draft = Draft(anchorY: y, range: range)
+            WKInterfaceDevice.current().play(.click)
+            WristGestureTrail.note("armed draft \(strings.timeRange(range.start, range.end))")
+        case .grab(let mode):
+            guard let (block, frame) = hit else { return }
+            grab(block, frame: frame, mode: mode, pressY: y, blocks: blocks, mapping: mapping)
+            WristGestureTrail.note("armed grab \(mode) \(strings.timeRange(block.start, block.end))")
+        case .refused:
+            WKInterfaceDevice.current().play(.directionDown)
+            show(hint: takesRangeEdits ? strings.cannotMoveHere : strings.updatePhoneForEdits)
+            WristGestureTrail.note("armed refused")
+        case .nothing:
+            WristGestureTrail.note("armed nothing")
+        }
+    }
+
+    /// The finger moved while armed: the draft's or the edit's moving end
+    /// follows it.
+    private func follow(_ location: CGPoint, mapping: WristDraftMapping, top: CGFloat) {
+        let y = Double(location.y + scrollY - top)
+        fingerY = location.y
+        if let current = draft {
+            let range = mapping.range(anchorY: current.anchorY, currentY: y)
+            let step = range.moving.time != current.range.moving.time
+            WristGestureTrail.sample(String(format: "drag y=%.0f ", Double(location.y)) + strings.timeRange(range.start, range.end), step: step)
+            guard range != current.range else { return }
+            if step { WKInterfaceDevice.current().play(.click) }
+            draft?.range = range
+        } else if let current = edit {
+            let range = current.model.range(currentY: y)
+            let step = range.moving.time != current.range.moving.time
+            WristGestureTrail.sample(String(format: "drag y=%.0f ", Double(location.y)) + strings.timeRange(range.start, range.end), step: step)
+            guard range != current.range else { return }
+            if step { WKInterfaceDevice.current().play(.click) }
+            edit?.range = range
+        }
     }
 
     /// Whether the phone lets the watch change this block's range: not a
@@ -579,21 +672,13 @@ struct WristTodayView: View {
         takesRangeEdits && occurrence.quickActionsEnabled && !occurrence.isOpenEnded
     }
 
-    /// A hold on a block: grab it, or say why it stays put.
+    /// A hold on a block the watch may edit: grab its edge or the whole of
+    /// it, lifted under the still finger.
     private func grab(
-        _ block: WristDayBlock, frame: CGRect, pressY: Double, fingerY: Double,
+        _ block: WristDayBlock, frame: CGRect, mode: WristEditMode, pressY: Double,
         blocks: [WristDayBlock], mapping: WristDraftMapping
     ) {
         let occurrence = block.occurrence
-        guard isEditable(occurrence) else {
-            WKInterfaceDevice.current().play(.directionDown)
-            show(hint: takesRangeEdits ? strings.cannotMoveHere : strings.updatePhoneForEdits)
-            return
-        }
-        let mode = WristBlockEdit.mode(
-            pressY: pressY - Double(frame.minY), blockHeight: Double(frame.height),
-            canResizeTop: occurrence.start >= mapping.dayStart, canResizeBottom: occurrence.end <= mapping.dayEnd
-        )
         var day = mapping
         // Every other block's own edges — not the day's clipped ones, and
         // not a running timer's placeholder end.
@@ -604,7 +689,7 @@ struct WristTodayView: View {
             mapping: day, original: WristTimeSpan(start: occurrence.start, end: occurrence.end),
             mode: mode, anchorY: pressY
         )
-        edit = Edit(motionKey: block.motionKey, occurrence: occurrence, model: model, range: model.range(currentY: fingerY))
+        edit = Edit(motionKey: block.motionKey, occurrence: occurrence, model: model, range: model.range(currentY: pressY))
         selectedKey = block.motionKey
         WKInterfaceDevice.current().play(.click)
     }
@@ -631,7 +716,7 @@ struct WristTodayView: View {
     /// A tap selects the block under it (again, or on empty time, closes
     /// the card). The release of a hold is no tap.
     private func tap(at location: CGPoint, blocks: [WristDayBlock], mapping: WristDraftMapping, top: CGFloat, height: CGFloat) {
-        guard draft == nil, edit == nil, !picking, Date().timeIntervalSince(holdEndedAt) > 0.4 else { return }
+        guard draft == nil, edit == nil, !picking, !holding, Date().timeIntervalSince(holdEndedAt) > 0.4 else { return }
         let hit = blockHit(x: location.x, dayY: Double(location.y + scrollY - top), blocks: blocks, mapping: mapping, height: height)
         let key = hit.map(\.0.motionKey)
         withAnimation(.easeOut(duration: 0.15)) {
@@ -669,7 +754,7 @@ struct WristTodayView: View {
     private var flickGesture: some Gesture {
         DragGesture(minimumDistance: 12)
             .onEnded { value in
-                guard draft == nil, edit == nil, !picking, Date().timeIntervalSince(holdEndedAt) > 0.4 else { return }
+                guard draft == nil, edit == nil, !picking, !holding, Date().timeIntervalSince(holdEndedAt) > 0.4 else { return }
                 let dx = value.translation.width, dy = value.translation.height
                 let reach = max(abs(dx), abs(value.predictedEndTranslation.width))
                 guard abs(dx) > abs(dy) * 1.5, reach > 40 else { return }
@@ -1337,6 +1422,8 @@ struct WristStatsView: View {
 struct WristSettingsView: View {
     @Binding var zoomRaw: String
     @Binding var periodRaw: String
+    /// `WristGestureTrail`: off unless turned on here.
+    @AppStorage(WristGestureTrail.enabledKey) private var gestureLog = false
     let settings: WristStatsSettings
     let hasPhoneData: Bool
     /// The phone applies settings edits (`WristSnapshot.takesSettingsEdits`).
@@ -1370,6 +1457,18 @@ struct WristSettingsView: View {
                     ) {
                         periodRaw = Self.next(after: watchPeriod, in: periods)?.rawValue ?? ""
                     }
+                    Toggle(isOn: $gestureLog) {
+                        Text(strings.gestureLog)
+                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color(white: 0.16), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .onChange(of: gestureLog) { _, on in
+                        // Marks where a stretch of trail begins.
+                        if on { WristGestureTrail.note("log on") }
+                    }
+                    if gestureLog { note(strings.gestureLogNote) }
 
                     section(strings.settingsFromPhone).padding(.top, 6)
                     if hasPhoneData {

@@ -386,6 +386,7 @@
 		DRAFTMAP00000000000000B01 /* WristDraftMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DRAFTMAP00000000000000F01 /* WristDraftMappingTests.swift */; };
 		WSETCMD000000000000000B01 /* WristSettingsCommandTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WSETCMD000000000000000F01 /* WristSettingsCommandTests.swift */; };
 		WBLKEDIT00000000000000B01 /* WristBlockEditTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WBLKEDIT00000000000000F01 /* WristBlockEditTests.swift */; };
+		WHOLDTST00000000000000B01 /* WristHoldTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WHOLDTST00000000000000F01 /* WristHoldTests.swift */; };
 		WATCH000000000000000B015 /* WristStateReducerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F013 /* WristStateReducerTests.swift */; };
 		WATCH000000000000000B016 /* WristSnapshotBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F014 /* WristSnapshotBuilderTests.swift */; };
 		WATCH000000000000000B017 /* WristCommandApplierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F015 /* WristCommandApplierTests.swift */; };
@@ -395,6 +396,7 @@
 		WMOT00000000000000000B01 /* WristMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = WMOT00000000000000000F01 /* WristMotion.swift */; };
 		WMOT00000000000000000B02 /* WristMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = WMOT00000000000000000F01 /* WristMotion.swift */; };
 		WMOV00000000000000000B01 /* WristMotionViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = WMOV00000000000000000F01 /* WristMotionViews.swift */; };
+		WGTR00000000000000000B01 /* WristGestureTrail.swift in Sources */ = {isa = PBXBuildFile; fileRef = WGTR00000000000000000F01 /* WristGestureTrail.swift */; };
 		WOPT00000000000000000B01 /* WristOverlapParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WOPT00000000000000000F01 /* WristOverlapParityTests.swift */; };
 		WPET00000000000000000B01 /* WristParallelEventsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WPET00000000000000000F01 /* WristParallelEventsTests.swift */; };
 /* End PBXBuildFile section */
@@ -816,6 +818,7 @@
 		DRAFTMAP00000000000000F01 /* WristDraftMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristDraftMappingTests.swift; sourceTree = "<group>"; };
 		WSETCMD000000000000000F01 /* WristSettingsCommandTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristSettingsCommandTests.swift; sourceTree = "<group>"; };
 		WBLKEDIT00000000000000F01 /* WristBlockEditTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristBlockEditTests.swift; sourceTree = "<group>"; };
+		WHOLDTST00000000000000F01 /* WristHoldTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristHoldTests.swift; sourceTree = "<group>"; };
 		WATCH000000000000000F013 /* WristStateReducerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristStateReducerTests.swift; sourceTree = "<group>"; };
 		WATCH000000000000000F014 /* WristSnapshotBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristSnapshotBuilderTests.swift; sourceTree = "<group>"; };
 		WATCH000000000000000F015 /* WristCommandApplierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristCommandApplierTests.swift; sourceTree = "<group>"; };
@@ -824,6 +827,7 @@
 		WOVL00000000000000000F01 /* WristOverlap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristOverlap.swift; sourceTree = "<group>"; };
 		WMOT00000000000000000F01 /* WristMotion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristMotion.swift; sourceTree = "<group>"; };
 		WMOV00000000000000000F01 /* WristMotionViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristMotionViews.swift; sourceTree = "<group>"; };
+		WGTR00000000000000000F01 /* WristGestureTrail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristGestureTrail.swift; sourceTree = "<group>"; };
 		WOPT00000000000000000F01 /* WristOverlapParityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristOverlapParityTests.swift; sourceTree = "<group>"; };
 		WPET00000000000000000F01 /* WristParallelEventsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristParallelEventsTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -898,6 +902,7 @@
 				DRAFTMAP00000000000000F01 /* WristDraftMappingTests.swift */,
 				WSETCMD000000000000000F01 /* WristSettingsCommandTests.swift */,
 				WBLKEDIT00000000000000F01 /* WristBlockEditTests.swift */,
+				WHOLDTST00000000000000F01 /* WristHoldTests.swift */,
 				WATCHTTL0000000000000F02 /* WristTitleSuggestionTests.swift */,
 				WATCHTTL0000000000000F03 /* WristTitleBacktestTests.swift */,
 				WATCHSTB0000000000000F01 /* WristTitleStabilityTests.swift */,
@@ -1326,6 +1331,7 @@
 				WATCH000000000000000F009 /* WristRootView.swift */,
 				WATCH000000000000000F010 /* WristStrings.swift */,
 				WMOV00000000000000000F01 /* WristMotionViews.swift */,
+				WGTR00000000000000000F01 /* WristGestureTrail.swift */,
 				WATCH000000000000000F011 /* Assets.xcassets */,
 			);
 			path = DoneWatch;
@@ -1735,6 +1741,7 @@
 				DRAFTMAP00000000000000B01 /* WristDraftMappingTests.swift in Sources */,
 				WSETCMD000000000000000B01 /* WristSettingsCommandTests.swift in Sources */,
 				WBLKEDIT00000000000000B01 /* WristBlockEditTests.swift in Sources */,
+				WHOLDTST00000000000000B01 /* WristHoldTests.swift in Sources */,
 				WATCHTTL0000000000000B03 /* WristTitleSuggestionTests.swift in Sources */,
 				WATCHTTL0000000000000B04 /* WristTitleBacktestTests.swift in Sources */,
 				WATCHSTB0000000000000B01 /* WristTitleStabilityTests.swift in Sources */,
@@ -1920,6 +1927,7 @@
 				WATCH000000000000000B011 /* WristRootView.swift in Sources */,
 				WATCH000000000000000B012 /* WristStrings.swift in Sources */,
 				WMOV00000000000000000B01 /* WristMotionViews.swift in Sources */,
+				WGTR00000000000000000B01 /* WristGestureTrail.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

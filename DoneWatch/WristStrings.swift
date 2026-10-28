@@ -86,6 +86,11 @@ struct WristStrings {
         }
     }
     var statsOpensOn: String { isChinese ? "统计默认周期" : "Stats Opens On" }
+    /// The troubleshooting switch for `WristGestureTrail`.
+    var gestureLog: String { isChinese ? "手势日志" : "Gesture Log" }
+    var gestureLogNote: String {
+        isChinese ? "把今天页的按住和拖动记到手表上的文件里,供排查问题" : "Records Today's holds and drags to a file on this watch, for troubleshooting"
+    }
     /// The period choice that defers to the phone, naming what the phone
     /// chose: "跟随 iPhone(今天)" / "As iPhone (Today)".
     func followPhone(_ period: WristStatsPeriod) -> String {

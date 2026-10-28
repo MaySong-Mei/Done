@@ -372,6 +372,138 @@ nonisolated struct WristBlockEdit: Equatable, Sendable {
     }
 }
 
+/// A finger on the today page from touch-down to lift, as data. The hold is
+/// timed here rather than by a long-press gesture: a long press followed by
+/// a drag learns where the finger went down only from the drag's first
+/// sample, and a finger held still on the glass sends none — so a still
+/// hold drew nothing and played nothing. Kept within `slop` of where it
+/// went down for `duration`, with the day not scrolling under it, the touch
+/// arms and reads what it is on at once (`read`); moved further first, or
+/// scrolled, it is no hold and the scroll view keeps it.
+nonisolated struct WristHold: Equatable, Sendable {
+    /// The phone's event hold is a little shorter and its create hold a
+    /// little longer; this sits between them.
+    static let duration: TimeInterval = 0.4
+    /// How far a still finger may wander. Under a quarter hour at the
+    /// smallest zoom, so a drag of one grid step is never taken for
+    /// stillness, and as much as UIKit's own long press allows.
+    static let slop: Double = 10
+    /// How far the day may move under a pending hold before it counts as
+    /// scrolled: settling by a fraction of a point is not a scroll.
+    static let scrollTolerance: Double = 1
+    /// The hold timer and the wall clock round differently: a fire this
+    /// close to `duration` counts as on time.
+    static let timerLeeway: TimeInterval = 0.01
+
+    enum Phase: Equatable, Sendable {
+        case pending, armed, cancelled(Cancel)
+
+        /// For the gesture trail.
+        var name: String {
+            switch self {
+            case .pending: return "pending"
+            case .armed: return "armed"
+            case .cancelled(let reason): return "cancelled-\(reason.rawValue)"
+            }
+        }
+    }
+
+    enum Cancel: String, Equatable, Sendable {
+        case moved, scrolled
+    }
+
+    /// When and where (in the scroll view's points) the finger went down,
+    /// and how far the day was scrolled then.
+    let downAt: Date
+    let downX: Double
+    let downY: Double
+    let downScroll: Double
+    private(set) var phase: Phase = .pending
+
+    init(downAt: Date, x: Double, y: Double, scroll: Double) {
+        self.downAt = downAt
+        downX = x
+        downY = y
+        downScroll = scroll
+    }
+
+    var isPending: Bool { phase == .pending }
+    var isArmed: Bool { phase == .armed }
+
+    /// A later sample of the same touch. The phase only changes while the
+    /// hold is pending: once armed, the finger is drawing.
+    mutating func track(x: Double, y: Double) {
+        guard isPending, hypot(x - downX, y - downY) > Self.slop else { return }
+        phase = .cancelled(.moved)
+    }
+
+    /// The day is now scrolled to `offset`, or the scroll view began a pan.
+    mutating func scrolled(to offset: Double) {
+        guard isPending, abs(offset - downScroll) > Self.scrollTolerance else { return }
+        phase = .cancelled(.scrolled)
+    }
+
+    mutating func scrollBegan() {
+        guard isPending else { return }
+        phase = .cancelled(.scrolled)
+    }
+
+    /// The hold timer fired at `now`: a touch still pending arms once
+    /// `duration` has passed since it went down. True when it armed.
+    mutating func arm(at now: Date) -> Bool {
+        guard isPending, now.timeIntervalSince(downAt) >= Self.duration - Self.timerLeeway else { return false }
+        phase = .armed
+        return true
+    }
+
+    /// The block under the press, as the hold needs it: its top and height
+    /// in the day's points, and what the phone lets the watch do with it.
+    struct Target: Equatable, Sendable {
+        var minY: Double
+        var height: Double
+        var editable: Bool
+        var canResizeTop: Bool
+        var canResizeBottom: Bool
+    }
+
+    /// What an armed hold does with the finger still where it went down:
+    /// on empty time, a draft of the shortest length from the grid mark
+    /// nearest the press (the draw's own range with the finger not yet
+    /// moved, so the first drag step grows it from there); on a block the
+    /// watch may edit, a grab of its edge or the whole of it; on any other
+    /// block, a refusal.
+    enum Reading: Equatable, Sendable {
+        case draft(WristDraftMapping.Range)
+        case grab(WristEditMode)
+        case refused
+        case nothing
+    }
+
+    static func read(pressY: Double, target: Target?, emptyAtPress: Bool, mapping: WristDraftMapping) -> Reading {
+        if let target {
+            guard target.editable else { return .refused }
+            return .grab(WristBlockEdit.mode(
+                pressY: pressY - target.minY, blockHeight: target.height,
+                canResizeTop: target.canResizeTop, canResizeBottom: target.canResizeBottom
+            ))
+        }
+        guard emptyAtPress else { return .nothing }
+        return .draft(mapping.range(anchorY: pressY, currentY: pressY))
+    }
+
+    /// What lifting the finger does: a draft goes to the type picker —
+    /// moved or not — and an edit that changed the range is sent.
+    enum Release: Equatable, Sendable {
+        case pick, sendEdit, none
+    }
+
+    static func release(hasDraft: Bool, editChanged: Bool) -> Release {
+        if hasDraft { return .pick }
+        if editChanged { return .sendEdit }
+        return .none
+    }
+}
+
 /// The range the phone stores when the watch asks for `requested` in place
 /// of `original` — the same on both sides, so the watch shows at once what
 /// the phone will keep. An edge left where it was stays; one that moved is
