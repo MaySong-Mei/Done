@@ -690,9 +690,9 @@ enum FixObservationRegistry {
 /// as a fix regressing when the phone changed. Counter checks (tripwires,
 /// liveness) do not care which phone counted, and stay pooled.
 ///
-/// The major version, not the full string: a point release would restart
-/// a sample that grows by about one tap a day, and the measured shift was
-/// between majors. A version whose leading component is not a plain
+/// The major version, not the full string: the tap sample grows slowly,
+/// so restarting it at every point release would keep it under its floor,
+/// and the measured shift was between majors. A version whose leading component is not a plain
 /// integer keeps its whole string, so it never merges with a parsed one.
 struct FixWatchSegment: Hashable {
     enum OS: Hashable {
