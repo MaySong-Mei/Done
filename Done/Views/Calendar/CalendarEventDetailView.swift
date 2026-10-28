@@ -5711,21 +5711,32 @@ struct CalendarScrollTouchDelaySnapshot: Equatable {
 /// `content` is `CalendarScrollTouchDelaySnapshot.trailContent`.
 ///
 /// Two limits:
-/// - A probe whose changes repeat, in order, the contents the previous
-///   probe saw writes nothing; from its first change that differs it
-///   writes them all. So the first detail open after launch writes its
-///   lines, later opens of the same hierarchy write none, and an open that
-///   goes differently (a new shape, or the delay coming back on) writes
-///   from where it differs.
+/// - A probe stays silent while its changes repeat, in order, what the
+///   previous probe saw; from its first change that differs, or that goes
+///   past the end of what the previous probe recorded, it writes. A probe
+///   records only a bounded number of its own changes, so the comparison
+///   covers no more than that.
 /// - A probe writes at most `linesPerProbe` lines, then one line saying it
 ///   stopped, then nothing.
 ///
-/// Reading it: the first open after launch writes `delayingBefore=N`, then
-/// `delayingBefore=0` (the write held). A later line from any probe means
-/// that open differed from the one before it; a nonzero `delayingBefore`
-/// at `pass=` above 1 means something turned the delay back on after the
-/// probe had turned it off. A shape that never shows `delayingBefore=0`
-/// means the write is not holding at all.
+/// What that writes:
+/// - The first detail open after launch writes all its lines. A healthy
+///   open writes `delayingBefore=N`, then `delayingBefore=0` (the write
+///   held); later healthy opens of the same hierarchy write nothing.
+/// - An open with a new shape writes from its first change.
+/// - An open whose delay keeps coming back runs past what the previous
+///   probe recorded, so every such open writes its own capped run of lines,
+///   identical to the last one's when the problem is the same. Repeated
+///   runs mean the problem is still there.
+/// - An open whose changes are a prefix of the previous probe's writes
+///   nothing — including a healthy open after one whose delay kept coming
+///   back. Silence after a run of lines therefore does not mean the problem
+///   stopped; only a later run means it was still there.
+///
+/// Reading a line: a nonzero `delayingBefore` at a `pass=` past the first
+/// means something turned the delay back on after the probe had turned it
+/// off. A shape that never shows `delayingBefore=0` means the write is not
+/// holding at all.
 ///
 /// The remembered sequence is cleared with the trail
 /// (`DiagnosticTrail.clearGeneration`): it stands for lines that are in the
