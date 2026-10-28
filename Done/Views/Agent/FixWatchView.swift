@@ -177,14 +177,23 @@ struct FixWatchView: View {
 
             if let verdict {
                 ForEach(verdict.readouts) { readout in
-                    HStack(alignment: .top) {
-                        Text(readout.id)
-                            .font(.caption)
-                        Spacer(minLength: 8)
-                        Text("\(readout.measured) · \(readout.threshold)")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(readoutColor(readout))
-                            .multilineTextAlignment(.trailing)
+                    // Side by side when it fits; a segment-named report-only
+                    // row ("iPhone16,2 · iOS 26 · tap lag p50") is usually
+                    // too long for that, so it stacks instead of squeezing
+                    // both halves into a ragged wrap.
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .top) {
+                            readoutName(readout)
+                            Spacer(minLength: 8)
+                            readoutValue(readout)
+                                .multilineTextAlignment(.trailing)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            readoutName(readout)
+                            readoutValue(readout)
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                                .multilineTextAlignment(.trailing)
+                        }
                     }
                 }
                 Text("Release 天数 \(verdict.releaseDayCount) · 非 Release 记录 \(verdict.nonReleaseCount)(不参与判定)")
@@ -225,6 +234,19 @@ struct FixWatchView: View {
             .padding(.vertical, 2)
             .background(color.opacity(0.16), in: Capsule())
             .foregroundStyle(color)
+    }
+
+    private func readoutName(_ readout: FixMetricReadout) -> some View {
+        Text(readout.id)
+            .font(.caption)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func readoutValue(_ readout: FixMetricReadout) -> some View {
+        Text("\(readout.measured) · \(readout.threshold)")
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(readoutColor(readout))
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private func readoutColor(_ readout: FixMetricReadout) -> Color {
