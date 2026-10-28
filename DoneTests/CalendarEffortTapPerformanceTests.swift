@@ -1164,3 +1164,242 @@ final class CalendarColorDepthMirrorTests: XCTestCase {
         XCTAssertNil(store.rawCalendarEvents.first { $0.id == event.id })
     }
 }
+
+// MARK: - Independent QA: the TouchDelay trail line (feat/fixwatch-segment)
+
+/// Independent QA on the probe's trail line. The walk and the write are
+/// checked against a reference copy of the PRE-change loop over generated
+/// hierarchies; the line's de-duplication is checked on the shapes the
+/// implementer's tests do not build (a pass outside the window that would
+/// otherwise mask the first in-window line, a class change with equal
+/// counts, two probes, no scroll view at all, nested pagers).
+@MainActor
+final class CalendarScrollTouchDelayTrailQATests: XCTestCase {
+    private final class InnerA: UIScrollView {}
+    private final class InnerB: UIScrollView {}
+    private final class Pager: UIScrollView {}
+    private final class OuterPager: UIScrollView {}
+
+    override func setUp() {
+        super.setUp()
+        DiagnosticTrail.clear()
+    }
+
+    override func tearDown() {
+        DiagnosticTrail.clear()
+        super.tearDown()
+    }
+
+    private func window() -> UIWindow { UIWindow(frame: CGRect(x: 0, y: 0, width: 393, height: 852)) }
+
+    private func lines() -> [String] {
+        DiagnosticTrail.combinedText().split(separator: "\n")
+            .filter { $0.contains(" \(CalendarScrollTouchDelayProbe.trailCategory) ") }.map(String.init)
+    }
+
+    /// "gh201 probe#<n> …" → n
+    private func serial(_ line: String) -> Int? {
+        guard let range = line.range(of: "probe#") else { return nil }
+        return Int(line[range.upperBound...].prefix { $0.isNumber })
+    }
+
+    /// The pre-change loop, verbatim in effect: every scroll view from the
+    /// probe up to and including the first paging one; with no pager, the
+    /// nearest only; write `false` where it was `true`.
+    private func referenceWrittenSet(above view: UIView) -> [UIScrollView] {
+        var found: [UIScrollView] = []
+        var current = view.superview
+        while let candidate = current {
+            if let scroll = candidate as? UIScrollView {
+                found.append(scroll)
+                if scroll.isPagingEnabled { return found }
+            }
+            current = candidate.superview
+        }
+        return Array(found.prefix(1))
+    }
+
+    /// 300 generated chains (plain views and scroll views, random paging and
+    /// random initial delay, in a window or not): after one refresh every
+    /// scroll view's delay is exactly what the pre-change loop leaves —
+    /// off on the reference set, untouched everywhere else. Positive
+    /// controls: the generator does produce pager / no-pager / nested-pager
+    /// / outside-window shapes, and does leave delays ON above the bound.
+    func testTheWalkAndWriteMatchThePreChangeLoopOnGeneratedHierarchies() {
+        var seed: UInt64 = 0x5EED_F1C5
+        func next(_ bound: Int) -> Int {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return Int((seed >> 33) % UInt64(bound))
+        }
+        var sawPager = 0, sawNoPager = 0, sawNested = 0, sawOutside = 0, sawUntouchedAbove = 0
+        for _ in 0..<300 {
+            let depth = 1 + next(6)
+            var chain: [UIView] = []
+            for _ in 0..<depth {
+                if next(3) == 0 {
+                    chain.append(UIView())
+                } else {
+                    let scroll = [UIScrollView(), InnerA(), Pager(), OuterPager()][next(4)]
+                    scroll.isPagingEnabled = next(3) == 0
+                    scroll.delaysContentTouches = next(4) != 0
+                    chain.append(scroll)
+                }
+            }
+            if chain.count > 1 {
+                for index in 1..<chain.count { chain[index - 1].addSubview(chain[index]) }
+            }
+            let inWindow = next(2) == 0
+            let host = window()
+            if inWindow { host.addSubview(chain[0]) } else { sawOutside += 1 }
+
+            let scrolls = chain.compactMap { $0 as? UIScrollView }
+            let before = scrolls.map(\.delaysContentTouches)
+            let probe = CalendarScrollTouchDelayProbe.ProbeView()
+            let stand = UIView()
+            chain.last!.addSubview(stand)
+            let expected = referenceWrittenSet(above: stand)
+            stand.removeFromSuperview()
+            chain.last!.addSubview(probe)   // didMoveToSuperview (+ didMoveToWindow) run the refresh
+            probe.refreshTouchDelayIfNeeded()
+
+            let pagers = scrolls.filter(\.isPagingEnabled).count
+            if expected.contains(where: \.isPagingEnabled) { sawPager += 1 } else { sawNoPager += 1 }
+            if pagers > 1 { sawNested += 1 }
+            for (scroll, was) in zip(scrolls, before) {
+                let inSet = expected.contains { $0 === scroll }
+                XCTAssertEqual(scroll.delaysContentTouches, inSet ? false : was,
+                               "chain depth \(depth), in window \(inWindow), scroll in reference set \(inSet)")
+                if !inSet && was { sawUntouchedAbove += 1 }
+            }
+        }
+        XCTAssertGreaterThan(sawPager, 20)
+        XCTAssertGreaterThan(sawNoPager, 20)
+        XCTAssertGreaterThan(sawNested, 5)
+        XCTAssertGreaterThan(sawOutside, 20)
+        XCTAssertGreaterThan(sawUntouchedAbove, 20, "the generator must leave delays on outside the bound, or nothing is checked")
+    }
+
+    /// A pass outside the window must not count as trailed. Here the
+    /// pager's delay is already off, so the out-of-window pass and the
+    /// in-window pass see the same snapshot — if the out-of-window pass
+    /// were remembered, the in-window line would never be written.
+    func testAPassOutsideTheWindowIsNotRememberedAsTrailed() {
+        let pager = Pager()
+        pager.isPagingEnabled = true
+        pager.delaysContentTouches = false
+        let probe = CalendarScrollTouchDelayProbe.ProbeView()
+        pager.addSubview(probe)
+        probe.refreshTouchDelayIfNeeded()
+        XCTAssertEqual(lines(), [], "outside a window: no line")
+
+        let host = window()
+        host.addSubview(pager)
+        let written = lines()
+        XCTAssertEqual(written.count, 1, "\(written)")
+        XCTAssertTrue(written.first?.hasSuffix("found=1 paging=yes delayingBefore=0 views=Pager") ?? false, "\(written)")
+    }
+
+    /// Equal counts, different classes: the probe moves from one inner
+    /// scroll view to another of a different class under the same pager,
+    /// every delay already off. Only the class list changed — that is a
+    /// change, and the line names the new class.
+    func testAClassChangeWithEqualCountsWritesAgain() {
+        let host = window()
+        let pager = Pager()
+        pager.isPagingEnabled = true
+        let a = InnerA(), b = InnerB()
+        b.delaysContentTouches = false
+        host.addSubview(pager)
+        pager.addSubview(a)
+        pager.addSubview(b)
+        let probe = CalendarScrollTouchDelayProbe.ProbeView()
+        a.addSubview(probe)
+        probe.refreshTouchDelayIfNeeded()
+        XCTAssertEqual(lines().count, 2, "first pass delayingBefore=2, second 0: \(lines())")
+
+        b.addSubview(probe)   // moves it; didMoveToSuperview refreshes
+        probe.refreshTouchDelayIfNeeded()
+        let after = lines()
+        XCTAssertEqual(after.count, 3, "\(after)")
+        XCTAssertTrue(after.last?.hasSuffix("found=2 paging=yes delayingBefore=0 views=InnerB|Pager") ?? false, "\(after)")
+
+        // Positive control for "only on change": back and forth over the same
+        // shape twice more writes exactly one line per move, none per pass.
+        a.addSubview(probe); probe.refreshTouchDelayIfNeeded(); probe.refreshTouchDelayIfNeeded()
+        XCTAssertEqual(lines().count, 4)
+    }
+
+    /// Two probes keep their own numbers: every line of one probe carries
+    /// one number, and the two numbers differ.
+    func testTwoProbesNumberTheirLinesApart() throws {
+        let host = window()
+        let pagerA = Pager(), pagerB = Pager()
+        pagerA.isPagingEnabled = true
+        pagerB.isPagingEnabled = true
+        host.addSubview(pagerA)
+        host.addSubview(pagerB)
+        let first = CalendarScrollTouchDelayProbe.ProbeView()
+        let second = CalendarScrollTouchDelayProbe.ProbeView()
+        pagerA.addSubview(first)
+        first.refreshTouchDelayIfNeeded()
+        pagerB.addSubview(second)
+        second.refreshTouchDelayIfNeeded()
+        first.refreshTouchDelayIfNeeded()
+
+        let all = lines()
+        XCTAssertEqual(all.count, 4, "two lines per probe (delayingBefore 1, then 0): \(all)")
+        let serials = all.compactMap(serial)
+        XCTAssertEqual(serials.count, 4)
+        XCTAssertEqual(serials[0], serials[1], "one probe, one number: \(all)")
+        XCTAssertEqual(serials[2], serials[3])
+        XCTAssertNotEqual(serials[0], serials[2])
+        XCTAssertEqual(serials[2], serials[0] + 1, "numbered in construction order")
+    }
+
+    /// No scroll view at all above the probe, in a window: the line still
+    /// says so, with both lists empty.
+    func testNoScrollViewAtAllStillWritesAnHonestLine() {
+        let host = window()
+        let plain = UIView()
+        host.addSubview(plain)
+        let probe = CalendarScrollTouchDelayProbe.ProbeView()
+        plain.addSubview(probe)
+        let all = lines()
+        XCTAssertEqual(all.count, 1, "\(all)")
+        XCTAssertTrue(all.first?.hasSuffix("found=0 paging=no delayingBefore=0 views=- above=-") ?? false, "\(all)")
+    }
+
+    /// Nested pagers: the walk stops at the nearer one; the line carries no
+    /// `above=` (a pager was reached) and the outer pager keeps its delay.
+    func testNestedPagersStopAtTheNearerAndWriteNoAbove() {
+        let host = window()
+        let outer = OuterPager(), pager = Pager(), inner = InnerA()
+        outer.isPagingEnabled = true
+        pager.isPagingEnabled = true
+        host.addSubview(outer)
+        outer.addSubview(pager)
+        pager.addSubview(inner)
+        let probe = CalendarScrollTouchDelayProbe.ProbeView()
+        inner.addSubview(probe)
+        let first = lines().first ?? ""
+        XCTAssertTrue(first.hasSuffix("found=2 paging=yes delayingBefore=2 views=InnerA|Pager"), first)
+        XCTAssertFalse(first.contains("above="), first)
+        XCTAssertTrue(outer.delaysContentTouches, "nothing above the first pager is written")
+        XCTAssertFalse(pager.delaysContentTouches)
+    }
+
+    /// The line carries only class names, counts and flags — measured here
+    /// as its byte length too, for the trail-volume estimate (printed).
+    func testTheLineIsShortAndCarriesNoFreeText() {
+        let host = window()
+        let pager = Pager(); pager.isPagingEnabled = true
+        let inner = InnerA()
+        host.addSubview(pager); pager.addSubview(inner)
+        let probe = CalendarScrollTouchDelayProbe.ProbeView()
+        inner.addSubview(probe)
+        for line in lines() {
+            print("QA TouchDelay line bytes=\(line.utf8.count + 1): \(line)")
+            XCTAssertLessThan(line.utf8.count, 200, line)
+        }
+    }
+}
