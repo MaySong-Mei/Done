@@ -83,13 +83,18 @@ final class SpikeRegistryTests: XCTestCase {
 
     /// Fix Watch migration boundary, pinned as a positive AND a negative:
     /// exactly the two measurement spikes migrated; the three feature
-    /// spikes (#165/#192/#198) and every `.featureToggle` entry stayed on
-    /// the spike branch.
+    /// spikes (#165/#192/#198) stayed on the spike branch. The one
+    /// `.featureToggle` entries are the delete- and create-motion spikes
+    /// born on king.
     func testTheRegistryCarriesExactlyTheTwoMigratedMeasurementSpikes() {
-        XCTAssertEqual(SpikeRegistry.all.map(\.id), ["detail-perf-195", "effort-tap-201"])
-        XCTAssertTrue(SpikeRegistry.all.allSatisfy { $0.kind == .measurement })
-        XCTAssertTrue(SpikeRegistry.all.allSatisfy { $0.variants.isEmpty },
+        let measurement = SpikeRegistry.all.filter { $0.kind == .measurement }
+        XCTAssertEqual(measurement.map(\.id), ["detail-perf-195", "effort-tap-201"])
+        XCTAssertTrue(measurement.allSatisfy { $0.variants.isEmpty },
                       "the #201 experiment variants were deliberately not migrated")
+        XCTAssertEqual(
+            SpikeRegistry.all.filter { $0.kind == .featureToggle }.map(\.id),
+            [EventDeletionMotionFlag.spikeID, EventCreationMotionFlag.spikeID, EventResizeTweenFlag.spikeID]
+        )
     }
 
     /// The key contract between the harness detail page and the arming

@@ -274,3 +274,121 @@ build 4 之后两周零 archive。期间四条分支各自跑完独立验证循�
 - **打包**：DerivedData `/Volumes/AgentAPFS/claude-build-cache/b11-rel-dd`，archive 一次成功。
 - **装机重点**：见 RELEASE_CHECK 顶部「build 11 装机重点」。
 - **上传 TestFlight 是用户动作。**
+
+## 节点 17 — build 12（2026-10-25）：Apple Watch app + 遥测底盘 + 删除动效
+
+- **来源**：`release/build12` @ `27655ae`（bump 在 king `bbe6519` 之上；含手表 merge `799040f`、遥测 gh#273、删除动效 merge `1f6899c`；含安全修复 `2e93cab`）。archive `~/Library/Developer/Xcode/Archives/2026-10-25/Done build12.xcarchive`，0.5.0 · 12，93M，本地时间 17:27。
+- **相对 build 11 新增**：Apple Watch app（gh#274，第一次上真机）；遥测底盘（gh#273，默认关）；时间线删除动效（默认溶解）。
+- **身份门**：app / widget / watch 三个 Info.plist 都是 0.5.0 / 12 ✅（手表与 iOS build 号一致，App Store 校验要求）；手表 `WKCompanionAppBundleIdentifier` = `wordless.shiqiliuyifanmei.app` ✅；`LUwM3K` ×0/×0/×0 ✅；JWT 形状 ×0/×0/×0 ✅；`sb_secret_` ×0/×0/×0 ✅；`sb_publishable_` app ×1、widget ×0、watch ×0 ✅；`SYNC_DEBUG_SESSION` ×0 ✅；手表 DEBUG 驱动参数 `wristAutoStart` ×0 ✅；签名 Apple Development: Yifan Mei (68QDD6QY34)，`codesign --verify --deep --strict` 通过。
+- **导出预演**：`-exportArchive` method app-store-connect、destination export 成功；自动签名为新 bundle id `…watchkitapp` 生成了 App Store 分发 profile，手表 app 由 Apple Distribution 签名。上传时不应再卡签名。
+- **验证**：全量 3032 / 16 断言失败（4 个测试）/ 2 skip，iPhone 17 Pro 模拟器。4 个失败均为 SyncApplierTests ×2、SyncCatchUpTests ×2 的「shared token state is empty」夹具守卫：测试依赖模拟器上 app 容器里的真实 token 推断状态，分支点 fd92618 同样红，非产品问题。手表 wrist 套件 87/87，配对模拟器端到端七轮。
+- **打包**：DerivedData `/Volumes/AgentAPFS/claude-build-cache/b12/rel-dd`，archive 一次成功。
+- **装机重点**：见 RELEASE_CHECK 顶部「build 12 装机重点」。
+- **上传 TestFlight 是用户动作。**
+
+## 节点 18 — build 13（2026-10-25）：手表当天视图
+
+- **来源**：`release/build13` @ `d7c7167`（bump 在 king `a410b3e` 之上 = build 12 + 手表当天视图 merge；含安全修复 `2e93cab`）。archive `~/Library/Developer/Xcode/Archives/2026-10-25/Done build13.xcarchive`，0.5.0 · 13，95M，本地时间 18:58。
+- **相对 build 12 新增**：手表三页（记录 / 今天时间轴 / 统计），统计复用小组件 payload；快照体积阶梯 ≤ 60,000 B。
+- **身份门**：app / widget / watch 三个 Info.plist 都是 0.5.0 / 13 ✅；`LUwM3K` ×0/×0/×0 ✅；JWT 形状 ×0 ✅；`sb_secret_` ×0 ✅；`sb_publishable_` app ×1、widget ×0、watch ×0 ✅；`SYNC_DEBUG_SESSION` ×0 ✅；手表调试参数（`wristAutoStart` / `wristPage`）×0 ✅；`codesign --verify --deep --strict` 通过；`-exportArchive` app-store-connect 预演成功。
+- **验证**：全量 3053 / 16 断言失败（4 个测试）/ 2 skip，iPhone 17 Pro 模拟器；4 个失败与 build 12 相同（SyncApplierTests ×2、SyncCatchUpTests ×2 夹具读模拟器上的真实 token 推断状态，非产品问题）。手表套件 115/115。
+- **打包**：DerivedData `/Volumes/AgentAPFS/claude-build-cache/b13/rel-dd`，archive 一次成功。
+- **装机重点**：见 RELEASE_CHECK 顶部「build 13 装机重点」。
+- **上传 TestFlight 是用户动作。**
+
+
+## 节点 19 — build 14（2026-10-25）：手表观感与滚动统计口径
+
+- **来源**：`release/build14` @ `dffc108`（bump 在 king `fd782be` + merge `e2855ab` 之上）。archive `~/Library/Developer/Xcode/Archives/2026-10-25/Done build14.xcarchive`，0.5.0 · 14，95M，本地时间 23:33。
+- **相对 build 13 新增**：手表三页统一框架（时钟行信息 + 浅磨砂玻璃、无大标题、白字、手机配色）；统计口径今天 / 近 3 / 7 / 30 天点按切换；小组件 payload 往前写到 30 天前，快照阶梯 30 天 → 7 天 → 3 天 → 无统计。
+- **身份门**：app / widget / watch 三个 Info.plist 都是 0.5.0 / 14 ✅；`LUwM3K` ×0/×0/×0 ✅；JWT 形状 ×0 ✅；`sb_secret_` ×0 ✅；`sb_publishable_` app ×1、widget ×0、watch ×0 ✅；`SYNC_DEBUG_SESSION` ×0 ✅；手表调试参数（`wristAutoStart` / `wristPage` / `wristStatsPeriod`）×0 ✅；`codesign --verify --deep --strict` 通过；`-exportArchive` app-store-connect 预演成功。
+- **验证**：全量 3055 / 0 失败 / 2 skip，专用 iPhone 17 Full 模拟器先 erase（build 13 的 4 个同步夹具红在干净机上不出现）。
+- **打包**：DerivedData `/Volumes/AgentAPFS/claude-build-cache/b14/rel-dd`，archive 一次成功。
+- **装机重点**：见 RELEASE_CHECK 顶部「build 14 装机重点」。
+- **上传 TestFlight 是用户动作。**
+
+## 节点 20 — build 15（2026-10-26）：创建动效 + 膨胀破裂 + 周视图圆角
+
+- **来源**：`release/build15` @ `014cc5f`（bump 在 king `ffd0167` 之上 = build 14 + 创建动效 / 膨胀破裂 merge + 周视图圆角 `56f358a`）。archive `~/Library/Developer/Xcode/Archives/2026-10-26/Done build15.xcarchive`，0.5.0 · 15，96M，本地时间 00:47。build 14 未上传，被本版取代。
+- **身份门**：app / widget / watch 三个 Info.plist 都是 0.5.0 / 15 ✅；`LUwM3K` ×0/×0/×0 ✅；JWT 形状 ×0 ✅；`sb_secret_` ×0 ✅；`sb_publishable_` app ×1、widget ×0、watch ×0 ✅；`SYNC_DEBUG_SESSION` ×0 ✅；手表调试参数 ×0 ✅；`codesign --verify --deep --strict` 通过；`-exportArchive` app-store-connect 预演成功。
+- **验证**：全量 3099 / 0 失败 / 2 skip，专用 iPhone 17 Full 模拟器先 erase。
+- **打包**：DerivedData `/Volumes/AgentAPFS/claude-build-cache/b15/rel-dd`，archive 一次成功。
+- **装机重点**：见 RELEASE_CHECK 顶部「build 15 装机重点」。
+- **上传 TestFlight 是用户动作。**
+
+## 节点 21 — build 16（2026-10-26）：调时长补帧 + 创建动效点保存即播
+
+- **来源**：`release/build16` @ `5374acd`（bump 在 king `5157670` + `b62e375` 之上 = build 15 + 调时长补帧 merge + 创建动效点保存即播）。archive `~/Library/Developer/Xcode/Archives/2026-10-26/Done build16.xcarchive`，0.5.0 · 16，96M。build 15 若未上传，被本版取代。
+- **身份门**：app / widget / watch 三个 Info.plist 都是 0.5.0 / 16 ✅；`LUwM3K` ×0/×0/×0 ✅；JWT 形状 ×0 ✅；`sb_secret_` ×0 ✅；`sb_publishable_` app ×1、widget ×0、watch ×0 ✅；`SYNC_DEBUG_SESSION` ×0 ✅；手表调试参数 ×0 ✅；`codesign --verify --deep --strict` 通过；`-exportArchive` app-store-connect 预演成功。
+- **验证**：全量 3105 / 0 失败 / 2 skip（king `76a49b6` 合并树），专用 iPhone 17 模拟器先 erase。
+- **打包**：DerivedData `/Volumes/AgentAPFS/claude-build-cache/b16/rel-dd`，archive 一次成功。
+- **装机重点**：见 RELEASE_CHECK 顶部「build 16 装机重点」。
+- **上传 TestFlight 是用户动作。**
+
+## 节点 22 — build 17（2026-10-27）：手表修复 + 拖拽建块 + 名字推荐 + 手表设置
+
+- **来源**：`release/build17-candidate` @ `82b2c80`（king `74e07cf` = build 16 之上 merge 手表分支 `f3df873` + 审查修复 `21ae787` + bump）。archive `~/Library/Developer/Xcode/Archives/2026-10-27/Done build17.xcarchive`，0.5.0 · 17，98M，本地时间 00:07。
+- **相对 build 16 新增**：手表计时页每帧重绘修复（真机「删除后卡死」的根因）；手表开始按 15 分钟吸附；今天页长按拖拽建块；按时段/时长/星期/前后事件/距首条记录推荐名字；设置 → Apple Watch（默认口径、重叠算法、计入类型）。
+- **审查**：独立审查无 ship-blocker；三条 should-fix（名字表序号两端不一致、重复事件不进邻居、已结束系列不衰减）已修并各配回归测试，旧代码下 4 处断言失败。余下 nit 见 RELEASE_CHECK。
+- **身份门**：app / widget / watch 三个 Info.plist 都是 0.5.0 / 17 ✅；`LUwM3K` ×0/×0/×0 ✅；JWT 形状 ×0 ✅；`sb_secret_` ×0 ✅；`sb_publishable_` app ×1、widget ×0、watch ×0 ✅；`SYNC_DEBUG_SESSION` ×0 ✅；手表全部调试参数 ×0 ✅；`codesign --verify --deep --strict` 通过；`-exportArchive` app-store-connect 预演成功。
+- **验证**：全量 3173 / 0 失败 / 2 skip，专用 iPhone 17 Full 模拟器先 erase。
+- **上传 TestFlight 是用户动作。**
+
+## 节点 23 — build 18（2026-10-27）：手表今天页放大 + 拖拽边缘滚动
+
+- **来源**：`release/build18` @ `712b965`（king `c60dff0` = build 17 + `feat/watch-timeline-scale` + bump）。archive `~/Library/Developer/Xcode/Archives/2026-10-27/Done build18.xcarchive`，0.5.0 · 18，98M，本地时间 00:35。
+- **相对 build 17 新增**：手表今天页一小时 64pt（原 34pt），块显示名字 + 时间，打开以现在居中；拖拽建块到上下边缘自动滚动；邻块吸附 8pt。
+- **身份门**：三个 Info.plist 0.5.0 / 18 ✅；`LUwM3K` / JWT / `sb_secret_` / `SYNC_DEBUG_SESSION` / 手表调试参数 ×0 ✅；`sb_publishable_` 仅 app ×1 ✅；codesign 通过；`-exportArchive` 预演成功。
+- **验证**：全量 3173 / 0 失败 / 2 skip（专用机先 erase）；手表 177/0；模拟器实测边缘滚动（5–8 点 → 8–11 点，块 06:45–11:30）。
+- **上传 TestFlight 是用户动作。**
+
+## 节点 24 — build 19（2026-10-27）：手表今天页左右切换修复
+
+- **来源**：`release/build19` @ `e8dd377`（king `a952daf` = build 18 + `feat/watch-timeline-scale` 的 `171278a` / `88a89c7` + bump）。archive `~/Library/Developer/Xcode/Archives/2026-10-27/Done build19.xcarchive`，0.5.0 · 19，98M，本地时间 01:43。
+- **相对 build 18**：今天页任何拖动手势都会让分页 TabView 不翻页（模拟器短滑 0/6，去掉手势 6/6）——改为今天页自己识别横向快滑翻页（快慢两向均 100%，竖滚/拖拽建块不受影响）；边缘滚动计时器只在按住时运行（空闲 CPU 0.3% → 0.0%）。
+- **身份门**：三个 Info.plist 0.5.0 / 19 ✅；密钥 / 调试参数 ×0 ✅；`sb_publishable_` 仅 app ×1 ✅；codesign 通过；export 预演成功。
+- **验证**：全量 3173 / 0 失败 / 2 skip（专用机先 erase）。
+- **上传 TestFlight 是用户动作。**
+
+
+## 节点 25 — build 20（2026-10-27）：遥测打开即传 + 观察站即数据收集
+
+- **来源**：`release/build20`（bump 在 king `c3c9fbd` 之上 = build 19 + 遥测「打开即传」修复 `6be4251` + §16 观察站即数据收集 `feat/telemetry-observatory-r2` 与服务端 017）。archive `~/Library/Developer/Xcode/Archives/2026-10-27/Done build20.xcarchive`，0.5.0 · 20，98M，本地时间 10:19。
+- **相对 build 19**：打开「分享性能与使用统计」即上传（修 build 17 起的两个原因：同意时新日记录未写盘；整秒存储 vs 带毫秒的同意时刻）；开关 / 状态 / 立即上传挪到观察站页面；TestFlight 包默认开并补传带账号的历史，App Store 包默认关；观察站卡片读云端本账号 60 天，离线回退；状态行重启后保留。
+- **身份门**：app / widget / watch 三个 Info.plist 0.5.0 / 20 ✅；`LUwM3K` ×0/×0/×0 ✅；JWT 形状 ×0 ✅；`sb_secret_` ×0 ✅；`sb_publishable_` app ×1、widget ×0、watch ×0 ✅；`SYNC_DEBUG_SESSION` ×0 ✅；**`TELEMETRY_FAKE_TESTFLIGHT` ×0 ✅**（新增项：DEBUG-only 的 TestFlight 模拟开关不得进 Release）；`SYNC_OFFLINE_FILE` ×0 ✅；手表调试参数 ×0 ✅；遥测字符串在包内（`default.testflight_on`、`resolution=merge-duplicates`、`Source: cloud` 各 ×1）；`codesign --verify --deep --strict` 通过；`-exportArchive` app-store-connect 预演成功（Done.ipa 16.9M）。
+- **验证**：全量 3221 / 0 失败 / 2 skip（king `c3c9fbd`，专用机先 erase）；staging 真实界面 QA 五场景（qa-a / qa-b）全过；服务端 016 / 017 已在生产。
+- **打包**：DerivedData `/Volumes/AgentAPFS/claude-build-cache/b20/rel-dd`，archive 一次成功。
+- **装机重点**：见 RELEASE_CHECK 顶部「build 20 装机重点」。
+- **上传 TestFlight 是用户动作。**
+
+## 节点 26 — build 21（2026-10-27）：TestFlight 识别修复
+
+- **来源**：`release/build21`（bump 在 king `fc1ecff` 之上 = build 20 + TestFlight 识别修复）。archive `~/Library/Developer/Xcode/Archives/2026-10-27/Done build21.xcarchive`，0.5.0 · 21，98M，本地时间 11:21。
+- **相对 build 20**：build 20 真机诊断轨迹 `environment=unknown(StoreKit.StoreKitError#1)`——StoreKit 识别 TestFlight 在真机抛错，按 App Store 规则处理，没补传历史。现在先看收据文件名（`sandboxReceipt` → TestFlight，`receipt` → App Store），模拟器视为开发包，最后才问 StoreKit；StoreKit 失败写明具体错误；每次启动记 `environment.source=…`。
+- **身份门**：三个 Info.plist 0.5.0 / 21 ✅；`LUwM3K` / JWT 形状 / `sb_secret_` / `SYNC_DEBUG_SESSION` / `TELEMETRY_FAKE_TESTFLIGHT` / `SYNC_OFFLINE_FILE` / 手表调试参数 均 ×0 ✅；`sb_publishable_` 仅 app ×1 ✅；`environment.source=` 在包内（`sandboxReceipt` 为 14 字节短字符串，编进指令，grep 不到属正常）；codesign 通过；export 预演成功。
+- **验证**：全量 3226 / 0 失败 / 2 skip（king `fc1ecff`，专用机先 erase）；独立 review 无 P0。
+- **验收判据（真机）**：轨迹出现 `environment.source=receipt` 与 `environment=testflight`；生产库出现本机同意时刻之前、build 13 以后的带账号补传行。
+- **上传 TestFlight 是用户动作。**
+## 节点 27 — build 22（2026-10-27）：手表 今天 | 统计 | 设置
+
+- **来源**：`release/build22` @ `e28408a`（`release/build21` `3e7ffd9` + merge `feat/watch-settings-page` `42702cb` + bump）。archive `~/Library/Developer/Xcode/Archives/2026-10-27/Done build22.xcarchive`，0.5.0 · 22，99M，本地时间 11:35。
+- **相对 build 21 新增**：去掉记录页，今天页底部计时条（+15 / ✓ / 捏两下）；草稿半透明、现在线在最上；手表设置页（缩放 44/64/88、默认口径、重叠算法与排除背景写回手机）；计时条放在页面之上避免每帧重绘。
+- **身份门**：三个 Info.plist 0.5.0 / 22 ✅；密钥 / 调试参数 ×0 ✅；`sb_publishable_` 仅 app ×1 ✅；codesign 通过；export 预演成功。
+- **验证**：全量 3239 / 0 失败 / 2 skip（专用机先 erase）；手表 190/0；模拟器 QA 见 RELEASE_CHECK。
+- **上传 TestFlight 是用户动作。**
+
+## 节点 28 — build 23（2026-10-27）：手表名字推荐必到 + 并行事件 / 动效与手机一致
+
+- **来源**：`release/build23` @ `4f3cd0f`（king `f7e46d5` = build 22 + merge `feat/watch-render-parity` + `fix/watch-title-stability` + bump）。archive `~/Library/Developer/Xcode/Archives/2026-10-27/Done build23.xcarchive`，0.5.0 · 23，101M，本地时间 19:38。
+- **相对 build 22**：名字不再因快照超限整份丢弃（≥20 块/天时 0/11 → 11/11）、顺序更稳；并行事件按手机规则排（1500 随机日 11324 块 0 差异）、插入事件画在父块上、计时条选段与专注模式一致；创建 / 删除 / 补帧动效跟手机开关。
+- **验证**：全量第一轮 3272 中 177 处失败，全在 Telemetry*（`SpikeRunStore.finishRun` 写盘失败「seed must land」）；单独跑 69/0；同机 erase 重跑全量 3272 / 0 失败 / 2 skip。判为环境：swap 12GB、内置盘剩 5GB 时写盘失败，非本次改动（遥测代码与 king 一致）。手表测试 240/0。
+- **身份门**：三个 Info.plist 0.5.0 / 23 ✅；密钥 / 调试参数 ×0 ✅；`sb_publishable_` 仅 app ×1 ✅；codesign 通过；export 预演成功。
+- **上传 TestFlight 是用户动作。**
+
+## 节点 29 — build 24（2026-10-28）：手表点块卡片 + 长按拖拽移动 / 改时长
+
+- **来源**：`release/build24` @ `86d1e31`（king `5407a5f` = build 23 + merge `feat/watch-block-edit` `689fb2c` + bump）。archive `~/Library/Developer/Xcode/Archives/2026-10-28/Done build24.xcarchive`，0.5.0 · 24，103M，本地时间 00:34。
+- **相对 build 23**：点块高亮 + 卡片（计时中 +15 / 结束；其他 结束 ±15；重复 / 计时器提示在 iPhone 调整）；长按块拖动移动或改上下沿（15 分格 + 邻边吸附、最短 15 分、边缘滚动），新命令 `setRange`，旧手机由 `takesRangeEdits` 标志判断、手表不发。
+- **身份门**：三个 Info.plist 0.5.0 / 24 ✅；密钥 / 调试参数 ×0 ✅；`sb_publishable_` 仅 app ×1 ✅；codesign 通过；export 预演成功。
+- **验证**：全量 3292 / 0 失败 / 2 skip（专用机先 erase，一轮过）；手表 241/0；模拟器 QA 表见分支报告。
+- **上传 TestFlight 是用户动作。**

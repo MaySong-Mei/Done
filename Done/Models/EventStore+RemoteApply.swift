@@ -33,16 +33,37 @@ extension EventStore {
     /// same in-memory step `deleteCalendarEvent` / `deleteRecurringCalendarEvent
     /// (scope: .all)` take, without staging any image file.
     func applyRemoteCalendarRows(adopts: [Event], deletions: [Event]) {
+        markRemoteCreations(adopts)
         if !adopts.isEmpty {
             rawCalendarEvents = Self.replacingOrAppending(rawCalendarEvents, with: adopts)
         }
         for event in deletions {
+            EventDeletionMotionRegistry.shared.mark(
+                event.isRecurringSeries ? recurringDeletionMotionIDs(series: event) : [event.id],
+                source: .remote
+            )
             if event.isRecurringSeries {
                 removeRecurringSeriesInMemory(event, occurrenceDay: Self.cascadeDay(for: event), stageAssets: false)
             } else {
                 removeCalendarEventInMemory(forDeletionOf: event)
             }
         }
+    }
+
+    /// Rows this device has never seen were created elsewhere — unless the
+    /// page is an import (first sync, restore), or the row is an exception
+    /// instance, which an edit of a series occurrence mints.
+    private func markRemoteCreations(_ adopts: [Event]) {
+        let registry = EventCreationMotionRegistry.shared
+        guard !adopts.isEmpty, registry.isEnabled() else { return }
+        let known = Set(rawCalendarEvents.map(\.id))
+        let arrivals = adopts.filter { !known.contains($0.id) && $0.recurrenceParentId == nil }
+        guard !arrivals.isEmpty else { return }
+        guard arrivals.count <= EventCreationMotionRegistry.maxRemoteArrivals else {
+            EventCreationMotionLog.append("skip remote arrivals=\(arrivals.count) reason=import")
+            return
+        }
+        registry.mark(arrivals.map(\.id), source: .remote)
     }
 
     /// Step 3 of the delete cascade for one remote tombstone, in memory:

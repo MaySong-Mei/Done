@@ -53,6 +53,13 @@ regexes = [
   # allowlist's own opening comment is about.
   '''^dk_deadbeef[a-f0-9]*$''',
   '''^sb_secret_[A-Za-z0-9]{1,15}$''',
+  # Telemetry metric names in done-mcp/supabase/telemetry/key_registry.json
+  # (gh#273): entries are `{"key": "<metricName>", "kind": …}`, and the
+  # generic-api-key rule reads `"key": "wP95FrameDeltaMs"` as a credential.
+  # Anchored to the registry's naming — a lowercase family letter, then a
+  # camel-case name ending in a unit — not to the file, so a real key pasted
+  # into the registry would still be caught.
+  '''^w[A-Z][A-Za-z0-9]*(Ms|Count)$''',
 ]
 
 paths = [

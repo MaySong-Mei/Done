@@ -61,6 +61,16 @@ final class AppSettingsResettableKeysTests: XCTestCase {
         )
     }
 
+    // MARK: - Membership: telemetry (gh#273)
+
+    func testTelemetryEnabledByDefaultKeyIsResettable() {
+        XCTAssertTrue(
+            AppSettingsKeys.resettableUserDefaultsKeys
+                .contains(AppSettingsKeys.telemetryEnabledByDefault),
+            "telemetryEnabledByDefault left resettableUserDefaultsKeys — an erased phone keeps \"ON by the TestFlight default\" for the next account, and the App Store build would read the previous owner's switch as a default to withdraw"
+        )
+    }
+
     // MARK: - Behaviour: the production reset loop clears seeded junk
 
     /// Seeds junk celebration state and drives `removeResettableKeys(from:)`,

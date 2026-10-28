@@ -57,7 +57,7 @@ struct AddToCalendarView: View {
                         var calEvent = event
                         calEvent.id = UUID()
                         calEvent.timeRanges = [range]
-                        store.addCalendarEvent(calEvent)
+                        store.addCalendarEvent(calEvent, creationMotion: .local)
                         dismiss()
                     }
                 }

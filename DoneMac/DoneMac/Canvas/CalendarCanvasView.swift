@@ -463,7 +463,7 @@ struct DayColumnView: View {
 
     /// The phone's drag-to-create draft (CalendarDayLayerView
     /// .renderCreationPreview): the now-line color at 0.15 fill under a 0.6
-    /// centered 1.2pt stroke, a normal block's 4pt continuous corners, in the
+    /// centered stroke, a normal block's continuous corners, in the
     /// column the overlap pass gave it, with the block's title and time row.
     /// It also stays up as the form-open ghost while the create form is open.
     private func creationPreview(_ overlay: DragController.Overlay, size: CGSize) -> some View {
@@ -472,7 +472,9 @@ struct DayColumnView: View {
         let width = max(1, size.width * slot.widthFraction - 2)
         let height = max(0, size.height * overlay.heightFraction)
         let color = colorScheme == .dark ? Color.white : Color(white: 0.22)
-        let shape = RoundedRectangle(cornerRadius: 4, style: .continuous)
+        let shape = RoundedRectangle(
+            cornerRadius: calendarEventBlockCornerRadius(isInterrupt: false, isWeekMode: isWeekMode),
+            style: .continuous)
         let insets = calendarEventBlockInsets(isWeekMode: isWeekMode, isThreeDayMode: isThreeDayMode)
         let spacing = calendarEventBlockTitleSpacing(isWeekMode: isWeekMode, isThreeDayMode: isThreeDayMode)
         let timeFontSize = calendarEventTimeFontSize(forTitleFontSize: titleFontSize, isWeekMode: isWeekMode)
@@ -487,7 +489,8 @@ struct DayColumnView: View {
         let timeText = (is24HourTime ? creationReflow?.draftTimeText24 : creationReflow?.draftTimeText12) ?? ""
         return ZStack(alignment: .topLeading) {
             shape.fill(color.opacity(0.15))
-            shape.stroke(color.opacity(0.6), lineWidth: 1.2)
+            shape.stroke(color.opacity(0.6),
+                         lineWidth: calendarEventBlockStrokeWidth(isInterrupt: false, isWeekMode: isWeekMode))
             if showsTitle {
                 VStack(alignment: .leading, spacing: spacing) {
                     Text(overlay.title)
@@ -534,7 +537,7 @@ struct DayColumnView: View {
     /// renderer reads.
     private func blockView(_ block: DayBlockModel, size: CGSize) -> some View {
         let style = EventBlockStyle.edit
-        let cornerRadius = calendarEventBlockCornerRadius(isInterrupt: block.isInterrupt)
+        let cornerRadius = calendarEventBlockCornerRadius(isInterrupt: block.isInterrupt, isWeekMode: isWeekMode)
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         // An interrupt parent's compound silhouette: a moat cut around each
         // embedded child (phone: 3pt across, 2pt above/below).
@@ -567,7 +570,7 @@ struct DayColumnView: View {
             }
             .clipShape(silhouette)
             silhouette.stroke(color.opacity(style.strokeOpacity),
-                              lineWidth: calendarEventBlockStrokeWidth(isInterrupt: block.isInterrupt))
+                              lineWidth: calendarEventBlockStrokeWidth(isInterrupt: block.isInterrupt, isWeekMode: isWeekMode))
             if block.colorDepth > 0 {
                 Rectangle()
                     .fill(color)

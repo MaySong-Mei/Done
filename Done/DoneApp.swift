@@ -458,6 +458,12 @@ enum FocusOrientationGate {
 
 @MainActor
 final class AppDelegate: NSObject, UIApplicationDelegate {
+    /// The phone end of the Apple Watch link. Created with the delegate so
+    /// a background launch for an incoming wrist command has a session
+    /// delegate in place; `DoneApp` attaches the stores once the scene has
+    /// built them.
+    let wristBridge = WristBridge()
+
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
@@ -466,6 +472,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // post-launch delivery (which can carry the PREVIOUS run's crash) is
         // captured. See AppMetricsReporter.
         AppMetricsReporter.shared.start()
+        wristBridge.activate()
         return true
     }
 
@@ -655,6 +662,27 @@ struct DoneApp: App {
     /// CADisplayLink auto-windows during timing-sensitive tests. Tests
     /// construct their own centers over scratch stores.
     @State private var residentObservation: ResidentObservationCenter? = nil
+    /// gh#273: the telemetry chassis's single writer. Created HERE, as the
+    /// state's initial value (same XCTest guard as the resident, same
+    /// reason), so the environment carries it from the first frame and
+    /// `ContentView`'s attach cannot race the ZStack's `onAppear` (review
+    /// P0-1: child `onAppear` runs before the parent's, and a nil read there
+    /// would have left the whole upload chain silently unattached). The
+    /// resident's flush edges are wired to it in `onAppear`; the settings
+    /// card reads it through `\.telemetryUploader`.
+    @State private var telemetryUploader: TelemetryUploader? =
+        EventStorageLocation.isRunningUnderXCTest ? nil : DoneApp.makeTelemetryUploader()
+
+    /// gh#273 QA: in a DEBUG build the `TELEMETRY_FAKE_TESTFLIGHT` launch
+    /// variable stands in for StoreKit's answer; no other build can read it
+    /// (`TelemetryFakeTestFlight` exists only under DEBUG).
+    private static func makeTelemetryUploader() -> TelemetryUploader {
+        #if DEBUG
+        return TelemetryUploader.live(isTestFlight: TelemetryFakeTestFlight.launchValue)
+        #else
+        return TelemetryUploader.live()
+        #endif
+    }
     /// Auto-enter focus mode when device rotates to landscape. Default off:
     /// users opt in. Manual entry via the calendar header focus button is
     /// always available regardless of this flag.
@@ -722,9 +750,11 @@ struct DoneApp: App {
             // `@State` it owns, which needs nothing from this update. See
             // `entryProgress` in FocusModeView.
             .environmentObject(orientationManager)
+            .environment(\.telemetryUploader, telemetryUploader)
             .preferredColorScheme((AppAppearanceMode(rawValue: appearanceModeRaw) ?? .system).colorScheme)
             .onAppear {
                 doneApplyIdleTimerPolicy(shouldDisableIdleTimer)
+                appDelegate.wristBridge.attach(store: store, templates: agentRuntime.eventTypeTemplateStore)
                 syncOrientationLock(focusActive: focusActive)
                 handleDominoScenePhase(.active)
                 // gh#197 SPIKE: close orphaned spike runs — open records
@@ -739,9 +769,12 @@ struct DoneApp: App {
                 SpikeRunStore.reconcileAllRegisteredSpikesAtLaunch(excludingRunIDs: spikeSession.armedRunIDs)
                 // FIX WATCH: wire the resident tier — real app only, never
                 // under XCTest (see `residentObservation`'s doc).
-                if residentObservation == nil, !EventStorageLocation.isRunningUnderXCTest {
-                    let center = ResidentObservationCenter(coordinator: spikeSession, store: store)
+                if residentObservation == nil, !EventStorageLocation.isRunningUnderXCTest, let uploader = telemetryUploader {
+                    let center = ResidentObservationCenter(coordinator: spikeSession, store: store,
+                                                           ownerUID: { [weak uploader] in uploader?.ownerUID })
+                    uploader.connect(center: center)
                     center.activate()
+                    uploader.activate()
                     residentObservation = center
                 }
             }
@@ -764,6 +797,11 @@ struct DoneApp: App {
             }
             .onChange(of: scenePhase) { _, newPhase in
                 handleDominoScenePhase(newPhase)
+                if newPhase == .active {
+                    // The watch's window moved on with the clock; a foreground is
+                    // the cheap moment to re-project it.
+                    appDelegate.wristBridge.pushSnapshot()
+                }
             }
             .onDisappear {
                 doneApplyIdleTimerPolicy(false)
@@ -873,7 +911,7 @@ struct DoneApp: App {
             timeRanges: [Event.TimeRange(start: start, end: end)],
             type: template.title
         )
-        store.addCalendarEvent(event)
+        store.addCalendarEvent(event, creationMotion: .local)
     }
 
     /// Mutates the first time range of `event` by adding `delta` to its end.

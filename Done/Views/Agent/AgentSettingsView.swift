@@ -309,6 +309,9 @@ struct SettingsHomeView: View {
     /// includes navigation pops back to this page) from the deck's own
     /// evaluator output.
     @State private var fixWatchNeedsAttention = false
+    /// gh#273 §8.3: the storage hint below reads differently while
+    /// statistics are shared.
+    @AppStorage(AppSettingsKeys.telemetryUploadsEnabled) private var telemetryUploadsEnabled = false
 
     var body: some View {
         settingsPage(L(.settings)) {
@@ -374,6 +377,14 @@ struct SettingsHomeView: View {
                     AnalysisPreferencesView()
                 } label: {
                     settingsLinkRow(title: L(.analysisPreferences))
+                }
+                .buttonStyle(SettingsRowButtonStyle())
+
+                NavigationLink {
+                    WatchSettingsView()
+                        .environmentObject(store)
+                } label: {
+                    settingsLinkRow(title: L(.watchSettings))
                 }
                 .buttonStyle(SettingsRowButtonStyle())
 
@@ -453,7 +464,7 @@ struct SettingsHomeView: View {
             }
 
             settingsCard(L(.storage)) {
-                Text(L(.hintLocalData))
+                Text(TelemetrySettingsCopy.localDataHint(sharing: telemetryUploadsEnabled))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -697,6 +708,12 @@ struct DataPrivacySettingsView: View {
     /// object on this view comes from.
     @EnvironmentObject private var calendarState: CalendarViewState
     @AppStorage(AppSettingsKeys.syncUploadsEnabled) private var syncUploadsEnabled = true
+    /// gh#273: read for the privacy hint only — the switch itself lives on
+    /// Fix Watch (§16 rule 1).
+    @AppStorage(AppSettingsKeys.telemetryUploadsEnabled) private var telemetryUploadsEnabled = false
+    /// nil under XCTest and before the app created one; handed to the erase
+    /// so the uploader forgets the previous owner's status.
+    @Environment(\.telemetryUploader) private var telemetryUploader
     @State private var isConfirmingSkillClear = false
     @State private var isConfirmingInferenceClear = false
     @State private var isConfirmingResetAll = false
@@ -716,11 +733,33 @@ struct DataPrivacySettingsView: View {
     var body: some View {
         settingsPage(L(.dataAndPrivacy)) {
             settingsCard(L(.privacy)) {
-                Text(L(.hintLocalData))
+                Text(TelemetrySettingsCopy.localDataHint(sharing: telemetryUploadsEnabled))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+
+            // gh#273 §16 rule 1: one entrance. The switch, the upload status
+            // and the request sample live on Fix Watch, beside the data they
+            // describe; this page says so and points there.
+            settingsCard(L(.telemetryCardTitle), spacing: 10) {
+                settingsHintText(L(.telemetryMovedHint))
+                NavigationLink {
+                    FixWatchView()
+                } label: {
+                    HStack(alignment: .center, spacing: 8) {
+                        Text(L(.telemetryOpenFixWatch))
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.primary)
+                        Spacer(minLength: 8)
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(SettingsRowButtonStyle())
             }
 
             settingsCard("Sync", spacing: 14) {
@@ -913,7 +952,8 @@ struct DataPrivacySettingsView: View {
     private func resetAllLocalData() {
         LocalDataEraser(store: store, skillStore: skillStore, agentRuntime: agentRuntime, authService: authService,
                         calendarState: calendarState, syncService: syncService,
-                        imageBackupCoordinator: imageBackupCoordinator, backupSnapshotService: backupSnapshotService)
+                        imageBackupCoordinator: imageBackupCoordinator, backupSnapshotService: backupSnapshotService,
+                        telemetryUploader: telemetryUploader)
             .resetAllLocalData(keepingSession: false)
     }
 
@@ -992,6 +1032,187 @@ struct DataPrivacySettingsView: View {
             Spacer(minLength: 0)
         }
         .contentShape(Rectangle())
+    }
+}
+
+// MARK: - Telemetry copy and status (gh#273 design §8.3)
+
+/// The two existing "data stays on this device" hints, chosen by the
+/// statistics switch: with it on, the sentence would be a lie (B·F30).
+enum TelemetrySettingsCopy {
+    static func localDataHint(sharing: Bool) -> String {
+        sharing ? L(.hintLocalDataSharing) : L(.hintLocalData)
+    }
+
+    static func statusLine(uploader: TelemetryUploader, now: Date, language: AppLanguage = .current) -> String {
+        guard let lastUploadAt = uploader.lastUploadAt else { return LKey.telemetryStatusNever.text(for: language) }
+        let build = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "?"
+        return statusLine(when: relativeWhen(lastUploadAt, now: now, language: language), rows: uploader.lastBatchCount,
+                          total: uploader.totalAcknowledged, build: build, language: language)
+    }
+
+    /// Under a second ago — or ahead of `now`, a clock that stepped back
+    /// since — reads "just now", never "in 0 sec." (QA).
+    static func relativeWhen(_ date: Date, now: Date, language: AppLanguage) -> String {
+        guard now.timeIntervalSince(date) >= 1 else { return LKey.telemetryJustNow.text(for: language) }
+        return RelativeDateTimeFormatter.telemetryShort.localizedString(for: date, relativeTo: now)
+    }
+
+    /// "1 row", not "1 rows" (English has a singular; Chinese spells both
+    /// the same).
+    static func statusLine(when: String, rows: Int, total: Int, build: String, language: AppLanguage) -> String {
+        let format = (rows == 1 ? LKey.telemetryStatusFormatOne : .telemetryStatusFormat).text(for: language)
+        return String(format: format, when, "\(rows)", "\(total)", build)
+    }
+
+    /// What the most recent attempt concluded, for EVERY outcome (review
+    /// P2-2): the manual button is the device checklist's probe, and
+    /// "nothing to send" must read differently from "stopped at a gate".
+    /// nil for a plain success — the status line above already says it.
+    static func outcomeLine(_ outcome: TelemetryUploadOutcome?, language: AppLanguage = .current) -> String? {
+        func text(_ key: LKey) -> String { key.text(for: language) }
+        switch outcome {
+        case nil, .uploaded?: return nil
+        case .switchOff?: return text(.telemetryOutcomeSwitchOff)
+        case .defaultNotConfirmed?: return text(.telemetryOutcomeDefaultNotConfirmed)
+        case .notAttached?: return text(.telemetryOutcomeNotAttached)
+        case .blockedByBuild?: return text(.telemetryOutcomeBlockedByBuild)
+        case .noConsent?: return text(.telemetryOutcomeNoConsent)
+        case .signedOut?: return text(.telemetryOutcomeSignedOut)
+        case .nothingPending?: return text(.telemetryOutcomeNothingPending)
+        case .staleAfterErase?: return text(.telemetryOutcomeStale)
+        case .partial(let uploaded, let quarantined)?:
+            return String(format: text(.telemetryOutcomePartialFormat),
+                          rows(uploaded, language: language), rows(quarantined, language: language))
+        case .failed(let kind, let code)?:
+            return String(format: text(.telemetryLastFailureFormat), "\(kind) \(code)")
+        }
+    }
+
+    /// "1 row" / "3 rows" (Chinese: "1 条" / "3 条").
+    static func rows(_ count: Int, language: AppLanguage) -> String {
+        String(format: (count == 1 ? LKey.telemetryRowsOne : .telemetryRowsMany).text(for: language), "\(count)")
+    }
+
+    /// Rows the server refused and the cursor parked, when any.
+    static func quarantinedLine(count: Int, language: AppLanguage = .current) -> String? {
+        guard count > 0 else { return nil }
+        let format = (count == 1 ? LKey.telemetryQuarantinedOne : .telemetryQuarantinedFormat).text(for: language)
+        return String(format: format, "\(count)")
+    }
+
+    /// A failed or partial attempt is shown in orange; a gate or an empty
+    /// run in the secondary colour.
+    static func outcomeIsWarning(_ outcome: TelemetryUploadOutcome?) -> Bool {
+        switch outcome {
+        case .failed?, .partial?, .staleAfterErase?: return true
+        default: return false
+        }
+    }
+}
+
+private extension RelativeDateTimeFormatter {
+    static let telemetryShort: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .short
+        return f
+    }()
+}
+
+/// "上次上传 · 条数 · 累计 · 构建", the sample button and the manual
+/// upload button — the visible feedback B·F29 demanded. Observes the
+/// uploader directly so the row updates when a batch lands.
+struct TelemetryStatusRows: View {
+    @ObservedObject var uploader: TelemetryUploader
+    /// The main switch: with it off the manual button is disabled (review
+    /// P2-2) — a tap would only report `.switchOff`.
+    let isEnabled: Bool
+    @Binding var isPresentingSample: Bool
+    @State private var isUploading = false
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            VStack(alignment: .leading, spacing: 4) {
+                Text(TelemetrySettingsCopy.statusLine(uploader: uploader, now: context.date))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let outcome = TelemetrySettingsCopy.outcomeLine(uploader.lastOutcome) {
+                    Text(outcome)
+                        .font(.caption)
+                        .foregroundStyle(TelemetrySettingsCopy.outcomeIsWarning(uploader.lastOutcome) ? Color.orange : Color.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let parked = TelemetrySettingsCopy.quarantinedLine(count: uploader.quarantinedCount) {
+                    Text(parked)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        HStack(spacing: 12) {
+            Button {
+                isPresentingSample = true
+            } label: {
+                Text(L(.telemetryViewSample))
+                    .font(.subheadline)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 40)
+                    .contentShape(Capsule())
+                    .glassEffect(.regular.interactive(), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            Button {
+                guard !isUploading else { return }
+                isUploading = true
+                Task {
+                    await uploader.uploadNow(trigger: .deckOpen)
+                    isUploading = false
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    if isUploading {
+                        ProgressView().controlSize(.small)
+                    }
+                    Text(L(.telemetryUploadNow))
+                        .font(.subheadline.weight(.medium))
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 40)
+                .contentShape(Capsule())
+                .glassEffect(.regular.interactive(), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(isUploading || !isEnabled)
+        }
+    }
+}
+
+/// The most recent attempt's request content: a pretty-printed copy of
+/// the same redacted rows (review P2-5 — the wire carries them compact and
+/// unordered; the content is identical, the bytes are not).
+struct TelemetrySampleSheet: View {
+    @ObservedObject var uploader: TelemetryUploader
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                Text(uploader.lastRequestBodyPreview ?? L(.telemetrySampleEmpty))
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+            }
+            .navigationTitle(L(.telemetrySampleTitle))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(L(.ok)) { dismiss() }
+                }
+            }
+        }
     }
 }
 

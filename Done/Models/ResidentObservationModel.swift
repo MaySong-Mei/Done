@@ -205,6 +205,15 @@ struct ResidentCounterSet: Equatable {
 
     init() {}
 
+    /// The two `.string` metrics on the daily line, both fixed-format
+    /// space-separated bucket counts (`ResidentLagHistogram.serialized`).
+    /// Named here, where they are written, so the telemetry Redactor's
+    /// whitelist (gh#273, `TelemetryRedactor`) reads the writer's own list
+    /// instead of retyping the literals.
+    static let tapLagBucketsKey = "tapLagBuckets"
+    static let dragLagBucketsKey = "dragLagBuckets"
+    static let fixedFormatStringKeys: Set<String> = [tapLagBucketsKey, dragLagBucketsKey]
+
     /// The daily line's metric vocabulary. One writer (the center's
     /// flush), read back by `init(metrics:)` at relaunch and by the
     /// verdict evaluator — a key spelled differently in any of the three
@@ -225,8 +234,8 @@ struct ResidentCounterSet: Equatable {
             "windowsOpened": .number(Double(windowsOpened)),
             "windowsRefusedBudget": .number(Double(windowsRefusedBudget)),
             "windowsExtended": .number(Double(windowsExtended)),
-            "tapLagBuckets": .string(tapLagHistogram.serialized),
-            "dragLagBuckets": .string(dragLagHistogram.serialized),
+            Self.tapLagBucketsKey: .string(tapLagHistogram.serialized),
+            Self.dragLagBucketsKey: .string(dragLagHistogram.serialized),
             "dragMemoRebuilds": .number(Double(dragMemoRebuilds)),
             "dragMemoReuses": .number(Double(dragMemoReuses)),
         ]
@@ -256,11 +265,11 @@ struct ResidentCounterSet: Equatable {
         windowsOpened = number("windowsOpened")
         windowsRefusedBudget = number("windowsRefusedBudget")
         windowsExtended = number("windowsExtended")
-        if case .string(let raw)? = metrics["tapLagBuckets"],
+        if case .string(let raw)? = metrics[Self.tapLagBucketsKey],
            let histogram = ResidentLagHistogram.deserialize(raw) {
             tapLagHistogram = histogram
         }
-        if case .string(let raw)? = metrics["dragLagBuckets"],
+        if case .string(let raw)? = metrics[Self.dragLagBucketsKey],
            let histogram = ResidentLagHistogram.deserialize(raw) {
             dragLagHistogram = histogram
         }
@@ -562,9 +571,9 @@ enum ResidentWindowAggregates {
             guard !values.isEmpty else { return }
             metrics[key] = .string(values.map { String(format: "%.1f", $0) }.joined(separator: " "))
         }
-        putList("wCommitMs", writingTaps.compactMap(\.commitMs))
-        putList("wFrameAfterCommitMs", taps.compactMap(\.firstFrameAfterCommitMs))
-        putList("wLagMs", taps.compactMap(\.firstDeliveryLagMs))
+        putList(commitMsKey, writingTaps.compactMap(\.commitMs))
+        putList(frameAfterCommitMsKey, taps.compactMap(\.firstFrameAfterCommitMs))
+        putList(lagMsKey, taps.compactMap(\.firstDeliveryLagMs))
 
         if let probe {
             if let stats = probe.stats {
@@ -576,10 +585,22 @@ enum ResidentWindowAggregates {
             metrics["wFrameActiveStallCount"] = .number(Double(probe.drain.activeStallsMs.count))
             metrics["wFrameSuspensionGapCount"] = .number(Double(probe.drain.suspensionGapCount))
             metrics["wFrameResignActiveCount"] = .number(Double(probe.drain.resignActiveCount))
-            putList("wFrameLargestDeltasMs", Array(probe.drain.largestDeltasMs.prefix(8)))
+            putList(frameLargestDeltasMsKey, Array(probe.drain.largestDeltasMs.prefix(8)))
         }
         return metrics
     }
+
+    /// The window record's `.string` metrics: fixed-format `%.1f` lists
+    /// written by `putList` above. Named by the writer for the telemetry
+    /// Redactor's whitelist (gh#273), same reasoning as
+    /// `ResidentCounterSet.fixedFormatStringKeys`.
+    static let commitMsKey = "wCommitMs"
+    static let frameAfterCommitMsKey = "wFrameAfterCommitMs"
+    static let lagMsKey = "wLagMs"
+    static let frameLargestDeltasMsKey = "wFrameLargestDeltasMs"
+    static let fixedFormatStringKeys: Set<String> = [
+        commitMsKey, frameAfterCommitMsKey, lagMsKey, frameLargestDeltasMsKey,
+    ]
 }
 
 // MARK: - Fix-observation registry
@@ -660,6 +681,59 @@ enum FixObservationRegistry {
     }
 }
 
+// MARK: - Segments (pure)
+
+/// The population a Release record's TIMING belongs to: the phone model
+/// plus the OS major version it was recorded on. Delivery lag and commit
+/// time depend on the hardware and the OS's touch pipeline as well as on
+/// the app, so records from different phones or OS versions pooled into one
+/// percentile mix populations, and a change of phone or OS can read as the
+/// fix regressing. Counter checks (tripwires, liveness) do not care which
+/// phone counted, and stay pooled.
+///
+/// The OS major, not the full version string, because the tap sample grows
+/// slowly: restarting it at every point release would keep it under its
+/// floor. A version whose leading component is not a plain integer keeps
+/// its whole string, so it never merges with a parsed one.
+struct FixWatchSegment: Hashable {
+    enum OS: Hashable {
+        case major(Int)
+        case unparsed(String)
+    }
+
+    let deviceModel: String
+    let os: OS
+
+    init(deviceModel: String, osVersion: String) {
+        self.deviceModel = deviceModel
+        if let major = Self.osMajor(osVersion) {
+            os = .major(major)
+        } else {
+            os = .unparsed(osVersion)
+        }
+    }
+
+    init(of run: SpikeRun) {
+        self.init(deviceModel: run.deviceModel, osVersion: run.osVersion)
+    }
+
+    /// The leading integer before the first "." — or nil when that leading
+    /// component is empty or not all ASCII digits.
+    static func osMajor(_ osVersion: String) -> Int? {
+        let head = osVersion.prefix { $0 != "." }
+        guard !head.isEmpty, head.allSatisfy({ ("0"..."9").contains($0) }) else { return nil }
+        return Int(head)
+    }
+
+    /// How the deck names the segment, e.g. "iPhone19,2 · iOS 27".
+    var label: String {
+        switch os {
+        case .major(let major): return "\(deviceModel) · iOS \(major)"
+        case .unparsed(let raw): return "\(deviceModel) · iOS \(raw.isEmpty ? "?" : raw)"
+        }
+    }
+}
+
 // MARK: - Verdict evaluation (pure)
 
 enum FixVerdictState: String, Equatable {
@@ -688,6 +762,8 @@ struct FixVerdict: Equatable {
     /// Release dailies.
     let alarm: Bool
     let readouts: [FixMetricReadout]
+    /// Distinct civil days among the Release dailies: one day on two
+    /// devices, or a day re-minted on consent, counts once (review P1-3).
     let releaseDayCount: Int
     /// Debug (or unattributed) records — displayed separately, NEVER
     /// feeding a verdict (R-F4.1).
@@ -699,6 +775,13 @@ struct FixVerdict: Equatable {
 /// records are counted for display and excluded from every criterion
 /// (R-F4.1 — a mixed-config population can produce a false FAILING and
 /// reopen an issue for a fix that holds).
+///
+/// Timing criteria (Entries 1 and 3) are further judged on ONE segment —
+/// the evaluating phone's model and OS major, passed in as
+/// `currentSegment` so this stays free of device reads. Every other
+/// segment with Release data is shown beside it, report-only. The
+/// counter checks (Entry 2, and Entry 1's drafts / body passes) pool every
+/// segment: a hidden compute on any phone is a regression.
 enum FixWatchVerdictEvaluator {
     static let commitP50ThresholdMs: Double = 55
     static let commitMinSamples = 20
@@ -708,6 +791,18 @@ enum FixWatchVerdictEvaluator {
         run.buildConfiguration == "release"
     }
 
+    /// A record's civil day: the key it was minted with, or — a line older
+    /// than that stamp — the day its start falls on in `calendar`, which is
+    /// what the uploader sends for such a line.
+    static func dayKey(of run: SpikeRun, calendar: Calendar = .current) -> String {
+        if let dayKey = run.dayKey { return dayKey }
+        return TelemetryClaimKey.dayKey(forDayStart: calendar.startOfDay(for: run.startedAt), calendar: calendar).dayKey
+    }
+
+    static func distinctDayCount(_ runs: [SpikeRun]) -> Int {
+        Set(runs.map { dayKey(of: $0) }).count
+    }
+
     static func partition(_ runs: [SpikeRun]) -> (release: [SpikeRun], nonReleaseCount: Int) {
         let release = runs.filter(isRelease)
         return (release, runs.count - release.count)
@@ -715,7 +810,7 @@ enum FixWatchVerdictEvaluator {
 
     private static func pooledTapHistogram(_ releaseDailies: [SpikeRun]) -> ResidentLagHistogram {
         ResidentLagHistogram.sum(releaseDailies.compactMap { run in
-            if case .string(let raw)? = run.metrics["tapLagBuckets"] {
+            if case .string(let raw)? = run.metrics[ResidentCounterSet.tapLagBucketsKey] {
                 return ResidentLagHistogram.deserialize(raw)
             }
             return nil
@@ -768,32 +863,82 @@ enum FixWatchVerdictEvaluator {
         return .holding
     }
 
+    // MARK: Segments
+
+    static func isInSegment(_ segment: FixWatchSegment) -> (SpikeRun) -> Bool {
+        { FixWatchSegment(of: $0) == segment }
+    }
+
+    /// The segments other than `current` that `runs` carry, most recent
+    /// first — by each segment's latest `startedAt`, ties by label so the
+    /// deck does not shuffle between reads.
+    static func otherSegments(in runs: [SpikeRun], excluding current: FixWatchSegment) -> [FixWatchSegment] {
+        var latest: [FixWatchSegment: Date] = [:]
+        for run in runs {
+            let segment = FixWatchSegment(of: run)
+            guard segment != current else { continue }
+            latest[segment] = max(latest[segment] ?? run.startedAt, run.startedAt)
+        }
+        return latest.sorted { lhs, rhs in
+            lhs.value != rhs.value ? lhs.value > rhs.value : lhs.key.label < rhs.key.label
+        }.map(\.key)
+    }
+
+    /// A criterion as another segment's readout: named by the segment,
+    /// zero verdict weight, the threshold kept in view so the row can be
+    /// read on its own.
+    private static func reportOnlyCriterion(_ readout: FixMetricReadout, segment: FixWatchSegment) -> FixMetricReadout {
+        FixMetricReadout(
+            id: "\(segment.label) · \(readout.id)",
+            measured: readout.measured,
+            threshold: "report-only (\(readout.threshold))",
+            passing: nil
+        )
+    }
+
+    /// Notes every segmented card carries: which segment was judged, and
+    /// the day count across all of them (the card's "Release 天数" is the
+    /// judged segment's). When the judged segment is empty but others are
+    /// not, the card says why it reads 观察中 with data present.
+    private static func segmentNotes(
+        current: FixWatchSegment,
+        currentHasData: Bool,
+        othersHaveData: Bool,
+        allSegmentDayCount: Int
+    ) -> [String] {
+        var notes = [
+            "按手机型号和系统大版本分开判定;本机:\(current.label)",
+            "Release 天数只算本机这一组;所有机型与系统版本合计 \(allSegmentDayCount) 天",
+        ]
+        if !currentHasData && othersHaveData {
+            notes.append("本机这一组还没有 Release 数据;其他机型或系统版本的数据已在上方以 report-only 列出,不参与判定")
+        }
+        return notes
+    }
+
     // MARK: Entry 1 — fix-effort-path
 
-    static func evaluateEffortPath(dailies: [SpikeRun], windows: [SpikeRun]) -> FixVerdict {
-        let (releaseDailies, nonReleaseDailies) = partition(dailies)
-        let (releaseWindows, nonReleaseWindows) = partition(windows)
-        // Clean-window floor (R-F4.2): contaminated windows are excluded
-        // from every pooled number.
-        //
-        // Aborted and resign-closed windows are deliberately NOT excluded
-        // (review Q3): a commit duration is a per-gesture fact the rolling
-        // log recorded before the close happened, so the close reason
-        // cannot bias it. What an early close DOES censor is the settle
-        // frame — report-only, and the censoring is visible per record via
-        // `wTapsMissingFrameAfterCommit` + `wClosedByResign` instead of by
-        // discarding true commit samples.
-        let cleanWindows = releaseWindows.filter { run in
-            if case .bool(true)? = run.metrics["wContaminated"] { return false }
-            return true
-        }
+    /// Clean-window floor (R-F4.2): contaminated windows are excluded
+    /// from every number on the card, in every segment.
+    ///
+    /// Aborted and resign-closed windows are deliberately NOT excluded
+    /// (review Q3): a commit duration is a per-gesture fact the rolling
+    /// log recorded before the close happened, so the close reason
+    /// cannot bias it. What an early close DOES censor is the settle
+    /// frame — report-only, and the censoring is visible per record via
+    /// `wTapsMissingFrameAfterCommit` + `wClosedByResign` instead of by
+    /// discarding true commit samples.
+    private static func isClean(_ window: SpikeRun) -> Bool {
+        if case .bool(true)? = window.metrics["wContaminated"] { return false }
+        return true
+    }
 
+    /// The two timing criteria over one population.
+    private static func effortCriteria(dailies: [SpikeRun], cleanWindows: [SpikeRun]) -> [FixMetricReadout] {
         var criteria: [FixMetricReadout] = []
-        var reportOnly: [FixMetricReadout] = []
-        var notes: [String] = []
 
         // Criterion: pooled writing-tap commit p50 ≤ 55ms.
-        let commitSamples = cleanWindows.flatMap { parseList($0.metrics["wCommitMs"]) }
+        let commitSamples = cleanWindows.flatMap { parseList($0.metrics[ResidentWindowAggregates.commitMsKey]) }
         if commitSamples.count >= commitMinSamples, let p50 = Spike201Metrics.median(commitSamples) {
             criteria.append(FixMetricReadout(
                 id: "commit p50",
@@ -813,22 +958,45 @@ enum FixWatchVerdictEvaluator {
         // Criterion: tap-arm delivery lag p50 ≤ 40ms (daily histogram).
         criteria.append(shareReadout(
             id: "delivery lag p50",
-            histogram: pooledTapHistogram(releaseDailies),
+            histogram: pooledTapHistogram(dailies),
             percentile: 50,
             boundMs: 40
         ))
+        return criteria
+    }
 
-        // Report-only: the settle storm (unclaimed 664–1009ms residual).
-        let settleSamples = cleanWindows.flatMap { parseList($0.metrics["wFrameAfterCommitMs"]) }
-        if let p50 = Spike201Metrics.median(settleSamples), let maxValue = settleSamples.max() {
-            reportOnly.append(FixMetricReadout(
-                id: "settle: first frame after commit",
-                measured: String(format: "p50 %.0fms · max %.0fms (n=%d)", p50, maxValue, settleSamples.count),
-                threshold: "report-only",
-                passing: nil
-            ))
+    /// Report-only: the settle storm (unclaimed 664–1009ms residual), over
+    /// one population's clean windows; nil when they carry no settle sample.
+    private static func settleReadout(cleanWindows: [SpikeRun]) -> FixMetricReadout? {
+        let settleSamples = cleanWindows.flatMap { parseList($0.metrics[ResidentWindowAggregates.frameAfterCommitMsKey]) }
+        guard let p50 = Spike201Metrics.median(settleSamples), let maxValue = settleSamples.max() else { return nil }
+        return FixMetricReadout(
+            id: "settle: first frame after commit",
+            measured: String(format: "p50 %.0fms · max %.0fms (n=%d)", p50, maxValue, settleSamples.count),
+            threshold: "report-only",
+            passing: nil
+        )
+    }
+
+    static func evaluateEffortPath(dailies: [SpikeRun], windows: [SpikeRun], currentSegment: FixWatchSegment) -> FixVerdict {
+        let (releaseDailies, nonReleaseDailies) = partition(dailies)
+        let (releaseWindows, nonReleaseWindows) = partition(windows)
+        let cleanWindows = releaseWindows.filter { isClean($0) }
+
+        let inCurrent = isInSegment(currentSegment)
+        let currentDailies = releaseDailies.filter(inCurrent)
+        let currentWindows = releaseWindows.filter(inCurrent)
+        let currentCleanWindows = cleanWindows.filter(inCurrent)
+
+        let criteria = effortCriteria(dailies: currentDailies, cleanWindows: currentCleanWindows)
+        var reportOnly: [FixMetricReadout] = []
+        var notes: [String] = []
+
+        if let settle = settleReadout(cleanWindows: currentCleanWindows) {
+            reportOnly.append(settle)
         }
-        // Report-only: daily draft-compute amplification via the seams.
+        // Report-only, POOLED across segments: daily draft-compute
+        // amplification via the seams is a count, not a timing.
         let passes = releaseDailies.reduce(0) { total, run -> Int in
             if case .number(let value)? = run.metrics["detailBodyPasses"] { return total + Int(value) }
             return total
@@ -841,23 +1009,50 @@ enum FixWatchVerdictEvaluator {
             reportOnly.append(FixMetricReadout(
                 id: "drafts / body passes",
                 measured: String(format: "%.2f (%d/%d)", Double(drafts) / Double(passes), drafts, passes),
-                threshold: "report-only",
+                threshold: "report-only · 全部机型与系统",
                 passing: nil
             ))
         }
-        notes.append("残余 settle storm(664–1009ms)未宣称修复,仅展示,不参与判定")
 
-        let hasData = !releaseDailies.isEmpty || !releaseWindows.isEmpty
+        // Every other segment's timing, report-only, most recent first.
+        let others = otherSegments(in: releaseDailies + releaseWindows, excluding: currentSegment)
+        for segment in others {
+            let inSegment = isInSegment(segment)
+            let segmentCleanWindows = cleanWindows.filter(inSegment)
+            reportOnly += effortCriteria(dailies: releaseDailies.filter(inSegment), cleanWindows: segmentCleanWindows)
+                .map { reportOnlyCriterion($0, segment: segment) }
+            if let settle = settleReadout(cleanWindows: segmentCleanWindows) {
+                reportOnly.append(FixMetricReadout(
+                    id: "\(segment.label) · \(settle.id)",
+                    measured: settle.measured,
+                    threshold: settle.threshold,
+                    passing: nil
+                ))
+            }
+        }
+
+        let hasData = !currentDailies.isEmpty || !currentWindows.isEmpty
+        notes += segmentNotes(
+            current: currentSegment,
+            currentHasData: hasData,
+            othersHaveData: !others.isEmpty,
+            allSegmentDayCount: distinctDayCount(releaseDailies)
+        )
+        notes.append("残余 settle storm(664–1009ms)未宣称修复,仅展示,不参与判定")
+        // This phone's segment only, like every number the note sits under;
+        // other segments' rows exclude theirs too, without a count.
+        if currentCleanWindows.count < currentWindows.count {
+            notes.append("\(currentWindows.count - currentCleanWindows.count) 个窗口因外部写入污染被排除")
+        }
+
         return FixVerdict(
             entryID: FixObservationRegistry.effortPathFixID,
             state: state(for: criteria, hasAnyReleaseData: hasData),
             alarm: false,
             readouts: criteria + reportOnly,
-            releaseDayCount: releaseDailies.count,
+            releaseDayCount: distinctDayCount(currentDailies),
             nonReleaseCount: nonReleaseDailies + nonReleaseWindows,
-            notes: notes + (cleanWindows.count < releaseWindows.count
-                ? ["\(releaseWindows.count - cleanWindows.count) 个窗口因外部写入污染被排除"]
-                : [])
+            notes: notes
         )
     }
 
@@ -905,7 +1100,7 @@ enum FixWatchVerdictEvaluator {
                     passing: nil
                 ),
             ],
-            releaseDayCount: releaseDailies.count,
+            releaseDayCount: distinctDayCount(releaseDailies),
             nonReleaseCount: nonReleaseCount,
             notes: ["仅检测答错 visible: 的调用点;硬编码 visible: true 只计入 liveness、永不触发本 tripwire(该绕过只有 review 能抓);对 RootTabVisibility.isVisible 本身的腐坏不可见(R-F7)"]
         )
@@ -913,21 +1108,39 @@ enum FixWatchVerdictEvaluator {
 
     // MARK: Entry 3 — fix-touch-delivery
 
-    static func evaluateTouchDelivery(dailies: [SpikeRun]) -> FixVerdict {
-        let (releaseDailies, nonReleaseCount) = partition(dailies)
-        let histogram = pooledTapHistogram(releaseDailies)
-        let criteria = [
+    private static func touchCriteria(_ histogram: ResidentLagHistogram) -> [FixMetricReadout] {
+        [
             shareReadout(id: "tap lag p50", histogram: histogram, percentile: 50, boundMs: 40),
             shareReadout(id: "tap lag p95", histogram: histogram, percentile: 95, boundMs: 120),
         ]
+    }
+
+    static func evaluateTouchDelivery(dailies: [SpikeRun], currentSegment: FixWatchSegment) -> FixVerdict {
+        let (releaseDailies, nonReleaseCount) = partition(dailies)
+        let currentDailies = releaseDailies.filter(isInSegment(currentSegment))
+        let criteria = touchCriteria(pooledTapHistogram(currentDailies))
+
+        // Every other segment's tap lag, report-only, most recent first.
+        let others = otherSegments(in: releaseDailies, excluding: currentSegment)
+        let reportOnly = others.flatMap { segment in
+            touchCriteria(pooledTapHistogram(releaseDailies.filter(isInSegment(segment))))
+                .map { reportOnlyCriterion($0, segment: segment) }
+        }
+
+        let hasData = !currentDailies.isEmpty
         return FixVerdict(
             entryID: FixObservationRegistry.touchDeliveryFixID,
-            state: state(for: criteria, hasAnyReleaseData: !releaseDailies.isEmpty),
+            state: state(for: criteria, hasAnyReleaseData: hasData),
             alarm: false,
-            readouts: criteria,
-            releaseDayCount: releaseDailies.count,
+            readouts: criteria + reportOnly,
+            releaseDayCount: distinctDayCount(currentDailies),
             nonReleaseCount: nonReleaseCount,
-            notes: ["逐手势计数(tap 臂),drag 不参与判定;修复前中位 72–208ms"]
+            notes: segmentNotes(
+                current: currentSegment,
+                currentHasData: hasData,
+                othersHaveData: !others.isEmpty,
+                allSegmentDayCount: distinctDayCount(releaseDailies)
+            ) + ["逐手势计数(tap 臂),drag 不参与判定;修复前中位 72–208ms"]
         )
     }
 }

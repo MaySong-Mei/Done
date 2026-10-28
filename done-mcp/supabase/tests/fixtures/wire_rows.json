@@ -1,0 +1,210 @@
+[
+  {
+    "app_build" : 12,
+    "app_version" : "0.5.0",
+    "build_configuration" : "release",
+    "client_updated_at" : "2026-09-21T17:05:00.000Z",
+    "context" : {
+
+    },
+    "day_key" : "2026-09-21",
+    "day_tz_offset_min" : -420,
+    "device_model" : "iPhone17,2",
+    "ended_at" : "2026-09-21T17:05:00.000Z",
+    "install_id" : "0f1e2d3c-4b5a-4697-8877-665544332211",
+    "kind" : "daily_rollup",
+    "metrics" : {
+      "detailBodyPasses" : 0,
+      "draftComputes" : 0,
+      "dragCount" : 0,
+      "dragLagBuckets" : "0 0 0 0 0 0 0 0",
+      "dragMemoRebuilds" : 0,
+      "dragMemoReuses" : 0,
+      "implausibleLagCount" : 0,
+      "meComputedHidden" : 0,
+      "meComputedVisible" : 4,
+      "slotWritesCalendarCheckpoints" : 0,
+      "slotWritesCalendarEvents" : 0,
+      "slotWritesLogRecords" : 0,
+      "slotWritesOther" : 0,
+      "tapCount" : 3,
+      "tapLagBuckets" : "1 2 3 4 5 6 7 8",
+      "windowsExtended" : 0,
+      "windowsOpened" : 1,
+      "windowsRefusedBudget" : 0
+    },
+    "os_version" : "26.0",
+    "outcome" : "completed",
+    "revision" : 2,
+    "run_id" : "11111111-1111-4111-8111-111111111111",
+    "scenario_id" : "daily-rollup",
+    "spike_id" : "resident-daily",
+    "started_at" : "2026-09-21T15:00:00.000Z",
+    "user_id" : "aaaaaaaa-0000-4000-8000-00000000000a"
+  },
+  {
+    "app_build" : 12,
+    "app_version" : "0.5.0",
+    "build_configuration" : "release",
+    "client_updated_at" : "2026-09-21T17:05:00.000Z",
+    "context" : {
+      "co_active_spike_ids" : [
+
+      ]
+    },
+    "day_key" : "2026-09-21",
+    "day_tz_offset_min" : -420,
+    "device_model" : "iPhone17,2",
+    "ended_at" : "2026-09-21T16:00:06.000Z",
+    "install_id" : "0f1e2d3c-4b5a-4697-8877-665544332211",
+    "kind" : "window",
+    "metrics" : {
+      "wClosedByResign" : false,
+      "wCoalescedBeyondCap" : 0,
+      "wCommitMs" : "12.5",
+      "wContaminated" : false,
+      "wExtensions" : 0,
+      "wFrameAfterCommitMs" : "16.7",
+      "wGestures" : 2,
+      "wLagMs" : "4.2 7.9",
+      "wSlotCalendarEvents" : 1,
+      "wSlotLogRecords" : 1,
+      "wSlotOther" : 0,
+      "wTaps" : 2,
+      "wTapsMissingFrameAfterCommit" : 1,
+      "wTruncatedGesture" : false,
+      "wWritingTaps" : 1
+    },
+    "os_version" : "26.0",
+    "outcome" : "completed",
+    "revision" : 1,
+    "run_id" : "22222222-2222-4222-8222-222222222222",
+    "scenario_id" : "auto-window",
+    "spike_id" : "fix-effort-path",
+    "started_at" : "2026-09-21T16:00:00.000Z",
+    "user_id" : "aaaaaaaa-0000-4000-8000-00000000000a"
+  },
+  {
+    "app_build" : 12,
+    "app_version" : "0.5.0",
+    "build_configuration" : "release",
+    "client_updated_at" : "2026-09-21T17:05:00.000Z",
+    "context" : {
+      "abort_reason" : "stopped_before_target",
+      "co_active_spike_ids" : [
+        "fix-effort-path"
+      ],
+      "variant_id" : "B"
+    },
+    "day_key" : "2026-09-21",
+    "day_tz_offset_min" : -420,
+    "device_model" : "iPhone17,2",
+    "ended_at" : "2026-09-21T16:30:40.000Z",
+    "install_id" : "0f1e2d3c-4b5a-4697-8877-665544332211",
+    "kind" : "manual_run",
+    "metrics" : {
+      "p50CommitMs" : 12.5,
+      "tapCount" : 40
+    },
+    "note" : "manual note: a human wrote this",
+    "os_version" : "26.0",
+    "outcome" : "aborted",
+    "revision" : 2,
+    "run_id" : "33333333-3333-4333-8333-333333333333",
+    "scenario_id" : "effort-tap-20x",
+    "spike_id" : "effort-tap-201",
+    "started_at" : "2026-09-21T16:30:00.000Z",
+    "user_id" : "aaaaaaaa-0000-4000-8000-00000000000a"
+  },
+  {
+    "app_build" : 12,
+    "app_version" : "0.5.0",
+    "build_configuration" : "release",
+    "client_updated_at" : "2026-09-21T17:05:00.000Z",
+    "context" : {
+      "abort_reason" : "stopped_before_target",
+      "co_active_spike_ids" : [
+        "fix-effort-path"
+      ],
+      "variant_id" : "B"
+    },
+    "day_key" : "2026-09-21",
+    "day_tz_offset_min" : -420,
+    "device_model" : "iPhone17,2",
+    "ended_at" : "2026-09-21T16:40:40.000Z",
+    "install_id" : "0f1e2d3c-4b5a-4697-8877-665544332211",
+    "kind" : "manual_run",
+    "metrics" : {
+      "p50CommitMs" : 12.5,
+      "tapCount" : 40
+    },
+    "os_version" : "26.0",
+    "outcome" : "aborted",
+    "revision" : 2,
+    "run_id" : "44444444-4444-4444-8444-444444444444",
+    "scenario_id" : "effort-tap-20x",
+    "spike_id" : "effort-tap-201",
+    "started_at" : "2026-09-21T16:40:00.000Z",
+    "user_id" : "aaaaaaaa-0000-4000-8000-00000000000a"
+  },
+  {
+    "app_build" : 12,
+    "app_version" : "0.5.0",
+    "build_configuration" : "release",
+    "client_updated_at" : "2026-09-21T17:05:00.000Z",
+    "context" : {
+
+    },
+    "day_key" : "2026-09-21",
+    "day_tz_offset_min" : -420,
+    "device_model" : "iPhone17,2",
+    "ended_at" : "2026-09-21T17:00:00.000Z",
+    "install_id" : "0f1e2d3c-4b5a-4697-8877-665544332211",
+    "kind" : "verdict_snapshot",
+    "metrics" : {
+      "effortPath.alarm" : false,
+      "effortPath.state" : 2,
+      "meTabGate.alarm" : true,
+      "meTabGate.state" : 3
+    },
+    "os_version" : "26.0",
+    "outcome" : "completed",
+    "revision" : 1,
+    "run_id" : "55555555-5555-4555-8555-555555555555",
+    "scenario_id" : "snapshot",
+    "spike_id" : "fixwatch-verdict",
+    "started_at" : "2026-09-21T17:00:00.000Z",
+    "user_id" : "aaaaaaaa-0000-4000-8000-00000000000a"
+  },
+  {
+    "app_build" : 9,
+    "app_version" : "0.5.0",
+    "build_configuration" : "release",
+    "client_updated_at" : "2026-09-21T17:05:00.000Z",
+    "context" : {
+      "abort_reason" : "stopped_before_target",
+      "co_active_spike_ids" : [
+        "fix-effort-path"
+      ],
+      "variant_id" : "A"
+    },
+    "day_key" : "2026-09-20",
+    "day_tz_offset_min" : -420,
+    "device_model" : "iPhone17,2",
+    "ended_at" : "2026-09-20T18:00:40.000Z",
+    "install_id" : "0f1e2d3c-4b5a-4697-8877-665544332211",
+    "kind" : "manual_run",
+    "metrics" : {
+      "p50CommitMs" : 11.5,
+      "tapCount" : 40
+    },
+    "os_version" : "26.0",
+    "outcome" : "aborted",
+    "revision" : 1,
+    "run_id" : "66666666-6666-4666-8666-666666666666",
+    "scenario_id" : "effort-tap-20x",
+    "spike_id" : "effort-tap-201",
+    "started_at" : "2026-09-20T18:00:00.000Z",
+    "user_id" : "aaaaaaaa-0000-4000-8000-00000000000a"
+  }
+]

@@ -89,6 +89,27 @@ Environment overrides: `SUPABASE_REST`, `SUPABASE_AUTH`, `SUPABASE_WS`,
 `BENCH_EMAIL_A`, `BENCH_EMAIL_B`, `BENCH_EMAIL_R`, `BENCH_ALLOW_REWIND`,
 `BENCH_ONLY`, `RUN_V6_CONTROLS`, `LOG_DIR`.
 
+## Telemetry chassis bench (migration 016, gh#273)
+
+`telemetry_checks.sql` (T1 … T28) checks `migrations/016_spike_runs_telemetry.sql`:
+the rerun, the revision guard, RLS as user U / V / anon, the absence of 015's
+triggers, `key_registry` against `../telemetry/key_registry.json`, `counter_long`'s
+0-vs-NULL rule and the eight views. `run_checks.sh` is its runner for a machine
+without a host psql: `supabase start` if needed, `supabase db reset --local`,
+`../telemetry/key_registry_load.sql`, then `sync_feed_checks.sql` (015 must stay
+green) and `telemetry_checks.sql`, with psql running inside the `supabase_db_*`
+container over the container's own address (dblink needs scram, not the trusted
+socket). `RESET=0` reuses the database, `SKIP_SYNC=1` skips the 015 bench,
+`LOG_DIR=` keeps the psql outputs. Local stack only, like everything here.
+The registry rows are never hand-written: edit `../telemetry/key_registry.json`,
+run `python3 -I ../telemetry/gen_key_registry_sql.py`, and the runner refuses a
+stale `key_registry_load.sql`. The T-checks create and erase `tele-u@` /
+`tele-v@local.test` in `auth.users`; T1 reruns 016 twice (`\ir`).
+T27 replays the `server.apply` / `server.fold` fixtures of
+`verification/telemetry-fixtures.json` (the Lean model's file) against the
+trigger; the runner also runs QA's `telemetry_wire_conformance.sql`
+(`fixtures/wire_rows.json`) when it is present.
+
 ## What they touch
 
 - SQL script: creates throwaway users `bench-u@`, `bench-v@`, `bench-w@local.test`

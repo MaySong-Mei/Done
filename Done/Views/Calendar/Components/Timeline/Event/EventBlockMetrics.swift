@@ -36,15 +36,18 @@ func calendarEventTimeFontSize(forTitleFontSize titleFontSize: CGFloat, isWeekMo
     return max(7, (titleFontSize * ratio).rounded())
 }
 
-/// Block corner radius (continuous curvature). Interrupt blocks are tighter.
-func calendarEventBlockCornerRadius(isInterrupt: Bool) -> CGFloat {
-    isInterrupt ? 3 : 4
+/// Corner radius (continuous curvature) and centered stroke width shared by
+/// event blocks, the creation preview and the drop-target ring. Interrupt
+/// blocks are tighter; week mode's seven narrow columns get tighter corners
+/// and a thinner stroke so blocks don't read chunky there.
+func calendarEventBlockCornerRadius(isInterrupt: Bool, isWeekMode: Bool) -> CGFloat {
+    if isWeekMode { return isInterrupt ? 2 : 2.5 }
+    return isInterrupt ? 3 : 4
 }
 
-/// Border width: the style's stroke, a little heavier on an interrupt.
-func calendarEventBlockStrokeWidth(isInterrupt: Bool) -> CGFloat {
-    let base = EventBlockStyle.edit.strokeWidth
-    return isInterrupt ? max(0.8, base + 0.2) : base
+func calendarEventBlockStrokeWidth(isInterrupt: Bool, isWeekMode: Bool) -> CGFloat {
+    if isWeekMode { return isInterrupt ? 1 : 0.8 }
+    return isInterrupt ? 1.4 : 1.2
 }
 
 /// The leading effort bar's width for a `colorDepth` in 0…1 (0 = no bar).

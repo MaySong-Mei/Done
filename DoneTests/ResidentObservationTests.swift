@@ -323,10 +323,16 @@ final class SpikeRunStoreCompactionTests: XCTestCase {
         let padding = String(repeating: "x", count: 2_000)
 
         // Encoded line length is constant across these records: same keys,
-        // fixed-width ISO-8601 dates and UUIDs, same note length.
+        // fixed-width ISO-8601 dates and UUIDs, same note length — and the
+        // two envelope fields the store stamps on every line (gh#273):
+        // `installID` (a UUID) and `revision`, which is 1 for every record
+        // here because each is a fresh id. The probe carries both so the
+        // model measures what the store actually writes.
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        let probeRecord = makeClosedRun(spikeID: spikeID, startedAt: base, note: padding)
+        var probeRecord = makeClosedRun(spikeID: spikeID, startedAt: base, note: padding)
+        probeRecord.revision = 1
+        probeRecord.installID = UUID()
         let lineBytes = try encoder.encode(probeRecord).count + 1
 
         let fillCount = (SpikeRunStore.compactAtBytes - 1) / lineBytes
@@ -941,8 +947,11 @@ final class ResidentObservationCenterTests: XCTestCase {
         emitDrag()
         made.flushDaily()
         made.flushDaily()
-        XCTAssertEqual(loadDailies().count, 1)
-        let yesterdayID = loadDailies()[0].id
+        // Guards, not assert-then-subscript (gh#273 QA): a wrong count must
+        // fail THIS test, not trap the runner and hide every verdict after it.
+        guard let yesterdayID = loadDailies().first?.id, loadDailies().count == 1 else {
+            return XCTFail("same day, same run id — collapse keeps ONE record; got \(loadDailies().count)")
+        }
 
         clock.now = elevenPM.addingTimeInterval(2 * 3600) // 01:00 next day
         made.performRolloverFlushIfDue()
@@ -950,7 +959,7 @@ final class ResidentObservationCenterTests: XCTestCase {
         made.flushDaily()
 
         let dailies = loadDailies().sorted { $0.startedAt < $1.startedAt }
-        XCTAssertEqual(dailies.count, 2)
+        guard dailies.count == 2 else { return XCTFail("rollover mints a second id; got \(dailies.count) dailies") }
         XCTAssertEqual(dailies[0].id, yesterdayID)
         XCTAssertNotEqual(dailies[1].id, yesterdayID)
         XCTAssertEqual(dailies[0].endedAt, calendar.startOfDay(for: clock.now),
@@ -1297,7 +1306,7 @@ final class ResidentObservationCenterTests: XCTestCase {
         let records = SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.effortPathFixID, location: location)
         XCTAssertEqual(records.count, 1)
         XCTAssertEqual(records.first?.outcome, .aborted)
-        XCTAssertEqual(records.first?.abortReason, "manual #201 run took over")
+        XCTAssertEqual(records.first?.abortReason, .manualRunTookOver)
         if let manualID { coordinator.unregister(runID: manualID) }
     }
 
@@ -1475,6 +1484,10 @@ final class ResidentGraduationGuardTests: XCTestCase {
 
 final class FixWatchVerdictEvaluatorTests: XCTestCase {
 
+    /// The segment `makeRun` stamps every fixture with, so the tests above
+    /// the segment section read one population — the pre-segment pooling.
+    private let fixtureSegment = FixWatchSegment(deviceModel: "iPhone17,1", osVersion: "26.0")
+
     private func makeRun(
         spikeID: String,
         scenarioID: String,
@@ -1543,7 +1556,7 @@ final class FixWatchVerdictEvaluatorTests: XCTestCase {
         let dailies = [daily(awful, build: "debug"), daily(awful, build: nil)]
         let windows = [window(commitMs: Array(repeating: 500, count: 30), build: "debug")]
 
-        let effort = FixWatchVerdictEvaluator.evaluateEffortPath(dailies: dailies, windows: windows)
+        let effort = FixWatchVerdictEvaluator.evaluateEffortPath(dailies: dailies, windows: windows, currentSegment: fixtureSegment)
         XCTAssertEqual(effort.state, .observing)
         XCTAssertEqual(effort.nonReleaseCount, 3)
 
@@ -1551,7 +1564,7 @@ final class FixWatchVerdictEvaluatorTests: XCTestCase {
         XCTAssertEqual(gate.state, .observing)
         XCTAssertFalse(gate.alarm, "a debug-build violation is display, not alarm — the criteria population is Release only")
 
-        let touch = FixWatchVerdictEvaluator.evaluateTouchDelivery(dailies: dailies)
+        let touch = FixWatchVerdictEvaluator.evaluateTouchDelivery(dailies: dailies, currentSegment: fixtureSegment)
         XCTAssertEqual(touch.state, .observing)
     }
 
@@ -1593,13 +1606,15 @@ final class FixWatchVerdictEvaluatorTests: XCTestCase {
         let healthyLag = [daily(lagCounters(under40: 12))]
         let holding = FixWatchVerdictEvaluator.evaluateEffortPath(
             dailies: healthyLag,
-            windows: [window(commitMs: Array(repeating: 54.9, count: 20))]
+            windows: [window(commitMs: Array(repeating: 54.9, count: 20))],
+            currentSegment: fixtureSegment
         )
         XCTAssertEqual(holding.state, .holding)
 
         let failing = FixWatchVerdictEvaluator.evaluateEffortPath(
             dailies: healthyLag,
-            windows: [window(commitMs: Array(repeating: 55.1, count: 20))]
+            windows: [window(commitMs: Array(repeating: 55.1, count: 20))],
+            currentSegment: fixtureSegment
         )
         XCTAssertEqual(failing.state, .failing)
     }
@@ -1607,7 +1622,8 @@ final class FixWatchVerdictEvaluatorTests: XCTestCase {
     func testEffortPathBelowTheSampleFloorIsInsufficient() {
         let verdict = FixWatchVerdictEvaluator.evaluateEffortPath(
             dailies: [daily(lagCounters(under40: 12))],
-            windows: [window(commitMs: Array(repeating: 40, count: 19))]
+            windows: [window(commitMs: Array(repeating: 40, count: 19))],
+            currentSegment: fixtureSegment
         )
         XCTAssertEqual(verdict.state, .insufficient, "19 writing taps is under the 20-sample floor")
     }
@@ -1620,7 +1636,8 @@ final class FixWatchVerdictEvaluatorTests: XCTestCase {
             windows: [
                 window(commitMs: Array(repeating: 40, count: 15)),
                 window(commitMs: Array(repeating: 40, count: 15), contaminated: true),
-            ]
+            ],
+            currentSegment: fixtureSegment
         )
         XCTAssertEqual(verdict.state, .insufficient,
                        "15 clean samples — the contaminated window's 15 must not fill the floor")
@@ -1638,7 +1655,8 @@ final class FixWatchVerdictEvaluatorTests: XCTestCase {
     func testADecidedFailureDominatesUndecidedSiblings() {
         let verdict = FixWatchVerdictEvaluator.evaluateEffortPath(
             dailies: [daily(lagCounters(under40: 5))],
-            windows: [window(commitMs: Array(repeating: 60, count: 20))]
+            windows: [window(commitMs: Array(repeating: 60, count: 20))],
+            currentSegment: fixtureSegment
         )
         XCTAssertEqual(verdict.state, .failing,
                        "commit p50 decided-failing + lag under its sample floor must read 未达标, not 数据不足")
@@ -1654,7 +1672,8 @@ final class FixWatchVerdictEvaluatorTests: XCTestCase {
             windows: [window(
                 commitMs: Array(repeating: 40, count: 20),
                 frameAfterCommitMs: Array(repeating: 1_009, count: 20)
-            )]
+            )],
+            currentSegment: fixtureSegment
         )
         XCTAssertEqual(verdict.state, .holding)
         XCTAssertTrue(verdict.readouts.contains { $0.id.contains("settle") && $0.passing == nil })
@@ -1664,7 +1683,8 @@ final class FixWatchVerdictEvaluatorTests: XCTestCase {
 
     func testTouchDeliveryPassesWhenAllSamplesAreFast() {
         let verdict = FixWatchVerdictEvaluator.evaluateTouchDelivery(
-            dailies: [daily(lagCounters(under40: 10))]
+            dailies: [daily(lagCounters(under40: 10))],
+            currentSegment: fixtureSegment
         )
         XCTAssertEqual(verdict.state, .holding)
     }
@@ -1673,7 +1693,8 @@ final class FixWatchVerdictEvaluatorTests: XCTestCase {
     /// p50 clause: 9/10 ≥ 50% → passes. p95 clause: 9/10 < 95% → fails.
     func testTouchDeliveryP95CatchesASlowTail() {
         let verdict = FixWatchVerdictEvaluator.evaluateTouchDelivery(
-            dailies: [daily(lagCounters(under40: 9, over320: 1))]
+            dailies: [daily(lagCounters(under40: 9, over320: 1))],
+            currentSegment: fixtureSegment
         )
         XCTAssertEqual(verdict.state, .failing)
         let p50 = verdict.readouts.first { $0.id.contains("p50") }
@@ -1684,7 +1705,8 @@ final class FixWatchVerdictEvaluatorTests: XCTestCase {
 
     func testTouchDeliveryBelowTenSamplesIsInsufficient() {
         let verdict = FixWatchVerdictEvaluator.evaluateTouchDelivery(
-            dailies: [daily(lagCounters(under40: 9))]
+            dailies: [daily(lagCounters(under40: 9))],
+            currentSegment: fixtureSegment
         )
         XCTAssertEqual(verdict.state, .insufficient)
     }
@@ -1694,9 +1716,325 @@ final class FixWatchVerdictEvaluatorTests: XCTestCase {
     func testHistogramsPoolAcrossDailyRecords() {
         let day1 = daily(lagCounters(under40: 6), startedAt: Date(timeIntervalSince1970: 1_700_000_000))
         let day2 = daily(lagCounters(under40: 6), startedAt: Date(timeIntervalSince1970: 1_700_100_000))
-        let verdict = FixWatchVerdictEvaluator.evaluateTouchDelivery(dailies: [day1, day2])
+        let verdict = FixWatchVerdictEvaluator.evaluateTouchDelivery(dailies: [day1, day2], currentSegment: fixtureSegment)
         XCTAssertEqual(verdict.state, .holding)
         XCTAssertEqual(verdict.releaseDayCount, 2)
+    }
+}
+
+// MARK: - Segmented timing verdicts (phone model × OS major)
+
+/// The timing criteria are judged on the evaluating phone's segment; every
+/// other segment shows report-only; the counter checks pool. The fixture is
+/// the user's measured shape: iPhone16,2 on iOS 26.6.x (Sep 8–20), then
+/// iPhone19,2 on iOS 27.0 (Sep 21 on). Pooled, Entry 3 read 9/50 and
+/// failed. Every expected string below is hand-computed from the bucket
+/// strings, in `ResidentLagHistogram` order: ≤10, ≤20, ≤40, ≤80, ≤120,
+/// ≤320, >320, missing.
+@MainActor
+final class FixWatchSegmentTests: XCTestCase {
+    private let oldPhone = FixWatchSegment(deviceModel: "iPhone16,2", osVersion: "26.6.1")
+    private let newPhone = FixWatchSegment(deviceModel: "iPhone19,2", osVersion: "27.0")
+
+    private func noon(september day: Int) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        return calendar.date(from: DateComponents(year: 2026, month: 9, day: day, hour: 12))!
+    }
+
+    private func run(
+        spikeID: String, scenarioID: String, model: String, os: String, day: Int,
+        metrics: [String: SpikeMetricValue], build: String = "release"
+    ) -> SpikeRun {
+        var run = SpikeRun(
+            id: UUID(), spikeID: spikeID, scenarioID: scenarioID, variantID: nil,
+            startedAt: noon(september: day), endedAt: noon(september: day).addingTimeInterval(60),
+            appVersion: "0.5.0", appBuild: "24", appCommit: nil,
+            deviceModel: model, osVersion: os,
+            timeZoneIdentifier: "UTC", localeIdentifier: "zh_CN",
+            buildConfiguration: build,
+            metrics: metrics, note: nil, outcome: .completed, abortReason: nil
+        )
+        run.dayKey = String(format: "2026-09-%02d", day)
+        return run
+    }
+
+    private func daily(
+        model: String, os: String, day: Int, tapBuckets: String,
+        bodyPasses: Int = 0, drafts: Int = 0, hidden: Int = 0, visible: Int = 0, build: String = "release"
+    ) -> SpikeRun {
+        var counters = ResidentCounterSet()
+        counters.detailBodyPasses = bodyPasses
+        counters.draftComputes = drafts
+        counters.meComputedHidden = hidden
+        counters.meComputedVisible = visible
+        var metrics = counters.metrics
+        metrics[ResidentCounterSet.tapLagBucketsKey] = .string(tapBuckets)
+        return run(spikeID: FixObservationRegistry.residentDailySpikeID,
+                   scenarioID: FixObservationRegistry.residentDailyScenarioID,
+                   model: model, os: os, day: day, metrics: metrics, build: build)
+    }
+
+    private func window(model: String, os: String, day: Int, commitMs: [Double], frameAfterCommitMs: [Double]) -> SpikeRun {
+        func list(_ values: [Double]) -> SpikeMetricValue {
+            .string(values.map { String(format: "%.1f", $0) }.joined(separator: " "))
+        }
+        return run(spikeID: FixObservationRegistry.effortPathFixID,
+                   scenarioID: FixObservationRegistry.windowScenarioID,
+                   model: model, os: os, day: day,
+                   metrics: [
+                       "wContaminated": .bool(false),
+                       ResidentWindowAggregates.commitMsKey: list(commitMs),
+                       ResidentWindowAggregates.frameAfterCommitMsKey: list(frameAfterCommitMs),
+                   ])
+    }
+
+    /// The user's records. Old phone: 3 days of 3 taps ≤40ms + 1 in 40–80
+    /// → 9/12 ≤40ms, 12/12 ≤120ms. New phone: 4 days, 38 taps, none ≤40ms
+    /// (10 in 40–80, 20 in 80–120, 8 in 120–320) → 0/38 ≤40ms, 30/38
+    /// ≤120ms. Body passes/drafts: old 3×(10/1), new 4×(5/5) → pooled
+    /// 23/50, new phone alone 20/20. The old phone's days carry three
+    /// different 26.6 point releases, so a segment keyed on the full
+    /// version string would split them. `stamp` overrides both phones'
+    /// model and OS — the pooled positive control.
+    private func usersRecords(stamp: (model: String, os: String)? = nil) -> (dailies: [SpikeRun], windows: [SpikeRun]) {
+        let old = stamp ?? (model: "iPhone16,2", os: "26.6.1")
+        let new = stamp ?? (model: "iPhone19,2", os: "27.0")
+        // The old phone moved through point releases; one major, one segment.
+        let oldVersions = stamp == nil ? [(8, "26.6"), (14, "26.6.1"), (20, "26.6.2")] : [(8, old.os), (14, old.os), (20, old.os)]
+        let dailies = oldVersions.map { day, os in
+            daily(model: old.model, os: os, day: day, tapBuckets: "0 0 3 1 0 0 0 0", bodyPasses: 10, drafts: 1)
+        } + [
+            daily(model: new.model, os: new.os, day: 21, tapBuckets: "0 0 0 3 5 2 0 0", bodyPasses: 5, drafts: 5),
+            daily(model: new.model, os: new.os, day: 24, tapBuckets: "0 0 0 2 6 2 0 0", bodyPasses: 5, drafts: 5),
+            daily(model: new.model, os: new.os, day: 27, tapBuckets: "0 0 0 3 5 2 0 0", bodyPasses: 5, drafts: 5),
+            daily(model: new.model, os: new.os, day: 28, tapBuckets: "0 0 0 2 4 2 0 0", bodyPasses: 5, drafts: 5),
+        ]
+        let windows = [
+            window(model: old.model, os: old.os, day: 14,
+                   commitMs: Array(repeating: 30, count: 20), frameAfterCommitMs: [700, 800, 900]),
+            window(model: new.model, os: new.os, day: 24,
+                   commitMs: Array(repeating: 42, count: 20), frameAfterCommitMs: [664]),
+        ]
+        return (dailies, windows)
+    }
+
+    private func verdict(_ id: String, in verdicts: [FixVerdict]) throws -> FixVerdict {
+        try XCTUnwrap(verdicts.first { $0.entryID == id })
+    }
+
+    // MARK: Parsing
+
+    func testTheOSMajorIsTheLeadingIntegerAndAnythingElseStaysWhole() {
+        XCTAssertEqual(FixWatchSegment.osMajor("27.0"), 27)
+        XCTAssertEqual(FixWatchSegment.osMajor("26.6.1"), 26)
+        XCTAssertEqual(FixWatchSegment.osMajor("27"), 27)
+        for unparseable in ["unknown", "", ".1", "27beta.1", "-1.0", " 27.0", "x26.0"] {
+            XCTAssertNil(FixWatchSegment.osMajor(unparseable), unparseable)
+        }
+
+        XCTAssertEqual(FixWatchSegment(deviceModel: "iPhone16,2", osVersion: "26.0"), oldPhone,
+                       "a point release is the same segment")
+        XCTAssertNotEqual(FixWatchSegment(deviceModel: "iPhone16,2", osVersion: "27.0"), oldPhone, "a new major is not")
+        XCTAssertNotEqual(FixWatchSegment(deviceModel: "iPhone19,2", osVersion: "26.6.1"), oldPhone, "another model is not")
+
+        let unknown = FixWatchSegment(deviceModel: "iPhone16,2", osVersion: "unknown")
+        XCTAssertEqual(unknown.os, .unparsed("unknown"))
+        XCTAssertNotEqual(unknown, oldPhone, "an unparseable OS never merges with a parsed one")
+        XCTAssertEqual(unknown, FixWatchSegment(deviceModel: "iPhone16,2", osVersion: "unknown"))
+        XCTAssertNotEqual(unknown, FixWatchSegment(deviceModel: "iPhone16,2", osVersion: "unknown2"),
+                          "two unparseable strings are two segments")
+
+        XCTAssertEqual(newPhone.label, "iPhone19,2 · iOS 27")
+        XCTAssertEqual(unknown.label, "iPhone16,2 · iOS unknown")
+    }
+
+    // MARK: The user's two phones
+
+    /// Positive control: with both phones' records in ONE segment the
+    /// fixture reads exactly what the deck showed the user — 9/50, failing.
+    /// Without this, the tests below could pass on a fixture that never
+    /// reproduced the problem.
+    func testPooledIntoOneSegmentTheFixtureReadsTheUsersNineOfFifty() throws {
+        let pooled = usersRecords(stamp: (model: "iPhone16,2", os: "26.6.1"))
+        let touch = FixWatchVerdictEvaluator.evaluateTouchDelivery(dailies: pooled.dailies, currentSegment: oldPhone)
+        XCTAssertEqual(touch.state, .failing)
+        XCTAssertEqual(touch.readouts.first, FixMetricReadout(id: "tap lag p50", measured: "9/50 ≤ 40ms",
+                                                              threshold: "≥ 50%", passing: false))
+        XCTAssertEqual(touch.readouts.count, 2, "one segment: no report-only rows")
+    }
+
+    func testOnTheNewPhoneItsOwnTapsFailAndTheOldPhoneIsReportOnly() throws {
+        let records = usersRecords()
+        let verdicts = FixWatchAttention.evaluate(dailies: records.dailies, windows: records.windows,
+                                                  currentSegment: newPhone)
+
+        let touch = try verdict(FixObservationRegistry.touchDeliveryFixID, in: verdicts)
+        XCTAssertEqual(touch.state, .failing)
+        XCTAssertEqual(touch.readouts, [
+            FixMetricReadout(id: "tap lag p50", measured: "0/38 ≤ 40ms", threshold: "≥ 50%", passing: false),
+            FixMetricReadout(id: "tap lag p95", measured: "30/38 ≤ 120ms", threshold: "≥ 95%", passing: false),
+            FixMetricReadout(id: "iPhone16,2 · iOS 26 · tap lag p50", measured: "9/12 ≤ 40ms",
+                             threshold: "report-only (≥ 50%)", passing: nil),
+            FixMetricReadout(id: "iPhone16,2 · iOS 26 · tap lag p95", measured: "12/12 ≤ 120ms",
+                             threshold: "report-only (≥ 95%)", passing: nil),
+        ])
+        XCTAssertEqual(touch.releaseDayCount, 4, "the new phone's days only")
+        XCTAssertTrue(touch.notes.contains { $0.contains("本机:iPhone19,2 · iOS 27") })
+        XCTAssertTrue(touch.notes.contains { $0.contains("合计 7 天") }, "all segments' days in a note")
+        XCTAssertFalse(touch.notes.contains { $0.contains("还没有 Release 数据") })
+
+        let effort = try verdict(FixObservationRegistry.effortPathFixID, in: verdicts)
+        XCTAssertEqual(effort.state, .failing)
+        XCTAssertEqual(effort.readouts, [
+            FixMetricReadout(id: "commit p50", measured: "42.0ms (n=20)", threshold: "≤ 55ms", passing: true),
+            FixMetricReadout(id: "delivery lag p50", measured: "0/38 ≤ 40ms", threshold: "≥ 50%", passing: false),
+            FixMetricReadout(id: "settle: first frame after commit", measured: "p50 664ms · max 664ms (n=1)",
+                             threshold: "report-only", passing: nil),
+            FixMetricReadout(id: "drafts / body passes", measured: "0.46 (23/50)",
+                             threshold: "report-only · 全部机型与系统", passing: nil),
+            FixMetricReadout(id: "iPhone16,2 · iOS 26 · commit p50", measured: "30.0ms (n=20)",
+                             threshold: "report-only (≤ 55ms)", passing: nil),
+            FixMetricReadout(id: "iPhone16,2 · iOS 26 · delivery lag p50", measured: "9/12 ≤ 40ms",
+                             threshold: "report-only (≥ 50%)", passing: nil),
+            FixMetricReadout(id: "iPhone16,2 · iOS 26 · settle: first frame after commit",
+                             measured: "p50 800ms · max 900ms (n=3)", threshold: "report-only", passing: nil),
+        ])
+        XCTAssertEqual(effort.releaseDayCount, 4)
+        XCTAssertTrue(effort.notes.contains { $0.contains("本机:iPhone19,2 · iOS 27") })
+        XCTAssertTrue(effort.notes.contains { $0.contains("合计 7 天") })
+    }
+
+    /// The same records read on the old phone: its own 12 taps hold, and
+    /// the new phone's failing taps — report-only here — weigh nothing.
+    func testOnTheOldPhoneTheSameRecordsHold() throws {
+        let records = usersRecords()
+        let verdicts = FixWatchAttention.evaluate(dailies: records.dailies, windows: records.windows,
+                                                  currentSegment: oldPhone)
+
+        let touch = try verdict(FixObservationRegistry.touchDeliveryFixID, in: verdicts)
+        XCTAssertEqual(touch.state, .holding)
+        XCTAssertEqual(touch.readouts, [
+            FixMetricReadout(id: "tap lag p50", measured: "9/12 ≤ 40ms", threshold: "≥ 50%", passing: true),
+            FixMetricReadout(id: "tap lag p95", measured: "12/12 ≤ 120ms", threshold: "≥ 95%", passing: true),
+            FixMetricReadout(id: "iPhone19,2 · iOS 27 · tap lag p50", measured: "0/38 ≤ 40ms",
+                             threshold: "report-only (≥ 50%)", passing: nil),
+            FixMetricReadout(id: "iPhone19,2 · iOS 27 · tap lag p95", measured: "30/38 ≤ 120ms",
+                             threshold: "report-only (≥ 95%)", passing: nil),
+        ])
+        XCTAssertEqual(touch.releaseDayCount, 3)
+
+        let effort = try verdict(FixObservationRegistry.effortPathFixID, in: verdicts)
+        XCTAssertEqual(effort.state, .holding)
+        XCTAssertEqual(effort.readouts.prefix(2).map(\.measured), ["30.0ms (n=20)", "9/12 ≤ 40ms"])
+        XCTAssertEqual(effort.readouts.first { $0.id == "drafts / body passes" }?.measured, "0.46 (23/50)",
+                       "the counter readout pools both phones whichever phone reads it")
+    }
+
+    /// A phone with no records of its own (a third model, or a new OS
+    /// major): 观察中 on both timing cards even though two other segments
+    /// have data — those show report-only, newest first, and a note says so.
+    func testAPhoneWithNoRecordsOfItsOwnIsObservingAndShowsTheOthersNewestFirst() throws {
+        let records = usersRecords()
+        let stranger = FixWatchSegment(deviceModel: "iPhone20,1", osVersion: "28.0")
+        let verdicts = FixWatchAttention.evaluate(dailies: records.dailies, windows: records.windows,
+                                                  currentSegment: stranger)
+
+        let touch = try verdict(FixObservationRegistry.touchDeliveryFixID, in: verdicts)
+        XCTAssertEqual(touch.state, .observing)
+        XCTAssertEqual(touch.releaseDayCount, 0)
+        XCTAssertEqual(touch.readouts.map(\.id), [
+            "tap lag p50", "tap lag p95",
+            "iPhone19,2 · iOS 27 · tap lag p50", "iPhone19,2 · iOS 27 · tap lag p95",
+            "iPhone16,2 · iOS 26 · tap lag p50", "iPhone16,2 · iOS 26 · tap lag p95",
+        ], "the new phone's latest day (Sep 28) is after the old phone's (Sep 20)")
+        XCTAssertEqual(touch.readouts.compactMap(\.passing), [], "nothing is decided for an empty segment")
+        XCTAssertTrue(touch.notes.contains { $0.contains("还没有 Release 数据") })
+        XCTAssertTrue(touch.notes.contains { $0.contains("合计 7 天") })
+
+        let effort = try verdict(FixObservationRegistry.effortPathFixID, in: verdicts)
+        XCTAssertEqual(effort.state, .observing)
+        XCTAssertEqual(effort.releaseDayCount, 0)
+        XCTAssertTrue(effort.notes.contains { $0.contains("还没有 Release 数据") })
+        XCTAssertEqual(effort.readouts.filter { $0.id.hasPrefix("iPhone19,2 · iOS 27 · ") }.count, 3)
+        XCTAssertEqual(effort.readouts.filter { $0.id.hasPrefix("iPhone16,2 · iOS 26 · ") }.count, 3)
+    }
+
+    /// The counter checks pool: a hidden compute counted ONLY on the old
+    /// phone still fires the Me-tab alarm on the new phone's deck, and the
+    /// settings row lights. Positive control: the same records without it
+    /// keep both quiet.
+    func testAHiddenComputeOnlyOnTheOldPhoneStillRaisesTheAlarm() throws {
+        let entries = [FixObservationEntry(
+            id: "fixture", issueNumbers: [1], mergedSHAs: [], title: "t", summary: "s",
+            hasWindows: false, lifecycle: .active, addedOn: "2026-09-01", reviewBy: "2099-01-01"
+        )]
+        let records = usersRecords()
+        let quiet = FixWatchAttention.evaluate(dailies: records.dailies, windows: records.windows,
+                                               currentSegment: newPhone)
+        XCTAssertFalse(try verdict(FixObservationRegistry.meTabGateFixID, in: quiet).alarm)
+        XCTAssertFalse(FixWatchAttention.needsAttention(verdicts: quiet, entries: entries, now: noon(september: 28)))
+
+        let tripped = records.dailies + [
+            daily(model: "iPhone16,2", os: "26.6.1", day: 15, tapBuckets: "0 0 0 0 0 0 0 0", hidden: 1, visible: 4),
+        ]
+        let verdicts = FixWatchAttention.evaluate(dailies: tripped, windows: records.windows, currentSegment: newPhone)
+        let gate = try verdict(FixObservationRegistry.meTabGateFixID, in: verdicts)
+        XCTAssertTrue(gate.alarm)
+        XCTAssertEqual(gate.state, .failing)
+        XCTAssertEqual(gate.releaseDayCount, 8, "the tripwire's days are every segment's")
+        XCTAssertTrue(FixWatchAttention.needsAttention(verdicts: verdicts, entries: entries, now: noon(september: 28)))
+    }
+
+    /// An OS the parser cannot read is its own segment, ordered by recency
+    /// like any other; a Debug record from yet another phone makes no row.
+    func testAnUnparseableOSIsItsOwnSegmentAndDebugRecordsMakeNoRow() throws {
+        let records = usersRecords()
+        let dailies = records.dailies + [
+            daily(model: "iPhone16,2", os: "unknown", day: 25, tapBuckets: "0 0 0 0 0 0 10 0"),
+            daily(model: "iPhone21,1", os: "29.0", day: 29, tapBuckets: "0 0 0 0 0 0 10 0", build: "debug"),
+        ]
+        let touch = FixWatchVerdictEvaluator.evaluateTouchDelivery(dailies: dailies, currentSegment: oldPhone)
+        XCTAssertEqual(touch.state, .holding, "ten >320ms taps under an unreadable OS do not join the old phone's 12")
+        XCTAssertEqual(touch.readouts.first?.measured, "9/12 ≤ 40ms")
+        XCTAssertEqual(touch.readouts.map(\.id), [
+            "tap lag p50", "tap lag p95",
+            "iPhone19,2 · iOS 27 · tap lag p50", "iPhone19,2 · iOS 27 · tap lag p95",
+            "iPhone16,2 · iOS unknown · tap lag p50", "iPhone16,2 · iOS unknown · tap lag p95",
+        ])
+        XCTAssertEqual(touch.readouts.first { $0.id == "iPhone16,2 · iOS unknown · tap lag p50" }?.measured,
+                       "0/10 ≤ 40ms")
+        XCTAssertEqual(touch.nonReleaseCount, 1)
+    }
+
+    /// The contamination note sits under this phone's numbers, so it counts
+    /// this phone's contaminated windows only: one here, against two on the
+    /// old phone. Read as a phone with none of its own contaminated, the
+    /// card carries no note at all.
+    func testTheContaminationNoteCountsThisPhonesWindowsOnly() throws {
+        func dirty(_ model: String, _ os: String, day: Int) -> SpikeRun {
+            var run = window(model: model, os: os, day: day, commitMs: Array(repeating: 30, count: 20),
+                             frameAfterCommitMs: [700])
+            run.metrics["wContaminated"] = .bool(true)
+            return run
+        }
+        let records = usersRecords()
+        let windows = records.windows + [
+            dirty("iPhone16,2", "26.6.1", day: 9), dirty("iPhone16,2", "26.6.1", day: 10),
+            dirty("iPhone19,2", "27.0", day: 22),
+        ]
+        let onNew = FixWatchVerdictEvaluator.evaluateEffortPath(dailies: records.dailies, windows: windows,
+                                                                currentSegment: newPhone)
+        XCTAssertEqual(onNew.notes.filter { $0.contains("污染") }, ["1 个窗口因外部写入污染被排除"])
+
+        let onOld = FixWatchVerdictEvaluator.evaluateEffortPath(dailies: records.dailies, windows: windows,
+                                                                currentSegment: oldPhone)
+        XCTAssertEqual(onOld.notes.filter { $0.contains("污染") }, ["2 个窗口因外部写入污染被排除"])
+
+        let clean = FixWatchVerdictEvaluator.evaluateEffortPath(
+            dailies: records.dailies, windows: records.windows + [dirty("iPhone16,2", "26.6.1", day: 9)],
+            currentSegment: newPhone)
+        XCTAssertFalse(clean.notes.contains { $0.contains("污染") }, "\(clean.notes)")
     }
 }
 
@@ -1898,5 +2236,414 @@ final class FixWatchAttentionTests: XCTestCase {
         XCTAssertFalse(FixWatchAttention.isOverdue(entries[0], now: noon(2026, 10, 17)),
                        "the review day itself is not yet overdue — same rule as the deck's OVERDUE badge")
         XCTAssertTrue(FixWatchAttention.isOverdue(entries[0], now: noon(2026, 10, 18)))
+    }
+}
+
+// MARK: - Independent QA: segmented timing verdicts (feat/fixwatch-segment)
+
+/// Independent QA on the segment split. Every expected string is computed
+/// by hand from the bucket strings (order ≤10, ≤20, ≤40, ≤80, ≤120, ≤320,
+/// >320, missing) and the commit lists, never read back from the
+/// implementation. Each test names the shape it pins; each absence is paired
+/// with a positive control in the same test.
+@MainActor
+final class FixWatchSegmentIndependentQATests: XCTestCase {
+    private let current = FixWatchSegment(deviceModel: "iPhone19,2", osVersion: "27.0.1")
+    private let effortID = FixObservationRegistry.effortPathFixID
+    private let touchID = FixObservationRegistry.touchDeliveryFixID
+    private let gateID = FixObservationRegistry.meTabGateFixID
+
+    private func at(_ day: Int, hour: Int = 12) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        return calendar.date(from: DateComponents(year: 2026, month: 10, day: day, hour: hour))!
+    }
+
+    private func record(spikeID: String, scenarioID: String, model: String, os: String, day: Int, hour: Int,
+                        metrics: [String: SpikeMetricValue], build: String?) -> SpikeRun {
+        var run = SpikeRun(
+            id: UUID(), spikeID: spikeID, scenarioID: scenarioID, variantID: nil,
+            startedAt: at(day, hour: hour), endedAt: at(day, hour: hour).addingTimeInterval(60),
+            appVersion: "0.5.0", appBuild: "24", appCommit: nil,
+            deviceModel: model, osVersion: os,
+            timeZoneIdentifier: "UTC", localeIdentifier: "zh_CN",
+            buildConfiguration: build,
+            metrics: metrics, note: nil, outcome: .completed, abortReason: nil
+        )
+        run.dayKey = String(format: "2026-10-%02d", day)
+        return run
+    }
+
+    private func daily(_ model: String, _ os: String, day: Int, hour: Int = 12, taps: String,
+                       passes: Int = 0, drafts: Int = 0, hidden: Int = 0, visible: Int = 0,
+                       build: String? = "release") -> SpikeRun {
+        var counters = ResidentCounterSet()
+        counters.detailBodyPasses = passes
+        counters.draftComputes = drafts
+        counters.meComputedHidden = hidden
+        counters.meComputedVisible = visible
+        var metrics = counters.metrics
+        metrics[ResidentCounterSet.tapLagBucketsKey] = .string(taps)
+        return record(spikeID: FixObservationRegistry.residentDailySpikeID,
+                      scenarioID: FixObservationRegistry.residentDailyScenarioID,
+                      model: model, os: os, day: day, hour: hour, metrics: metrics, build: build)
+    }
+
+    private func window(_ model: String, _ os: String, day: Int, hour: Int = 12, commitMs: [Double],
+                        settleMs: [Double] = [], contaminated: Bool = false, build: String? = "release") -> SpikeRun {
+        func list(_ values: [Double]) -> SpikeMetricValue {
+            .string(values.map { String(format: "%.1f", $0) }.joined(separator: " "))
+        }
+        return record(spikeID: FixObservationRegistry.effortPathFixID,
+                      scenarioID: FixObservationRegistry.windowScenarioID,
+                      model: model, os: os, day: day, hour: hour,
+                      metrics: [
+                          "wContaminated": .bool(contaminated),
+                          ResidentWindowAggregates.commitMsKey: list(commitMs),
+                          ResidentWindowAggregates.frameAfterCommitMsKey: list(settleMs),
+                      ], build: build)
+    }
+
+    private func card(_ id: String, _ verdicts: [FixVerdict]) throws -> FixVerdict {
+        try XCTUnwrap(verdicts.first { $0.entryID == id })
+    }
+
+    private func deck(_ dailies: [SpikeRun], _ windows: [SpikeRun] = [],
+                      as segment: FixWatchSegment? = nil) -> [FixVerdict] {
+        FixWatchAttention.evaluate(dailies: dailies, windows: windows, currentSegment: segment ?? current)
+    }
+
+    // MARK: Same model, other OS major
+
+    /// The user's own phone after an OS upgrade: one model, two majors.
+    /// A segment keyed on the model alone would pool them; keyed on the OS
+    /// alone it would pool a different phone on the same major.
+    /// Current (iPhone19,2 · 27): "27.0" 10 taps in 40–80 + "27" 2 taps
+    /// >320 → 0/12 ≤40, 10/12 ≤120 → failing. iPhone19,2 · 26: 10 ≤10 →
+    /// 10/10 both. iPhone18,1 · 27 (another model, same major): 10 ≤10.
+    func testSameModelOtherMajorAndSameMajorOtherModelAreBothOtherSegments() throws {
+        let dailies = [
+            daily("iPhone19,2", "26.6", day: 1, taps: "10 0 0 0 0 0 0 0"),
+            daily("iPhone19,2", "27.0", day: 2, taps: "0 0 0 10 0 0 0 0"),
+            daily("iPhone19,2", "27", day: 3, taps: "0 0 0 0 0 0 2 0"),
+            daily("iPhone18,1", "27.0", day: 4, taps: "10 0 0 0 0 0 0 0"),
+        ]
+        let touch = try card(touchID, deck(dailies))
+        XCTAssertEqual(touch.state, .failing)
+        XCTAssertEqual(touch.readouts, [
+            FixMetricReadout(id: "tap lag p50", measured: "0/12 ≤ 40ms", threshold: "≥ 50%", passing: false),
+            FixMetricReadout(id: "tap lag p95", measured: "10/12 ≤ 120ms", threshold: "≥ 95%", passing: false),
+            FixMetricReadout(id: "iPhone18,1 · iOS 27 · tap lag p50", measured: "10/10 ≤ 40ms",
+                             threshold: "report-only (≥ 50%)", passing: nil),
+            FixMetricReadout(id: "iPhone18,1 · iOS 27 · tap lag p95", measured: "10/10 ≤ 120ms",
+                             threshold: "report-only (≥ 95%)", passing: nil),
+            FixMetricReadout(id: "iPhone19,2 · iOS 26 · tap lag p50", measured: "10/10 ≤ 40ms",
+                             threshold: "report-only (≥ 50%)", passing: nil),
+            FixMetricReadout(id: "iPhone19,2 · iOS 26 · tap lag p95", measured: "10/10 ≤ 120ms",
+                             threshold: "report-only (≥ 95%)", passing: nil),
+        ])
+        XCTAssertEqual(touch.releaseDayCount, 2, "days 2 and 3: the current segment's own")
+        XCTAssertTrue(touch.notes.contains { $0.contains("本机:iPhone19,2 · iOS 27") }, "\(touch.notes)")
+        XCTAssertTrue(touch.notes.contains { $0.contains("合计 4 天") }, "\(touch.notes)")
+
+        // Positive control: read as the same phone on 26, the 26 records are judged.
+        let onOldOS = try card(touchID, deck(dailies, as: FixWatchSegment(deviceModel: "iPhone19,2", osVersion: "26.6.2")))
+        XCTAssertEqual(onOldOS.state, .holding)
+        XCTAssertEqual(onOldOS.readouts.prefix(2).map(\.measured), ["10/10 ≤ 40ms", "10/10 ≤ 120ms"])
+        XCTAssertEqual(onOldOS.releaseDayCount, 1)
+    }
+
+    // MARK: Version-string shapes
+
+    /// "27", "27.0" and "27.0.1" are one segment; "", "iOS 27" and
+    /// "27beta.1" are each their own, and none of them joins the parsed 27.
+    /// Parsed 27: 4 + 4 + 4 taps ≤40 → 12/12 → holding. The unparsed
+    /// ones carry 10 taps >320 each; any of them merged would turn the
+    /// p50 to 12/22 and the p95 to 12/22 → failing.
+    func testVersionStringShapesSplitWhereTheSpecSaysAndNowhereElse() throws {
+        XCTAssertEqual(FixWatchSegment(deviceModel: "M", osVersion: "27"), FixWatchSegment(deviceModel: "M", osVersion: "27.0.1"))
+        XCTAssertEqual(FixWatchSegment(deviceModel: "M", osVersion: "27.0"), FixWatchSegment(deviceModel: "M", osVersion: "27"))
+        for raw in ["", "iOS 27", "27beta.1"] {
+            XCTAssertEqual(FixWatchSegment(deviceModel: "M", osVersion: raw).os, .unparsed(raw), raw)
+            XCTAssertNotEqual(FixWatchSegment(deviceModel: "M", osVersion: raw), FixWatchSegment(deviceModel: "M", osVersion: "27"), raw)
+        }
+
+        let segment = FixWatchSegment(deviceModel: "M", osVersion: "27.0")
+        let dailies = [
+            daily("M", "27", day: 1, taps: "4 0 0 0 0 0 0 0"),
+            daily("M", "27.0", day: 2, taps: "0 4 0 0 0 0 0 0"),
+            daily("M", "27.0.1", day: 3, taps: "0 0 4 0 0 0 0 0"),
+            daily("M", "", day: 4, taps: "0 0 0 0 0 0 10 0"),
+            daily("M", "27beta.1", day: 5, taps: "0 0 0 0 0 0 10 0"),
+            daily("M", "iOS 27", day: 6, taps: "0 0 0 0 0 0 10 0"),
+        ]
+        let touch = try card(touchID, deck(dailies, as: segment))
+        XCTAssertEqual(touch.state, .holding)
+        XCTAssertEqual(touch.readouts.prefix(2).map(\.measured), ["12/12 ≤ 40ms", "12/12 ≤ 120ms"])
+        XCTAssertEqual(touch.releaseDayCount, 3)
+        XCTAssertEqual(touch.readouts.count, 2 + 3 * 2, "three unparsed segments, two rows each")
+        XCTAssertEqual(touch.readouts.dropFirst(2).map(\.measured), Array(repeating: "0/10 ≤ 40ms", count: 3)
+            .enumerated().flatMap { [$0.element, "0/10 ≤ 120ms"] })
+        XCTAssertEqual(Set(touch.readouts.map(\.id)).count, touch.readouts.count, "row ids are the ForEach identity")
+        XCTAssertTrue(touch.readouts.dropFirst(2).allSatisfy { $0.passing == nil })
+        // Newest first: "iOS 27" (day 6), "27beta.1" (day 5), "" (day 4).
+        XCTAssertEqual(touch.readouts.dropFirst(2).map(\.id).filter { $0.hasSuffix("p50") }, [
+            "M · iOS iOS 27 · tap lag p50", "M · iOS 27beta.1 · tap lag p50", "M · iOS ? · tap lag p50",
+        ])
+    }
+
+    // MARK: Current segment present on one side only
+
+    /// This phone has a window but no daily yet (a fresh install the same
+    /// day). Entry 1 has data — commit decided, lag undecided → 数据不足,
+    /// not 观察中, and no "no data yet" note; its day count is 0 (days are
+    /// dailies). Entry 3 sees no daily of this phone → 观察中 with the note.
+    /// The other phone: 12 taps ≤40 on day 3; no windows.
+    func testCurrentSegmentOnlyInWindows() throws {
+        let other = ("iPhone16,2", "26.6.1")
+        let verdicts = deck(
+            [daily(other.0, other.1, day: 3, taps: "0 0 12 0 0 0 0 0")],
+            [window("iPhone19,2", "27.0", day: 5, commitMs: Array(repeating: 40, count: 20))]
+        )
+        let effort = try card(effortID, verdicts)
+        XCTAssertEqual(effort.state, .insufficient)
+        XCTAssertEqual(effort.releaseDayCount, 0)
+        XCTAssertEqual(Array(effort.readouts.prefix(2)), [
+            FixMetricReadout(id: "commit p50", measured: "40.0ms (n=20)", threshold: "≤ 55ms", passing: true),
+            FixMetricReadout(id: "delivery lag p50", measured: "0 samples", threshold: "≥ 10 samples", passing: nil),
+        ])
+        XCTAssertTrue(effort.readouts.contains(FixMetricReadout(
+            id: "iPhone16,2 · iOS 26 · delivery lag p50", measured: "12/12 ≤ 40ms",
+            threshold: "report-only (≥ 50%)", passing: nil)))
+        XCTAssertTrue(effort.readouts.contains(FixMetricReadout(
+            id: "iPhone16,2 · iOS 26 · commit p50", measured: "0 writing taps",
+            threshold: "report-only (≥ 20 samples)", passing: nil)))
+        XCTAssertFalse(effort.notes.contains { $0.contains("还没有 Release 数据") }, "\(effort.notes)")
+        XCTAssertTrue(effort.notes.contains { $0.contains("合计 1 天") }, "windows are not days: \(effort.notes)")
+
+        let touch = try card(touchID, verdicts)
+        XCTAssertEqual(touch.state, .observing)
+        XCTAssertEqual(touch.releaseDayCount, 0)
+        XCTAssertTrue(touch.notes.contains { $0.contains("还没有 Release 数据") }, "\(touch.notes)")
+        XCTAssertEqual(touch.readouts.compactMap(\.passing), [])
+    }
+
+    /// The other way round: this phone has dailies but no window; the other
+    /// phone only a window. Entry 1: lag decided (10/10), commit undecided →
+    /// 数据不足; the other phone's row comes from its window alone. Entry 3:
+    /// 达标 and no report-only row (the other phone has no daily).
+    func testCurrentSegmentOnlyInDailies() throws {
+        let verdicts = deck(
+            [daily("iPhone19,2", "27.0", day: 6, taps: "0 0 10 0 0 0 0 0")],
+            [window("iPhone16,2", "26.6", day: 7, commitMs: Array(repeating: 30, count: 20))]
+        )
+        let effort = try card(effortID, verdicts)
+        XCTAssertEqual(effort.state, .insufficient)
+        XCTAssertEqual(effort.releaseDayCount, 1)
+        XCTAssertEqual(effort.readouts.map(\.id), [
+            "commit p50", "delivery lag p50",
+            "iPhone16,2 · iOS 26 · commit p50", "iPhone16,2 · iOS 26 · delivery lag p50",
+        ])
+        XCTAssertEqual(effort.readouts.map(\.measured), ["0 writing taps", "10/10 ≤ 40ms", "30.0ms (n=20)", "0 samples"])
+        XCTAssertEqual(effort.readouts.map(\.passing), [nil, true, nil, nil])
+        XCTAssertFalse(effort.notes.contains { $0.contains("还没有 Release 数据") })
+
+        let touch = try card(touchID, verdicts)
+        XCTAssertEqual(touch.state, .holding)
+        XCTAssertEqual(touch.readouts.count, 2, "a window-only segment has no tap histogram to show")
+    }
+
+    /// Nothing anywhere: 观察中, the segment named, 0 days, and no note
+    /// claiming other data is listed above (there is none).
+    func testNoDataAnywhereSaysNothingAboutOtherSegments() throws {
+        for id in [effortID, touchID] {
+            let verdict = try card(id, deck([]))
+            XCTAssertEqual(verdict.state, .observing, id)
+            XCTAssertTrue(verdict.notes.contains { $0.contains("本机:iPhone19,2 · iOS 27") }, id)
+            XCTAssertTrue(verdict.notes.contains { $0.contains("合计 0 天") }, id)
+            XCTAssertFalse(verdict.notes.contains { $0.contains("还没有 Release 数据") }, "\(id): \(verdict.notes)")
+        }
+        // Positive control: the note does appear once another segment has data.
+        let withOther = try card(touchID, deck([daily("iPhone16,2", "26.6", day: 1, taps: "0 0 0 0 0 0 0 0")]))
+        XCTAssertTrue(withOther.notes.contains { $0.contains("还没有 Release 数据") })
+    }
+
+    // MARK: Debug records
+
+    /// Debug records in the current segment never judge, never count as a
+    /// day, and never make this phone "have data". A Debug record also
+    /// never moves another segment's place in the order: iPhone16,2's
+    /// latest RELEASE day (2) is older than iPhone15,3's (3), whatever its
+    /// Debug day 31 says; and a Debug-only phone (iPhone21,1) gets no row
+    /// on either card.
+    func testDebugRecordsNeitherJudgeNorOrderNorMakeRows() throws {
+        let dailies = [
+            daily("iPhone19,2", "27.0", day: 8, taps: "0 0 0 0 0 0 20 0", build: "debug"),
+            daily("iPhone16,2", "26.6", day: 2, taps: "0 0 12 0 0 0 0 0"),
+            daily("iPhone16,2", "26.6", day: 31, taps: "0 0 0 0 0 0 0 0", build: "debug"),
+            daily("iPhone15,3", "26.1", day: 3, taps: "0 0 0 12 0 0 0 0"),
+            daily("iPhone21,1", "28.0", day: 30, taps: "0 0 0 0 0 0 9 0", build: "debug"),
+        ]
+        let windows = [
+            window("iPhone19,2", "27.0", day: 8, commitMs: Array(repeating: 500, count: 30), build: "debug"),
+            window("iPhone21,1", "28.0", day: 30, commitMs: Array(repeating: 500, count: 30), build: nil),
+        ]
+        let verdicts = deck(dailies, windows)
+
+        let touch = try card(touchID, verdicts)
+        XCTAssertEqual(touch.state, .observing)
+        XCTAssertEqual(touch.releaseDayCount, 0)
+        XCTAssertEqual(touch.nonReleaseCount, 3)
+        XCTAssertEqual(touch.readouts.map(\.id), [
+            "tap lag p50", "tap lag p95",
+            "iPhone15,3 · iOS 26 · tap lag p50", "iPhone15,3 · iOS 26 · tap lag p95",
+            "iPhone16,2 · iOS 26 · tap lag p50", "iPhone16,2 · iOS 26 · tap lag p95",
+        ])
+        XCTAssertTrue(touch.notes.contains { $0.contains("合计 2 天") }, "\(touch.notes)")
+
+        let effort = try card(effortID, verdicts)
+        XCTAssertEqual(effort.state, .observing)
+        XCTAssertEqual(effort.nonReleaseCount, 5)
+        XCTAssertFalse(effort.readouts.contains { $0.id.hasPrefix("iPhone21,1") }, "\(effort.readouts.map(\.id))")
+        XCTAssertFalse(effort.readouts.contains { $0.id.hasPrefix("iPhone19,2") })
+        XCTAssertEqual(effort.readouts.filter { $0.id.hasSuffix("delivery lag p50") }.map(\.id), [
+            "delivery lag p50", "iPhone15,3 · iOS 26 · delivery lag p50", "iPhone16,2 · iOS 26 · delivery lag p50",
+        ])
+
+        // Positive control: the same Debug records relabelled Release do judge.
+        let released = deck(dailies.map { var r = $0; r.buildConfiguration = "release"; return r },
+                            windows.map { var r = $0; r.buildConfiguration = "release"; return r })
+        XCTAssertEqual(try card(touchID, released).state, .failing)
+        XCTAssertEqual(try card(effortID, released).state, .failing)
+    }
+
+    // MARK: Order
+
+    /// Newest first is by each segment's LATEST record: iPhone14,7 has a
+    /// record on day 1 and on day 20, so it sorts before iPhone13,1 (day 15
+    /// only), although its first record is the oldest of all.
+    /// Three segments whose latest record shares one instant sort by label,
+    /// whatever order the records arrive in.
+    func testNewestFirstIsByLatestRecordAndTiesSortByLabelInAnyInputOrder() throws {
+        let tied = [
+            daily("iPhone16,2", "26.0", day: 25, taps: "0 0 0 0 0 0 0 0"),
+            daily("iPhone15,3", "26.0", day: 25, taps: "0 0 0 0 0 0 0 0"),
+            daily("iPhone16,2", "25.4", day: 25, taps: "0 0 0 0 0 0 0 0"),
+        ]
+        let spread = [
+            daily("iPhone14,7", "18.0", day: 1, taps: "0 0 0 0 0 0 0 0"),
+            daily("iPhone13,1", "17.0", day: 15, taps: "0 0 0 0 0 0 0 0"),
+            daily("iPhone14,7", "18.0", day: 20, taps: "0 0 0 0 0 0 0 0"),
+        ]
+        let expected = [
+            "iPhone15,3 · iOS 26", "iPhone16,2 · iOS 25", "iPhone16,2 · iOS 26",
+            "iPhone14,7 · iOS 18", "iPhone13,1 · iOS 17",
+        ]
+        let all = tied + spread
+        for (label, order) in [("forward", all), ("reversed", Array(all.reversed())),
+                               ("rotated", Array(all[2...] + all[..<2])), ("shuffled", [all[4], all[1], all[5], all[0], all[3], all[2]])] {
+            let touch = try card(touchID, deck(order))
+            let rows = touch.readouts.dropFirst(2).filter { $0.id.hasSuffix("p50") }.map { String($0.id.dropLast(" · tap lag p50".count)) }
+            XCTAssertEqual(rows, expected, label)
+            let effort = try card(effortID, deck(order))
+            let effortRows = effort.readouts.filter { $0.id.hasSuffix(" · commit p50") }.map { String($0.id.dropLast(" · commit p50".count)) }
+            XCTAssertEqual(effortRows, expected, "effort card, \(label)")
+        }
+    }
+
+    // MARK: Report-only weight
+
+    /// Another segment's damning data never moves this phone's state, and
+    /// its passing data never rescues it. Current has 5 taps (under the
+    /// floor): 数据不足 regardless of 50 taps >320 on another phone; and
+    /// 未达标 on 0/12 regardless of 50 fast taps elsewhere.
+    func testOtherSegmentsCarryNoWeightEitherWay() throws {
+        let slowOther = daily("iPhone16,2", "26.6", day: 1, taps: "0 0 0 0 0 0 50 0")
+        let fastOther = daily("iPhone16,2", "26.6", day: 1, taps: "50 0 0 0 0 0 0 0")
+        let thinHere = daily("iPhone19,2", "27.0", day: 2, taps: "5 0 0 0 0 0 0 0")
+        let slowHere = daily("iPhone19,2", "27.0", day: 2, taps: "0 0 0 12 0 0 0 0")
+        XCTAssertEqual(try card(touchID, deck([slowOther, thinHere])).state, .insufficient)
+        XCTAssertEqual(try card(touchID, deck([fastOther, slowHere])).state, .failing)
+        // Positive control: pooled (both read as one segment) the verdicts flip.
+        let pooledSegment = FixWatchSegment(deviceModel: "iPhone16,2", osVersion: "26.6")
+        let thinAsOld = daily("iPhone16,2", "26.6", day: 2, taps: "5 0 0 0 0 0 0 0")
+        XCTAssertEqual(try card(touchID, deck([slowOther, thinAsOld], as: pooledSegment)).state, .failing)
+    }
+
+    // MARK: Clean-window filter per segment
+
+    /// Contaminated windows stay out of EVERY segment's numbers: the other
+    /// phone's 20 contaminated taps at 30ms must not lift its 5 clean ones
+    /// over the floor. The exclusion note counts this phone's contaminated
+    /// windows only (1) — the segment the card's numbers are read from.
+    func testContaminatedWindowsStayOutOfOtherSegmentsToo() throws {
+        let windows = [
+            window("iPhone16,2", "26.6", day: 3, commitMs: Array(repeating: 30, count: 20), contaminated: true),
+            window("iPhone16,2", "26.6", day: 3, hour: 13, commitMs: Array(repeating: 30, count: 5),
+                   settleMs: [900]),
+            window("iPhone19,2", "27.0", day: 4, commitMs: Array(repeating: 70, count: 20), settleMs: [1_000], contaminated: true),
+            window("iPhone19,2", "27.0", day: 4, hour: 13, commitMs: Array(repeating: 40, count: 20)),
+        ]
+        let effort = try card(effortID, deck([], windows))
+        XCTAssertEqual(effort.readouts.first, FixMetricReadout(id: "commit p50", measured: "40.0ms (n=20)",
+                                                               threshold: "≤ 55ms", passing: true))
+        XCTAssertFalse(effort.readouts.contains { $0.id == "settle: first frame after commit" },
+                       "this phone's only settle sample was in a contaminated window")
+        XCTAssertTrue(effort.readouts.contains(FixMetricReadout(
+            id: "iPhone16,2 · iOS 26 · commit p50", measured: "5 writing taps",
+            threshold: "report-only (≥ 20 samples)", passing: nil)), "\(effort.readouts)")
+        XCTAssertTrue(effort.readouts.contains(FixMetricReadout(
+            id: "iPhone16,2 · iOS 26 · settle: first frame after commit", measured: "p50 900ms · max 900ms (n=1)",
+            threshold: "report-only", passing: nil)))
+        XCTAssertTrue(effort.notes.contains("1 个窗口因外部写入污染被排除"), "\(effort.notes)")
+    }
+
+    // MARK: Counters pool
+
+    /// The Me-tab tripwire and the drafts/body readout pool every segment,
+    /// including segments this phone judges nothing on. Hidden = 1 only on
+    /// a third phone → alarm on this phone's deck; drafts 3 over 10 passes
+    /// only on the other phone → "0.30 (3/10)" although this phone has 0
+    /// passes. A hidden compute only in a Debug record → no alarm
+    /// (positive control for the Release-only rule).
+    func testCountersPoolAcrossSegmentsButNotAcrossBuilds() throws {
+        let entries = [FixObservationEntry(
+            id: "fixture", issueNumbers: [1], mergedSHAs: [], title: "t", summary: "s",
+            hasWindows: false, lifecycle: .active, addedOn: "2026-10-01", reviewBy: "2099-01-01"
+        )]
+        let base = [
+            daily("iPhone19,2", "27.0", day: 5, taps: "0 0 10 0 0 0 0 0", visible: 2),
+            daily("iPhone16,2", "26.6", day: 4, taps: "0 0 0 0 0 0 0 0", passes: 10, drafts: 3),
+        ]
+        let quiet = deck(base + [daily("iPhone20,1", "28.0", day: 6, taps: "0 0 0 0 0 0 0 0", hidden: 4, build: "debug")])
+        XCTAssertFalse(try card(gateID, quiet).alarm, "a Debug hidden compute is not an alarm")
+        XCTAssertFalse(FixWatchAttention.needsAttention(verdicts: quiet, entries: entries, now: at(10)))
+        XCTAssertEqual(try card(effortID, quiet).readouts.first { $0.id == "drafts / body passes" }?.measured, "0.30 (3/10)")
+
+        let tripped = deck(base + [daily("iPhone20,1", "28.0", day: 6, taps: "0 0 0 0 0 0 0 0", hidden: 1)])
+        let gate = try card(gateID, tripped)
+        XCTAssertTrue(gate.alarm)
+        XCTAssertEqual(gate.readouts.first?.measured, "1")
+        XCTAssertEqual(gate.releaseDayCount, 3)
+        XCTAssertTrue(FixWatchAttention.needsAttention(verdicts: tripped, entries: entries, now: at(10)))
+        XCTAssertEqual(try card(touchID, tripped).state, .holding, "the third phone's alarm is not a timing verdict")
+    }
+
+    // MARK: This device
+
+    /// The segment the deck reads as "this phone" is the one the records it
+    /// writes are stamped with — model from uname (never UIDevice.model's
+    /// generic "iPhone"), OS from systemVersion.
+    func testThisDeviceIsTheStampsSegment() {
+        let stamp = SpikeRunContext.stamp()
+        let segment = FixWatchSegment.thisDevice()
+        print("QA thisDevice segment: \(segment.label) (stamp model=\(stamp.deviceModel) os=\(stamp.osVersion))")
+        XCTAssertEqual(segment, FixWatchSegment(deviceModel: stamp.deviceModel, osVersion: UIDevice.current.systemVersion))
+        XCTAssertNotEqual(segment.deviceModel, UIDevice.current.model, "the generic model would pool every phone")
+        if case .major(let major) = segment.os {
+            XCTAssertEqual(major, Int(UIDevice.current.systemVersion.split(separator: ".").first ?? ""))
+        } else {
+            XCTFail("systemVersion \(UIDevice.current.systemVersion) did not parse")
+        }
     }
 }

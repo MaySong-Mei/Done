@@ -128,6 +128,9 @@ struct ContentView: View {
     @StateObject private var backupSnapshotService = BackupSnapshotService()
     @StateObject private var imageBackupCoordinator = ImageBackupCoordinator()
     @StateObject private var syncStatusReporter = SyncStatusReporter()
+    /// gh#273: created by `DoneApp` beside the resident; attached to the
+    /// session and the sync engine here, where both live.
+    @Environment(\.telemetryUploader) private var telemetryUploader
     @State private var skillAnalysisService: SkillAnalysisService?
     /// Handle for the launch-time backlog sweep (gh#219). Non-nil once a
     /// sweep has been launched this app launch: onAppear re-runs on
@@ -325,7 +328,8 @@ struct ContentView: View {
                                                     authService: authService, calendarState: calendarState,
                                                     syncService: syncService,
                                                     imageBackupCoordinator: imageBackupCoordinator,
-                                                    backupSnapshotService: backupSnapshotService)
+                                                    backupSnapshotService: backupSnapshotService,
+                                                    telemetryUploader: telemetryUploader)
             syncService.ownerSwitchEraser = { ownerSwitchEraser.resetAllLocalData(keepingSession: true) }
             syncService.attach(
                 authService: authService,
@@ -334,6 +338,10 @@ struct ContentView: View {
                 skillStore: skillInsightStore,
                 preferenceStore: agentRuntime.preferenceStore
             )
+            // gh#273: the telemetry uploader asks THIS engine's
+            // `uploadsBlockedByBuild` and THIS session's user — the same
+            // two facts the sync sinks above are gated on.
+            telemetryUploader?.attach(authService: authService, syncService: syncService)
             restoreCoordinator.configure(
                 syncService: syncService,
                 eventStore: store,
@@ -352,6 +360,13 @@ struct ContentView: View {
                 eventStore: store,
                 authService: authService
             )
+        }
+        .onChange(of: telemetryUploader.map(ObjectIdentifier.init)) { _, _ in
+            // gh#273 review P0-1: the uploader is created with the app's
+            // state and should be present at `onAppear`; if it ever arrives
+            // later (a nil → object edge), attach then. `attach` is
+            // idempotent, so the two paths cannot double-wire.
+            telemetryUploader?.attach(authService: authService, syncService: syncService)
         }
         .onChange(of: selectedTab) { _, newValue in
             if rememberLastTab {

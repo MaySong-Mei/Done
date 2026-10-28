@@ -6,6 +6,7 @@ on:
     paths:
       - "done-mcp/supabase/migrations/**"
       - "done-mcp/supabase/functions/**"
+      - "done-mcp/supabase/telemetry/key_registry_load.sql"
   workflow_dispatch:
 
 # Checkout only; deploys authenticate with SBACCESSTOKEN, not GITHUB_TOKEN.
@@ -37,6 +38,27 @@ jobs:
               -d "{\"query\": $(jq -Rs . < "$f")}" \
               && echo "OK" || echo "Skipped (already applied)"
           done
+
+      - name: Load telemetry key registry
+        # The key_registry ROWS are not a migration: 016 owns the table, the rows
+        # come from done-mcp/supabase/telemetry/key_registry.json (exported by the
+        # Swift tests, wire contract §4) through the generated, idempotent upsert
+        # key_registry_load.sql, which changes with every build that adds a key —
+        # a migration file must never change once applied, so the rows cannot
+        # ride in one. Same Management API route as the migrations; printed in
+        # full and non-blocking, so a registry problem never holds back the
+        # edge functions.
+        continue-on-error: true
+        run: |
+          f=done-mcp/supabase/telemetry/key_registry_load.sql
+          echo "Loading $f..."
+          code=$(curl -s -o /tmp/key_registry.out -w '%{http_code}' -X POST \
+            "https://api.supabase.com/v1/projects/$PROJECT_ID/database/query" \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"query\": $(jq -Rs . < "$f")}")
+          echo "HTTP $code"; cat /tmp/key_registry.out; echo
+          [ "$code" -ge 200 ] && [ "$code" -lt 300 ]
 
       - name: Deploy Edge Functions
         run: |

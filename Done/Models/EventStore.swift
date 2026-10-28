@@ -705,6 +705,12 @@ final class EventStore: ObservableObject {
     /// with it, since that is what the group then holds. Seeded from the
     /// group at launch.
     private var lastWrittenCategoryStats: CategoryStatsPayload?
+    /// The category-stats payload last handed to the widget, and a signal
+    /// each time a new one lands. Not `@Published`: views observing the
+    /// store must not re-render because the widget got new numbers. The
+    /// watch bridge forwards it (`WristBridge`).
+    var latestCategoryStats: CategoryStatsPayload? { lastWrittenCategoryStats }
+    let categoryStatsLanded = PassthroughSubject<Void, Never>()
     private var widgetBackgroundSettingCancellable: AnyCancellable?
 
     /// How much building a widget sync may do on the main actor, in days
@@ -2038,7 +2044,10 @@ final class EventStore: ObservableObject {
         }
         reloadWidgetTimelines()
         lastWrittenSnapshotHash = snapshotHash
-        if let categoryStats { lastWrittenCategoryStats = categoryStats }
+        if let categoryStats {
+            lastWrittenCategoryStats = categoryStats
+            categoryStatsLanded.send()
+        }
         // Same durability-trail idiom as the calendar save above. The one
         // invariant this line can actually decide is `unique == occurrences`
         // (the duplicate-id half of gh#142); anything else is context.
@@ -2836,7 +2845,14 @@ final class EventStore: ObservableObject {
 
     // MARK: - Calendar CRUD
 
-    func addCalendarEvent(_ event: Event) {
+    /// `creationMotion`: a person just created this event (here, or on the
+    /// watch), so its timeline block plays the create motion when the spike
+    /// is on. The store's own inserts — a series split, an exception
+    /// instance, samples — leave it nil and appear plainly.
+    func addCalendarEvent(_ event: Event, creationMotion: EventCreationMotionRegistry.Source? = nil) {
+        if let creationMotion {
+            EventCreationMotionRegistry.shared.mark([event.id], source: creationMotion)
+        }
         recordPersistence("addCalendarEvent id=\(event.id.uuidString)")
         rawCalendarEvents.append(event)
         saveCalendarEvents(refreshInterrupts: true)
@@ -2972,6 +2988,7 @@ final class EventStore: ObservableObject {
     /// need. `ImageBackupCoordinator` owns their lifecycle.
     func deleteCalendarEvent(_ event: Event, unlinkAssets: Bool = true) {
         recordPersistence("deleteCalendarEvent id=\(event.id.uuidString)")
+        EventDeletionMotionRegistry.shared.mark([event.id], source: .local)
         // Stage only image files no OTHER event still references — a
         // materialized exception / `.following` split-sibling shares the
         // parent's inherited refs, so a blind delete would erase a photo the
@@ -3026,6 +3043,14 @@ final class EventStore: ObservableObject {
         orphanInterruptChildrenInMemory(forParentDeletion: event)
         releaseAbsorbedTodos(intoDeletedIDs: [event.id])
         rawCalendarEvents.removeAll { $0.id == event.id }
+    }
+
+    /// A series' occurrences render under the series id, a materialized
+    /// exception under its own — both can leave the day on a series delete.
+    func recurringDeletionMotionIDs(series: Event) -> [UUID] {
+        [series.id] + rawCalendarEvents
+            .filter { $0.recurrenceParentId == series.id }
+            .map(\.id)
     }
 
     /// Step 1 of `deleteRecurringCalendarEvent(scope: .all)`, in memory, no
@@ -3283,6 +3308,23 @@ final class EventStore: ObservableObject {
         )
         let calendar = Calendar.current
         let occurrenceDay = calendar.startOfDay(for: occurrenceDate)
+        // Only `.all` takes the whole series; the other scopes leave it
+        // alive, so they name the anchor days that went (an edit to a
+        // surviving occurrence must not read as a deletion).
+        switch scope {
+        case .all:
+            EventDeletionMotionRegistry.shared.mark(
+                recurringDeletionMotionIDs(series: seriesEvent), source: .local
+            )
+        case .single:
+            EventDeletionMotionRegistry.shared.markSeries(
+                seriesEvent.id, from: occurrenceDay, through: occurrenceDay, source: .local
+            )
+        case .following:
+            EventDeletionMotionRegistry.shared.markSeries(
+                seriesEvent.id, from: occurrenceDay, through: nil, source: .local
+            )
+        }
 
         // Same three phases as `deleteCalendarEvent`: calendar in memory →
         // calendar commit → records → files. Records used to be pruned before
@@ -3337,6 +3379,7 @@ final class EventStore: ObservableObject {
                         ).map { $0 >= sweepKey } ?? false)
                 }.map(\.id)
             )
+            EventDeletionMotionRegistry.shared.mark(sweptIDs, source: .local)
             stagedAssets = unlinkAssets ? stageOrphanedAssets(deleting: sweptIDs) : []
             releaseAbsorbedTodos(intoDeletedIDs: sweptIDs)
             rawCalendarEvents.removeAll { sweptIDs.contains($0.id) }
@@ -4169,7 +4212,7 @@ final class EventStore: ObservableObject {
             displayKind: .interrupt,
             interruptRelation: relation
         )
-        addCalendarEvent(interruptEvent)
+        addCalendarEvent(interruptEvent, creationMotion: .local)
 
         let occurrence = CalendarEventOccurrenceContext(
             eventID: occurrenceKey.eventID,

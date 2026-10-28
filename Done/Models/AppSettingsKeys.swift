@@ -219,6 +219,13 @@ enum AppSettingsKeys {
     /// Mixes EN/中 names to cover both interface languages out of the box.
     static let meBackgroundTypesDefault = "Sleep,睡眠,睡觉,Rest,Eat,Meal,吃饭,Commute,Transit,通勤"
 
+    // MARK: - Apple Watch
+
+    /// Settings → Apple Watch: the watch stats page's `WristStatsSettings`,
+    /// as one JSON string (`WristStatsSettings.load(from:)`). Per device,
+    /// like the watch it is for.
+    static let watchStatsSettings = "watchStatsSettings"
+
     // MARK: - Calendar share
 
     /// Raw value of `CalendarDailyShareStyle` chosen most recently from the
@@ -239,9 +246,42 @@ enum AppSettingsKeys {
     /// device's upload preference, which defeats the whole point of the toggle.
     static let syncUploadsEnabled = "syncUploadsEnabled"
 
+    // MARK: - Telemetry (gh#273 design §8.2)
+
+    /// "Share performance & usage statistics (no content)". OFF on the App
+    /// Store; a TestFlight install whose user has not ruled starts ON (§16
+    /// rule 2, `telemetryEnabledByDefault`). Independent of `syncUploadsEnabled`:
+    /// a device that syncs its data does not thereby share statistics, and
+    /// one that shares statistics need not sync. Per device; **DO NOT add
+    /// to `SyncedSettings.allKeys`** — consent is given on a device.
+    static let telemetryUploadsEnabled = "telemetryUploadsEnabled"
+    /// The `Date` the switch last went OFF → ON — the user's flip, or the
+    /// TestFlight default's launch — always a real moment (review P1-1).
+    /// The upload watermark reads it through `TelemetryDefaultPolicy.
+    /// watermark`. Kept when the switch goes OFF.
+    static let telemetryConsentAt = "telemetryConsentAt"
+    /// The second switch (decision point 1, option A): the manual Spike
+    /// `note` — the ONE free-text field — rides along only with this on.
+    static let telemetryNoteUploadsEnabled = "telemetryNoteUploadsEnabled"
+    /// gh#273 §16: the user has flipped the statistics switch themselves,
+    /// either way. Until then a TestFlight build switches it on by default;
+    /// once set, nothing but the user turns it on. Not registered (unset
+    /// reads false) and swept by the erase, like the switch itself.
+    static let telemetryUserDecided = "telemetryUserDecided"
+    /// gh#273 review P1-1: the switch is ON because the TestFlight default
+    /// turned it on, not the user. The user's own flip clears it; a definite
+    /// App Store answer withdraws the default (switch and bit removed).
+    /// Not registered (unset reads false) and swept by the erase.
+    static let telemetryEnabledByDefault = "telemetryEnabledByDefault"
+
     /// What an unset key reads as (design D9: sync is on by default). Only
     /// the registration domain: nothing is written, so a value the user
     /// set — the OFF they chose, the OFF the erase writes — stands.
+    ///
+    /// The telemetry switches are deliberately NOT registered: an unset
+    /// `bool(forKey:)` already reads false (their default OFF), and a
+    /// registered value survives `removeObject`, so the reset sweep could
+    /// never truly empty them (`ResetSweepQATests`).
     static let launchRegisteredDefaults: [String: Any] = [syncUploadsEnabled: true]
 
     /// Called once at launch, before any service reads the switch
@@ -254,6 +294,14 @@ enum AppSettingsKeys {
     static let resettableUserDefaultsKeys: [String] = [
         agentProvider,
         agentAPIKey,
+        // gh#273. Consent is the previous owner's, not the phone's: an erased
+        // phone handed on must not keep sharing statistics under the next
+        // account, and the watermark must not pre-date the next consent.
+        telemetryUploadsEnabled,
+        telemetryConsentAt,
+        telemetryNoteUploadsEnabled,
+        telemetryUserDecided,
+        telemetryEnabledByDefault,
         calendarAgenticCreateEnabled,
         agentAskBeforeCreatingEventTypeTemplates,
         rememberLastTab,
@@ -276,6 +324,7 @@ enum AppSettingsKeys {
         calendarUseCALayerMiniDayTimeline,
         calendarUseUIScrollViewTimeline,
         calendarUseImperativeDayLayer,
+        watchStatsSettings,
         // Me-tab achievement-celebration state. Resettable so corruption
         // (e.g. empty celebrated set + seeded=true, which replays every
         // unlocked badge as new) has a local escape hatch. Deliberately NOT

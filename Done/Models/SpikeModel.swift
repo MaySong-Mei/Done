@@ -167,6 +167,42 @@ enum SpikeRegistry {
             // ships the coalesced mirror with no gate. This entry is
             // plain `.measurement` with no variants.
         ),
+        SpikeDefinition(
+            id: EventDeletionMotionFlag.spikeID,
+            issueNumber: nil,
+            title: "删除动效(时间线)",
+            purpose: "删除事件时,时间线上的方块不再当场消失,而是播放所选的动效再离场。本机删除和另一台设备同步过来的删除都会播;例外:另一台设备只删循环事件的某一次,同步过来是「系列更新」,不播。关闭 = 现状(立即消失)。开启后每次删除都会写日志:Library/Application Support/DeleteMotion/delete_motion.log(mark / ghost / play / done / drop / skip)。",
+            scenarios: [],
+            lifecycle: .active,
+            kind: .featureToggle,
+            variants: EventDeletionMotionVariant.allCases.map {
+                SpikeVariant(id: $0.rawValue, title: $0.title)
+            }
+        ),
+        SpikeDefinition(
+            id: EventCreationMotionFlag.spikeID,
+            issueNumber: nil,
+            title: "创建动效(时间线)",
+            purpose: "新建事件时,时间线上的新方块不再直接出现,而是播放动效后落定。在时间线上拖出方框再保存:方框留在原地,表单收起后直接转成事件(滑到改过的时间、换成类型颜色、轻压回弹),不随样式切换;其他新建播所选样式。本机新建(表单、快速添加、详情页并行事件、待办加到日历、AI 助手)、手表新建、另一台设备同步过来的新建都会播;不播:待办拖到日历、系列拆分、编辑生成的例外、一次同步来超过 8 条(首次同步/从云端恢复)。关闭 = 现状(直接出现)。开启后写日志:Library/Application Support/CreateMotion/create_motion.log(mark / hold / play / done / drop / skip)。",
+            scenarios: [],
+            lifecycle: .active,
+            kind: .featureToggle,
+            variants: EventCreationMotionVariant.allCases.map {
+                SpikeVariant(id: $0.rawValue, title: $0.title)
+            }
+        ),
+        SpikeDefinition(
+            id: EventResizeTweenFlag.spikeID,
+            issueNumber: nil,
+            title: "调时长补帧(时间线)",
+            purpose: "事件变长变短时,方块不再一下跳到新长度,而是补帧滑过去。拖住上下边调时长:每跳一格(15 分钟)边缘滑过去,拖得快时从半路接着滑,不会往回跳;在表单里改时长、AI 补时间、另一台设备或手表同步过来改时长:方块从旧长度滑到新长度,被挤开的邻居一起滑。只平移、时长不变的改动不补帧。样式是速度:轻快 / 标准 / 柔和。关闭 = 现状(直接跳)。开启后写日志:Library/Application Support/ResizeTween/resize_tween.log(step / edit / rekey)。",
+            scenarios: [],
+            lifecycle: .active,
+            kind: .featureToggle,
+            variants: EventResizeTweenVariant.allCases.map {
+                SpikeVariant(id: $0.rawValue, title: $0.title)
+            }
+        ),
     ]
 
     static func definition(for id: String) -> SpikeDefinition? {
@@ -274,7 +310,29 @@ struct SpikeRun: Codable, Identifiable, Equatable {
     var metrics: [String: SpikeMetricValue]
     var note: String?
     var outcome: SpikeRunOutcome?
-    var abortReason: String?
+    /// An enum, not prose (gh#273, B·F24): the wire carries only its
+    /// known tokens. A line written before the enum existed decodes its
+    /// text into a known case when it is one of the old literals, else
+    /// into `.legacyUnknown(text)`, which never leaves the device.
+    var abortReason: SpikeAbortReason?
+
+    // Telemetry envelope (gh#273 design §4.1). ALL optional, same
+    // append-only-JSONL reasoning as `coActiveSpikeIDs`: lines written
+    // before these fields existed must keep decoding.
+    /// This install's random id (`spike-runs/.install-id`), stamped by the
+    /// store on append; rotates with "erase all local data".
+    var installID: UUID? = nil
+    /// The account signed in when the record was minted; nil = signed-out
+    /// stretch, which is never uploaded.
+    var ownerUID: String? = nil
+    /// Civil day (yyyy-MM-dd) in the day boundary's zone, minted once.
+    var dayKey: String? = nil
+    /// That zone's offset from UTC on that day, in minutes.
+    var dayTZOffsetMin: Int? = nil
+    /// Append counter for this id, assigned by the store: the upload
+    /// cursor and the server's guard both order by it (never by content).
+    var revision: Int? = nil
+    var kind: TelemetryRecordKind? = nil
 
     var isOpen: Bool { endedAt == nil }
 }
@@ -327,7 +385,7 @@ enum SpikeRunLog {
             var closed = run
             closed.endedAt = closedAt
             closed.outcome = .interrupted
-            closed.abortReason = "process ended before the scenario finished"
+            closed.abortReason = .processEnded
             return closed
         }
     }

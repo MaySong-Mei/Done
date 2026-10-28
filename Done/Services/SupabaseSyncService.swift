@@ -311,6 +311,41 @@ final class SupabaseREST: SyncGateway {
         )
     }
 
+    func upsertRows(table: String, rows: [[String: Any]], onConflict: [String]) async throws {
+        guard !rows.isEmpty else { return }
+        _ = try await send(
+            method: "POST",
+            path: "\(table)?on_conflict=\(onConflict.joined(separator: ","))",
+            body: rows,
+            headers: ["Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=minimal"],
+            table: table,
+            // `isWrite: false` here means "no `X-Sync-Epoch`", not "a read":
+            // the telemetry table is outside the 015 gate (wire contract §1).
+            isWrite: false,
+            // A refused telemetry row's PostgREST `details` is "Failing row
+            // contains (…)" — the row itself, `note` included. Log the
+            // status and `code` only (review P2-12).
+            logsResponseBody: false
+        )
+    }
+
+    /// gh#273 §16 rule 3: one page of this account's observatory rows from
+    /// `v_my_spike_runs` (RLS: own rows only), release only, on or after
+    /// `sinceDayKey` (review P1-3), in the view's stable order, paged by
+    /// `TelemetryCloudPager`. A read: no epoch header, and a refusal logs
+    /// status and code only (the rows are the user's).
+    func fetchMySpikeRunsPage(spikeIDs: [String], sinceDayKey: String, limit: Int, offset: Int) async throws -> [[String: Any]] {
+        let table = "v_my_spike_runs"
+        let path = "\(table)?select=*&build_configuration=eq.release&spike_id=in.(\(spikeIDs.joined(separator: ",")))"
+            + "&day_key=gte.\(sinceDayKey)&order=day_key.desc,run_id.asc&limit=\(limit)&offset=\(offset)"
+        let data = try await send(method: "GET", path: path, body: nil, headers: [:], table: table,
+                                  isWrite: false, logsResponseBody: false)
+        guard let rows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            throw SyncError.malformedResponse(table: table)
+        }
+        return rows
+    }
+
     func deletePhysically(table: String, keyColumn: String, keys: [String]) async throws {
         guard !keys.isEmpty else { return }
         _ = try await send(
@@ -341,7 +376,8 @@ final class SupabaseREST: SyncGateway {
         body: Any?,
         headers: [String: String],
         table: String,
-        isWrite: Bool
+        isWrite: Bool,
+        logsResponseBody: Bool = true
     ) async throws -> Data {
         let epochHeader = isWrite ? writeEpoch : nil
         #if DEBUG
@@ -373,8 +409,13 @@ final class SupabaseREST: SyncGateway {
             }
             if http.statusCode == 401 { throw SyncError.tokenExpired }
             guard (200..<300).contains(http.statusCode) else {
-                let text = String(data: data, encoding: .utf8) ?? ""
-                logger.error("\(method, privacy: .public) \(table, privacy: .public) HTTP \(http.statusCode, privacy: .public): \(text.prefix(200), privacy: .public)")
+                if logsResponseBody {
+                    let text = String(data: data, encoding: .utf8) ?? ""
+                    logger.error("\(method, privacy: .public) \(table, privacy: .public) HTTP \(http.statusCode, privacy: .public): \(text.prefix(200), privacy: .public)")
+                } else {
+                    let code = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["code"] as? String ?? "-"
+                    logger.error("\(method, privacy: .public) \(table, privacy: .public) HTTP \(http.statusCode, privacy: .public) code=\(code, privacy: .public)")
+                }
                 throw Self.requestError(table: table, method: method, status: http.statusCode, body: data)
             }
             return data

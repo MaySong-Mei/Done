@@ -220,7 +220,7 @@ final class Spike201Runner: ObservableObject {
         // later as "we measured, and there was nothing there".
         if records.isEmpty {
             closedRun.outcome = .aborted
-            closedRun.abortReason = "stopped with no effort-scrubber gesture recorded"
+            closedRun.abortReason = .noGestureRecorded
         } else {
             closedRun.outcome = .completed
         }

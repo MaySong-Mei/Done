@@ -23,10 +23,15 @@ final class MacBlockStyleTests: XCTestCase {
     }
 
     func testStrokeCornerAndEffortBar() {
-        XCTAssertEqual(calendarEventBlockCornerRadius(isInterrupt: false), 4)
-        XCTAssertEqual(calendarEventBlockCornerRadius(isInterrupt: true), 3)
-        XCTAssertEqual(calendarEventBlockStrokeWidth(isInterrupt: false), 1.2, accuracy: 0.0001)
-        XCTAssertEqual(calendarEventBlockStrokeWidth(isInterrupt: true), 1.4, accuracy: 0.0001)
+        XCTAssertEqual(calendarEventBlockCornerRadius(isInterrupt: false, isWeekMode: false), 4)
+        XCTAssertEqual(calendarEventBlockCornerRadius(isInterrupt: true, isWeekMode: false), 3)
+        XCTAssertEqual(calendarEventBlockStrokeWidth(isInterrupt: false, isWeekMode: false), 1.2, accuracy: 0.0001)
+        XCTAssertEqual(calendarEventBlockStrokeWidth(isInterrupt: true, isWeekMode: false), 1.4, accuracy: 0.0001)
+        // Week view's narrow columns: tighter corners, thinner stroke.
+        XCTAssertEqual(calendarEventBlockCornerRadius(isInterrupt: false, isWeekMode: true), 2.5)
+        XCTAssertEqual(calendarEventBlockCornerRadius(isInterrupt: true, isWeekMode: true), 2)
+        XCTAssertEqual(calendarEventBlockStrokeWidth(isInterrupt: false, isWeekMode: true), 0.8, accuracy: 0.0001)
+        XCTAssertEqual(calendarEventBlockStrokeWidth(isInterrupt: true, isWeekMode: true), 1, accuracy: 0.0001)
         XCTAssertEqual(calendarEventEffortBarWidth(colorDepth: 0.4, isWeekMode: false), 2.5, accuracy: 0.0001)
         XCTAssertEqual(calendarEventEffortBarWidth(colorDepth: 0.4, isWeekMode: true), 1.6, accuracy: 0.0001)
     }

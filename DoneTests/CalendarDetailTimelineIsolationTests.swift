@@ -504,3 +504,95 @@ private struct InterruptParallelNoteIsolationHarness: View {
         }
     }
 }
+
+/// The horizontal track's note markers must sit on the axis and keep their
+/// x positions when one of them grows to "nearby" size. Rendered inside a
+/// `TimelineView` in a leading ZStack, the shape of the production call site:
+/// `TimelineView` stacks multiple children vertically, so a leaf without its
+/// own ZStack spreads the markers off the axis.
+@MainActor
+final class CalendarTimelineNoteMarkersLeafTests: XCTestCase {
+    private let trackWidth: CGFloat = 300
+    private let height: CGFloat = 30
+    private let progresses: [Double] = [0.2, 0.5, 0.8]
+
+    func testMarkersStayOnAxisAndHoldPositionWhenOneIsNearby() throws {
+        let start = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        let range = Event.TimeRange(start: start, end: start.addingTimeInterval(3600))
+        let notes = progresses.map { p in
+            EventLogTimelineNote(text: "n", createdAt: start.addingTimeInterval(3600 * p), source: "test")
+        }
+        // Slider at 0.0 is outside every marker's nearby window; at 0.5 the
+        // middle marker is nearby and grows to its nearby size.
+        let idle = try XCTUnwrap(markerBlobs(notes: notes, range: range, sliderProgress: 0))
+        let nearby = try XCTUnwrap(markerBlobs(notes: notes, range: range, sliderProgress: 0.5))
+
+        guard idle.count == 3, nearby.count == 3 else {
+            return XCTFail("positive control: expected three markers, got \(idle.count) idle / \(nearby.count) nearby")
+        }
+        XCTAssertEqual(Set(idle.map(\.width)).count, 1, "positive control: idle markers share one size")
+        XCTAssertGreaterThan(nearby[1].width, nearby[0].width, "positive control: the middle marker is nearby")
+        for (label, blobs) in [("idle", idle), ("nearby", nearby)] {
+            for (blob, p) in zip(blobs, progresses) {
+                XCTAssertEqual(blob.centerX, trackWidth * p, accuracy: 0.5, "\(label): marker x")
+                XCTAssertEqual(blob.centerY, height / 2, accuracy: 0.5, "\(label): marker must sit on the axis")
+            }
+        }
+    }
+
+    private struct Blob { var centerX: CGFloat; var centerY: CGFloat; var width: Int }
+
+    private func markerBlobs(
+        notes: [EventLogTimelineNote],
+        range: Event.TimeRange,
+        sliderProgress: CGFloat
+    ) -> [Blob]? {
+        let view = ZStack(alignment: .leading) {
+            Color.clear.frame(width: trackWidth, height: 4)
+            SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+                CalendarTimelineNoteMarkersLeaf(
+                    now: context.date,
+                    mode: .manual,
+                    sliderProgress: sliderProgress,
+                    range: range,
+                    notes: notes,
+                    trackStartX: 0,
+                    trackWidth: self.trackWidth
+                )
+            }
+        }
+        .frame(width: trackWidth, height: height)
+
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 1
+        guard let image = renderer.cgImage else { return nil }
+        let w = image.width, h = image.height
+        var pixels = [UInt8](repeating: 0, count: w * h * 4)
+        let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(
+                data: buffer.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else { return false }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return true
+        }
+        guard drawn else { return nil }
+        let inked: (Int, Int) -> Bool = { x, y in pixels[(y * w + x) * 4 + 3] > 32 }
+        var blobs: [Blob] = []
+        var runStart: Int?
+        for x in 0...w {
+            let column = x < w && (0..<h).contains { inked(x, $0) }
+            if column, runStart == nil { runStart = x }
+            if !column, let s = runStart {
+                let rows = (0..<h).filter { y in (s..<x).contains { inked($0, y) } }
+                blobs.append(Blob(
+                    centerX: CGFloat(s + x) / 2,
+                    centerY: CGFloat(rows.first! + rows.last! + 1) / 2,
+                    width: x - s
+                ))
+                runStart = nil
+            }
+        }
+        return blobs
+    }
+}

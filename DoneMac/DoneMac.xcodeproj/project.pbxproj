@@ -7,6 +7,17 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		DAC1B0000000000000000053 /* WristTitles.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000053 /* WristTitles.swift */; };
+		DAC1B0000000000000000052 /* WristState.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000052 /* WristState.swift */; };
+		DAC1B0000000000000000051 /* WristProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000051 /* WristProtocol.swift */; };
+		DAC1B0000000000000000050 /* WristOverlap.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000050 /* WristOverlap.swift */; };
+		DAC1B000000000000000004F /* WristMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000004F /* WristMotion.swift */; };
+		DAC1B000000000000000004E /* WristDay.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000004E /* WristDay.swift */; };
+		DAC1B000000000000000004D /* WristStatsRules.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000004D /* WristStatsRules.swift */; };
+		DAC1B000000000000000004C /* TelemetryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000004C /* TelemetryModel.swift */; };
+		DAC1B000000000000000004B /* EventResizeTweenState.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000004B /* EventResizeTweenState.swift */; };
+		DAC1B000000000000000004A /* EventDeletionMotionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000004A /* EventDeletionMotionState.swift */; };
+		DAC1B0000000000000000049 /* EventCreationMotionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000049 /* EventCreationMotionState.swift */; };
 		DAC1B0000000000000000048 /* GlassCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000048 /* GlassCardView.swift */; };
 		DAC1B0000000000000000047 /* EventPeoplePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000047 /* EventPeoplePickerView.swift */; };
 		DAC1B0000000000000000046 /* CalendarEventSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000046 /* CalendarEventSheets.swift */; };
@@ -191,6 +202,17 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		DAC1F0000000000000000053 /* WristTitles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WristTitles.swift; path = "../Done/../Shared/WristTitles.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000052 /* WristState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WristState.swift; path = "../Done/../Shared/WristState.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000051 /* WristProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WristProtocol.swift; path = "../Done/../Shared/WristProtocol.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000050 /* WristOverlap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WristOverlap.swift; path = "../Done/../Shared/WristOverlap.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F000000000000000004F /* WristMotion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WristMotion.swift; path = "../Done/../Shared/WristMotion.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F000000000000000004E /* WristDay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WristDay.swift; path = "../Done/../Shared/WristDay.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F000000000000000004D /* WristStatsRules.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WristStatsRules.swift; path = "../Done/../Shared/WristStatsRules.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F000000000000000004C /* TelemetryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TelemetryModel.swift; path = "../Done/Models/TelemetryModel.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F000000000000000004B /* EventResizeTweenState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = EventResizeTweenState.swift; path = "../Done/Views/Calendar/Components/Timeline/EventResizeTweenState.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F000000000000000004A /* EventDeletionMotionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = EventDeletionMotionState.swift; path = "../Done/Views/Calendar/Components/Timeline/EventDeletionMotionState.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000049 /* EventCreationMotionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = EventCreationMotionState.swift; path = "../Done/Views/Calendar/Components/Timeline/EventCreationMotionState.swift"; sourceTree = SOURCE_ROOT; };
 		DAC1F0000000000000000048 /* GlassCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = GlassCardView.swift; path = "../Done/Views/Calendar/Components/GlassCardView.swift"; sourceTree = SOURCE_ROOT; };
 		DAC1F0000000000000000047 /* EventPeoplePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = EventPeoplePickerView.swift; path = "../Done/Views/Calendar/EventPeoplePickerView.swift"; sourceTree = SOURCE_ROOT; };
 		DAC1F0000000000000000046 /* CalendarEventSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CalendarEventSheets.swift; path = "../Done/Views/Calendar/CalendarEventSheets.swift"; sourceTree = SOURCE_ROOT; };
@@ -459,6 +481,17 @@ DAC2F0000000000000000001 /* MacTestStore.swift */ = {isa = PBXFileReference; las
 		DAC0000000000000000000B6 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				DAC1F0000000000000000053 /* WristTitles.swift */,
+				DAC1F0000000000000000052 /* WristState.swift */,
+				DAC1F0000000000000000051 /* WristProtocol.swift */,
+				DAC1F0000000000000000050 /* WristOverlap.swift */,
+				DAC1F000000000000000004F /* WristMotion.swift */,
+				DAC1F000000000000000004E /* WristDay.swift */,
+				DAC1F000000000000000004D /* WristStatsRules.swift */,
+				DAC1F000000000000000004C /* TelemetryModel.swift */,
+				DAC1F000000000000000004B /* EventResizeTweenState.swift */,
+				DAC1F000000000000000004A /* EventDeletionMotionState.swift */,
+				DAC1F0000000000000000049 /* EventCreationMotionState.swift */,
 				DAC1F0000000000000000048 /* GlassCardView.swift */,
 				DAC1F0000000000000000047 /* EventPeoplePickerView.swift */,
 				DAC1F0000000000000000046 /* CalendarEventSheets.swift */,
@@ -771,6 +804,17 @@ DAC2F0000000000000000001 /* MacTestStore.swift */ = {isa = PBXFileReference; las
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DAC1B0000000000000000053 /* WristTitles.swift in Sources */,
+				DAC1B0000000000000000052 /* WristState.swift in Sources */,
+				DAC1B0000000000000000051 /* WristProtocol.swift in Sources */,
+				DAC1B0000000000000000050 /* WristOverlap.swift in Sources */,
+				DAC1B000000000000000004F /* WristMotion.swift in Sources */,
+				DAC1B000000000000000004E /* WristDay.swift in Sources */,
+				DAC1B000000000000000004D /* WristStatsRules.swift in Sources */,
+				DAC1B000000000000000004C /* TelemetryModel.swift in Sources */,
+				DAC1B000000000000000004B /* EventResizeTweenState.swift in Sources */,
+				DAC1B000000000000000004A /* EventDeletionMotionState.swift in Sources */,
+				DAC1B0000000000000000049 /* EventCreationMotionState.swift in Sources */,
 				DAC1B0000000000000000048 /* GlassCardView.swift in Sources */,
 				DAC1B0000000000000000047 /* EventPeoplePickerView.swift in Sources */,
 				DAC1B0000000000000000046 /* CalendarEventSheets.swift in Sources */,
