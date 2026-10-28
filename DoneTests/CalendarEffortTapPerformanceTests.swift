@@ -1474,7 +1474,11 @@ final class CalendarScrollTouchDelayTrailQATests: XCTestCase {
         let all = lines()
         XCTAssertEqual(all.count, 4, "two lines per probe (delayingBefore 1, then 0): \(all)")
         let serials = all.compactMap(serial)
-        XCTAssertEqual(serials.count, 4)
+        // Guarded: an index past the end traps the whole test process (and
+        // every test after it) instead of failing this one.
+        guard serials.count == 4 else {
+            return XCTFail("expected 4 numbered lines, got \(serials.count): \(all)")
+        }
         XCTAssertEqual(serials[0], serials[1], "one probe, one number: \(all)")
         XCTAssertEqual(serials[2], serials[3])
         XCTAssertNotEqual(serials[0], serials[2])
@@ -1526,5 +1530,95 @@ final class CalendarScrollTouchDelayTrailQATests: XCTestCase {
             print("QA TouchDelay line bytes=\(line.utf8.count + 1): \(line)")
             XCTAssertLessThan(line.utf8.count, 200, line)
         }
+    }
+
+    // MARK: Fix round 1 — the flood guard (QA)
+
+    /// One detail open: a fresh window, pager (`Pager`, paging) and inner
+    /// scroll view (`InnerA`), and a fresh probe mounted inside.
+    private func openDetail() -> (host: UIWindow, pager: UIScrollView, inner: UIScrollView,
+                                  probe: CalendarScrollTouchDelayProbe.ProbeView) {
+        let host = window()
+        let pager = Pager()
+        pager.isPagingEnabled = true
+        let inner = InnerA()
+        host.addSubview(pager)
+        pager.addSubview(inner)
+        let probe = CalendarScrollTouchDelayProbe.ProbeView()
+        inner.addSubview(probe)
+        probe.refreshTouchDelayIfNeeded()
+        return (host, pager, inner, probe)
+    }
+
+    /// Something turns both delays back on; the probe's next two passes see
+    /// delayingBefore=2 (the re-enable) and then 0 (its own write held).
+    private func reenableBoth(_ open: (host: UIWindow, pager: UIScrollView, inner: UIScrollView,
+                                       probe: CalendarScrollTouchDelayProbe.ProbeView)) {
+        open.pager.delaysContentTouches = true
+        open.inner.delaysContentTouches = true
+        open.probe.refreshTouchDelayIfNeeded()
+        open.probe.refreshTouchDelayIfNeeded()
+        XCTAssertFalse(open.pager.delaysContentTouches, "the write itself never waits on the trail")
+        XCTAssertFalse(open.inner.delaysContentTouches)
+    }
+
+    /// The signal this line hunts — the delay coming back on — must be
+    /// written on a later open too, even when its line is word-for-word one
+    /// the trail already holds (pass 3 re-enables to delayingBefore=2, the
+    /// SAME content as every open's first pass). Sequence: a sick open
+    /// (written), a healthy open (a prefix of the sick one: silent), a sick
+    /// open again — compared with the healthy open just before it, it
+    /// differs at pass 3 and must write from there.
+    func testTheDelayComingBackIsWrittenAgainAfterAHealthyOpenEvenWithARepeatedLine() {
+        let sick = openDetail()
+        reenableBoth(sick)
+        let afterSick = lines()
+        XCTAssertEqual(afterSick.count, 4, "first open after a clear writes all four changes: \(afterSick)")
+        XCTAssertTrue(afterSick.contains { $0.hasSuffix("pass=3 found=2 paging=yes delayingBefore=2 views=InnerA|Pager") },
+                      "\(afterSick)")
+
+        let healthy = openDetail()
+        XCTAssertEqual(lines().count, 4, "a healthy open repeats the sick one's first two changes: silent")
+
+        let sickAgain = openDetail()
+        XCTAssertEqual(lines().count, 4, "rig: silent while it repeats the healthy open")
+        reenableBoth(sickAgain)
+        let after = lines()
+        XCTAssertEqual(after.count, 6, "the re-enable on a later open is on the record: \(after)")
+        XCTAssertTrue(after.dropFirst(4).first?.hasSuffix("pass=3 found=2 paging=yes delayingBefore=2 views=InnerA|Pager") ?? false,
+                      "\(after)")
+        if after.count > 4 {
+            XCTAssertNotEqual(serial(after[4]), serial(after[0]), "written by the later open's own probe")
+        }
+        _ = (sick, healthy, sickAgain)
+    }
+
+    /// A hierarchy whose delay keeps coming back (the failure case) stays
+    /// bounded per open — at most `linesPerProbe` lines plus the cap line —
+    /// and the write runs on every pass. Recorded, not asserted as a
+    /// design: a repeat of a flapping open is NOT silent; it writes again
+    /// from the change after the previous probe's remembered prefix.
+    func testAFlappingHierarchyIsBoundedPerOpen() {
+        var perOpen: [Int] = []
+        var opens: [Any] = []
+        for _ in 0..<3 {
+            let before = lines().count
+            let open = openDetail()
+            for _ in 0..<10 {
+                open.pager.delaysContentTouches = true
+                open.probe.refreshTouchDelayIfNeeded()
+                open.probe.refreshTouchDelayIfNeeded()
+                XCTAssertFalse(open.pager.delaysContentTouches)
+            }
+            perOpen.append(lines().count - before)
+            opens.append(open)
+        }
+        print("QA flapping opens, lines per open: \(perOpen)\n" + lines().joined(separator: "\n"))
+        for (index, count) in perOpen.enumerated() {
+            XCTAssertLessThanOrEqual(count, CalendarScrollTouchDelayTrail.linesPerProbe + 1, "open \(index): \(perOpen)")
+        }
+        XCTAssertEqual(perOpen.first, CalendarScrollTouchDelayTrail.linesPerProbe + 1, "the first open is written up to the cap")
+        XCTAssertTrue(lines().contains { $0.contains(" pass=3 found=2 paging=yes delayingBefore=1 ") }, "\(lines())")
+        _ = opens
     }
 }
