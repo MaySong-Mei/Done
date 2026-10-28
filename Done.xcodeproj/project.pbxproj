@@ -351,6 +351,8 @@
 		SSTT10012FE8000000000262 /* SyncSingletonTombstoneTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSTT00012FE8000000000262 /* SyncSingletonTombstoneTests.swift */; };
 		CSHT10012FE8000000000262 /* ConflictShelfTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSHT00012FE8000000000262 /* ConflictShelfTests.swift */; };
 		SRBT10012FE8000000000261 /* SyncRestoreBaselineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRBT00012FE8000000000261 /* SyncRestoreBaselineTests.swift */; };
+		TPBS10013000000000000302 /* TokenProjectionBatchSaveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TPBS00013000000000000302 /* TokenProjectionBatchSaveTests.swift */; };
+		APTF10013000000000000301 /* AgentPreferencesTokenFreeSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = APTF00013000000000000301 /* AgentPreferencesTokenFreeSyncTests.swift */; };
 		SCGT10012FE8000000000261 /* SyncCursorGenerationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SCGT00012FE8000000000261 /* SyncCursorGenerationTests.swift */; };
 		SSCN10012FE8000000000261 /* SyncSettingsCanonicalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSCN00012FE8000000000261 /* SyncSettingsCanonicalTests.swift */; };
 		ACEN10012FE8000000000262 /* AgentConversationEncodingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACEN00012FE8000000000262 /* AgentConversationEncodingTests.swift */; };
@@ -789,6 +791,8 @@
 		SSTT00012FE8000000000262 /* SyncSingletonTombstoneTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSingletonTombstoneTests.swift; sourceTree = "<group>"; };
 		CSHT00012FE8000000000262 /* ConflictShelfTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConflictShelfTests.swift; sourceTree = "<group>"; };
 		SRBT00012FE8000000000261 /* SyncRestoreBaselineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRestoreBaselineTests.swift; sourceTree = "<group>"; };
+		TPBS00013000000000000302 /* TokenProjectionBatchSaveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TokenProjectionBatchSaveTests.swift; sourceTree = "<group>"; };
+		APTF00013000000000000301 /* AgentPreferencesTokenFreeSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentPreferencesTokenFreeSyncTests.swift; sourceTree = "<group>"; };
 		SCGT00012FE8000000000261 /* SyncCursorGenerationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCursorGenerationTests.swift; sourceTree = "<group>"; };
 		SSCN00012FE8000000000261 /* SyncSettingsCanonicalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSettingsCanonicalTests.swift; sourceTree = "<group>"; };
 		ACEN00012FE8000000000262 /* AgentConversationEncodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentConversationEncodingTests.swift; sourceTree = "<group>"; };
@@ -1020,6 +1024,8 @@
 				ACEN00012FE8000000000262 /* AgentConversationEncodingTests.swift */,
 				SCGT00012FE8000000000261 /* SyncCursorGenerationTests.swift */,
 				SRBT00012FE8000000000261 /* SyncRestoreBaselineTests.swift */,
+				TPBS00013000000000000302 /* TokenProjectionBatchSaveTests.swift */,
+				APTF00013000000000000301 /* AgentPreferencesTokenFreeSyncTests.swift */,
 				SOGT00012FE8000000000261 /* SyncOwnerGuardTests.swift */,
 				SSWT00012FE8000000000271 /* SyncSeamlessSwitchTests.swift */,
 				DAST00012FE8000000000264 /* DominoAnchorSyncTests.swift */,
@@ -1746,6 +1752,8 @@
 				ACEN10012FE8000000000262 /* AgentConversationEncodingTests.swift in Sources */,
 				SCGT10012FE8000000000261 /* SyncCursorGenerationTests.swift in Sources */,
 				SRBT10012FE8000000000261 /* SyncRestoreBaselineTests.swift in Sources */,
+				TPBS10013000000000000302 /* TokenProjectionBatchSaveTests.swift in Sources */,
+				APTF10013000000000000301 /* AgentPreferencesTokenFreeSyncTests.swift in Sources */,
 				SOGT10012FE8000000000261 /* SyncOwnerGuardTests.swift in Sources */,
 				SSWT10012FE8000000000271 /* SyncSeamlessSwitchTests.swift in Sources */,
 				DAST10012FE8000000000264 /* DominoAnchorSyncTests.swift in Sources */,

@@ -1666,8 +1666,7 @@ extension SyncCatchUpTests {
         let snap = TokenInferenceRepository.shared.snapshot()
         XCTAssertTrue(snap.dynamic.isEmpty && snap.meta.isEmpty && snap.projections.isEmpty,
                       "fixture guard: the shared token state is empty, so the local row is the empty one")
-        let prefsRow = service.agentPreferencesRow(rules: [Self.cloudRule], decisionHistory: [],
-                                                   dynamic: [], meta: [], projections: [])
+        let prefsRow = service.agentPreferencesRow(rules: [Self.cloudRule], decisionHistory: [])
         let prefsSeq = server.seed(table: "agent_preferences", rows: [prefsRow])[uid]!
         let types = EventTypeCatalog.fallbackTemplates.enumerated().map { index, seed in
             EventTypeTemplate(id: UUID(uuidString: String(format: "ffffffff-ffff-ffff-ffff-%012d", index))!,

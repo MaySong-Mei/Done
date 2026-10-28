@@ -894,6 +894,11 @@ final class SupabaseSyncService: ObservableObject {
     /// The 015 columns a `PGRST204` showed this server does not have; for
     /// the rest of the session they are withheld from every write.
     private(set) var serverMissingColumns: Set<String> = []
+    /// The token state the agent_preferences upgrade transition hashes
+    /// with (`preferencesBaseInTokenFreeProjection`); a test hands in its own.
+    var legacyTokenState: @MainActor () -> TokenInferenceRepository.Snapshot = { TokenInferenceRepository.shared.snapshot() }
+    /// The baseline entries that transition could not explain this session.
+    private var unexplainedPreferencesBases: Set<String> = []
     /// What each row awaiting its echo was sent as (`payloadDigest`): a
     /// single-row table does not send the same payload again before the
     /// echo, which is what kept user_settings re-POSTing on a server
@@ -1302,19 +1307,8 @@ final class SupabaseSyncService: ObservableObject {
                 Task { await self.syncAgentPreferences(preferenceStore) }
             }
             .store(in: &cancellables)
-
-        // ── Token inference state (lives on the same agent_preferences
-        // row, but `TokenInferenceRepository` doesn't expose @Published
-        // arrays — it posts `.tokenInferenceStateDidChange` from its save
-        // methods instead).
-        NotificationCenter.default
-            .publisher(for: .tokenInferenceStateDidChange)
-            .syncDebounceSink(for: debounce, on: scheduler) { [weak self, weak preferenceStore] _ in
-                guard let self, let preferenceStore,
-                      self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
-                Task { await self.syncAgentPreferences(preferenceStore) }
-            }
-            .store(in: &cancellables)
+        // The token-inference state is not synced (`agentPreferencesTokenColumns`),
+        // so its saves trigger nothing here.
     }
 
     // MARK: - Session scope
@@ -1337,6 +1331,7 @@ final class SupabaseSyncService: ObservableObject {
         zoneConflictsLogged = []
         schemaCacheFailures = [:]
         serverMissingColumns = []
+        unexplainedPreferencesBases = []
         let dropped = cursor.validate(against: baseline)
         if !dropped.isEmpty {
             DiagnosticTrail.record("Sync", "sync.cursor.dropped reason=generation tables=\(dropped.joined(separator: ","))")
@@ -1595,9 +1590,9 @@ final class SupabaseSyncService: ObservableObject {
         if !settingsIsClean(against: base.settings) || base.settingsStale { count += 1 }
         // `agent_preferences` and `agent_conversations` are not counted and
         // do not hold the switch on their own (staging QA round 7, finding 1:
-        // three offline event edits read "4 changes", because the token
-        // projections in the preferences row carry event titles and the app
-        // rewrites that row with every edit). They are state the app derives
+        // three offline event edits read "4 changes", back when the
+        // preferences row carried the token projections and every edit
+        // rewrote it). They are state the app derives
         // or keeps for the assistant, not changes the user could recognise;
         // when something else is owed the switch is held and they stay on
         // the phone with it.
@@ -1657,6 +1652,7 @@ final class SupabaseSyncService: ObservableObject {
         zoneConflictsLogged = []
         schemaCacheFailures = [:]
         serverMissingColumns = []
+        unexplainedPreferencesBases = []
         outboundFallback = false
         needsFlush = []
         reuploadParents = [:]
@@ -2533,6 +2529,12 @@ final class SupabaseSyncService: ObservableObject {
         if baseSeq == nil, !withheld.contains("parent_version_id"), let parent = reuploadParents[key] {
             item.row["parent_version_id"] = parent
         }
+        if table == "agent_preferences" {
+            // What a push of this row costs now that the token columns stay
+            // home (`agentPreferencesTokenColumns`).
+            let bytes = (try? JSONSerialization.data(withJSONObject: item.row))?.count ?? -1
+            DiagnosticTrail.record("Sync", "sync.push.agent_preferences bytes=\(bytes) columns=\(item.row.keys.sorted().joined(separator: ","))")
+        }
         // Survey S4: marked, and written, before the request leaves.
         item.mark = markSent(key, payload: payload, seq: baseSeq)
         item.watermark = observedMaxSeq
@@ -3193,7 +3195,14 @@ final class SupabaseSyncService: ObservableObject {
         guard flushGate("agent_preferences") else { return }
         let row = agentPreferencesToRow(store)
         let hash = Self.rowHash(row)
-        let base = baseline.entry(table: "agent_preferences", id: userId)
+        let stored = baseline.entry(table: "agent_preferences", id: userId)
+        let base = preferencesBaseInTokenFreeProjection(stored, rules: store.rules, decisionHistory: store.decisionHistory)
+        if let base, base.hash != stored?.hash {
+            // The same server version, re-hashed: kept so the next flush
+            // reads it without hashing the token state again.
+            baseline.setEntry(base, table: "agent_preferences", id: userId)
+            baseline.persist()
+        }
         guard base?.hash != hash || Self.isStaleReupload(base) else { return }
         await pushSingleton(table: "agent_preferences", row: row, payload: .rowHash(hash), baseSeq: base?.seq)
     }
@@ -3224,49 +3233,144 @@ final class SupabaseSyncService: ObservableObject {
 
     // MARK: - Row builders for the two single-row blob tables
 
+    /// The token-inference columns of `agent_preferences` (migration 011).
+    /// This build neither sends nor reads them: the state has no UI, and at
+    /// megabytes per row it was most of every push of the row and most of
+    /// its server timeouts. The row leaves them OUT, never sends them as
+    /// null — a build from before this one decodes null as an empty slice,
+    /// overwrites its own state with it, rebuilds it and pushes it whole
+    /// again. A column a write does not carry stays as it is on the server,
+    /// so older builds still sync theirs among themselves. Inbound they are
+    /// ignored: not applied, and not part of the hash, so a change to them
+    /// alone is no change. See AgentPreferencesTokenFreeSyncTests.
+    nonisolated static let agentPreferencesTokenColumns = ["token_dynamic_hypotheses", "token_meta_hypotheses", "token_projections"]
+
     /// Same shape `syncAgentPreferences` uploads; extracted so
     /// `markRestoreCompleted` can reseed the diff baseline without
     /// re-uploading the bytes that just landed via restore.
     ///
-    /// Includes `TokenInferenceRepository`'s 3 learned-state arrays
-    /// (migration 011) in the same row — see migration comment for
-    /// the "agent's learned model lives together" rationale.
-    ///
     /// `rules` / `decision_history` are `jsonb not null` (migration 009),
     /// so an empty array goes out as `[]`, never as null (bench S13: null
-    /// was a 400 on every upload for a zero-rule user). The three token
-    /// columns are nullable and keep the null-for-empty encoding.
+    /// was a 400 on every upload for a zero-rule user).
     func agentPreferencesToRow(_ store: AgentPreferenceStore) -> [String: Any] {
-        let tokenState = TokenInferenceRepository.shared.snapshot()
-        return agentPreferencesRow(
-            rules: store.rules,
-            decisionHistory: store.decisionHistory,
-            dynamic: tokenState.dynamic,
-            meta: tokenState.meta,
-            projections: tokenState.projections
-        )
+        agentPreferencesRow(rules: store.rules, decisionHistory: store.decisionHistory)
     }
 
     /// The one projection of the agent_preferences row, from the values it
-    /// carries: the local stores' values for the upload, a restore
-    /// snapshot's decoded cloud values for the restore baseline (S6).
-    func agentPreferencesRow(
-        rules: [AgentPreferenceRule],
-        decisionHistory: [AgentDecisionRecord],
-        dynamic: [TokenDynamicHypothesisRecord],
-        meta: [TokenMetaHypothesisRecord],
-        projections: [TokenOccurrenceProjectionRecord]
-    ) -> [String: Any] {
+    /// carries: the local store's for the upload and the local hash, an
+    /// incoming row's decoded values for the applier, a restore snapshot's
+    /// for the restore baseline (S6), nothing for the empty row (gh#257).
+    /// It has no token column (`agentPreferencesTokenColumns`).
+    func agentPreferencesRow(rules: [AgentPreferenceRule], decisionHistory: [AgentDecisionRecord]) -> [String: Any] {
         [
             "user_id": userId,
             "rules": Self.encodeJSONArray(rules),
             "decision_history": Self.encodeJSONArray(decisionHistory),
-            "token_dynamic_hypotheses": Self.encodeJSONOrNull(dynamic),
-            "token_meta_hypotheses": Self.encodeJSONOrNull(meta),
-            "token_projections": Self.encodeJSONOrNull(projections),
             "updated_at": iso(scheduler.now()),
             "synced_at": iso(scheduler.now()),
         ]
+    }
+
+    /// The rules and history an incoming agent_preferences row (a feed row,
+    /// a restore row) carries. A column that is missing or null is empty; a
+    /// column that is present but does not decode (a newer build's field)
+    /// makes the row unreadable — nil — so it is never adopted as empty
+    /// arrays over the local ones. The token columns are not decoded.
+    static func agentPreferencesSlices(_ row: [String: Any]) -> (rules: [AgentPreferenceRule], decisionHistory: [AgentDecisionRecord])? {
+        guard let rules: [AgentPreferenceRule] = decodedSlice(row["rules"]),
+              let decisions: [AgentDecisionRecord] = decodedSlice(row["decision_history"])
+        else { return nil }
+        return (rules, decisions)
+    }
+
+    /// The token columns `row` carries with a value, for the trail line
+    /// that says they were ignored.
+    nonisolated static func agentPreferencesTokenColumnsPresent(_ row: [String: Any]) -> [String] {
+        agentPreferencesTokenColumns.filter { column in
+            guard let value = row[column] else { return false }
+            return !(value is NSNull)
+        }
+    }
+
+    private static func decodedSlice<T: Decodable>(_ value: Any?) -> [T]? {
+        guard let value, !(value is NSNull) else { return [] }
+        return decodeJSONArray(value)
+    }
+
+    // MARK: agent_preferences: the upgrade from the token-bearing row
+
+    /// The three token columns as builds that still synced the token state
+    /// sent them (null when empty). Today's row plus these is the row those
+    /// builds hashed; read only by `preferencesBaseInTokenFreeProjection`.
+    private static func legacyTokenColumns(_ tokens: TokenInferenceRepository.Snapshot) -> [String: Any] {
+        [
+            "token_dynamic_hypotheses": encodeJSONOrNull(tokens.dynamic),
+            "token_meta_hypotheses": encodeJSONOrNull(tokens.meta),
+            "token_projections": encodeJSONOrNull(tokens.projections),
+        ]
+    }
+
+    /// The token slices of an incoming row the way those builds decoded
+    /// them; nil when one does not decode (they could not have hashed it).
+    private static func legacyTokenSlices(_ row: [String: Any]) -> TokenInferenceRepository.Snapshot? {
+        guard let dynamic: [TokenDynamicHypothesisRecord] = decodedSlice(row["token_dynamic_hypotheses"]),
+              let meta: [TokenMetaHypothesisRecord] = decodedSlice(row["token_meta_hypotheses"]),
+              let projections: [TokenOccurrenceProjectionRecord] = decodedSlice(row["token_projections"])
+        else { return nil }
+        return (dynamic, meta, projections)
+    }
+
+    /// The agent_preferences baseline entry as the token-free projection
+    /// reads it.
+    ///
+    /// An entry written before the token columns left the row holds the
+    /// hash of the row WITH them, which no token-free hash equals. Read as
+    /// it is, the local row looks edited, and a peer's rules change meets
+    /// it as a conflict: a shelf line, and the peer's rules kept off this
+    /// device. So an entry that is the legacy hash of a row this device can
+    /// name — its own rules and history, or the incoming row's, under
+    /// either side's token state — is rewritten as that row's token-free
+    /// hash. Seq, version id and the catch-up marker stay: the server
+    /// version the entry names is the same one.
+    ///
+    /// An entry already token-free, the `?` marker, or one nothing here
+    /// explains comes back unchanged, and the §6 table reads it as before.
+    /// That last case is a device whose token state moved after its last
+    /// baseline write; it can still conflict, but only when the rules or
+    /// history differ, and it stays local-kept, peer-shelved. A miss is
+    /// remembered for the session, so a device that cannot be explained
+    /// does not re-hash the token state on every flush.
+    func preferencesBaseInTokenFreeProjection(_ entry: SyncBaselineEntry?, rules: [AgentPreferenceRule],
+                                              decisionHistory: [AgentDecisionRecord],
+                                              incoming: [String: Any]? = nil) -> SyncBaselineEntry? {
+        guard var entry, !entry.isUnknown else { return entry }
+        let localHash = Self.rowHash(agentPreferencesRow(rules: rules, decisionHistory: decisionHistory))
+        if entry.hash == localHash { return entry }
+        var sides = [(rules: rules, decisionHistory: decisionHistory, hash: localHash, name: "local")]
+        if let incoming, let slices = Self.agentPreferencesSlices(incoming) {
+            let incomingHash = Self.rowHash(agentPreferencesRow(rules: slices.rules, decisionHistory: slices.decisionHistory))
+            if entry.hash == incomingHash { return entry }
+            sides.append((slices.rules, slices.decisionHistory, incomingHash, "incoming"))
+        }
+        // Keyed without the local hash: a later local edit makes the entry
+        // no easier to explain, and the token state is what is missing.
+        let attempt = entry.hash + "|" + (sides.count > 1 ? sides[1].hash : "")
+        guard !unexplainedPreferencesBases.contains(attempt) else { return entry }
+        var tokenStates = [legacyTokenState()]
+        if sides.count > 1, let incoming, let tokens = Self.legacyTokenSlices(incoming) { tokenStates.append(tokens) }
+        let tokenColumns = tokenStates.map(Self.legacyTokenColumns)
+        for side in sides {
+            let row = agentPreferencesRow(rules: side.rules, decisionHistory: side.decisionHistory)
+            for columns in tokenColumns
+            where Self.rowHash(row.merging(columns) { _, legacy in legacy }) == entry.hash {
+                entry.hash = side.hash
+                DiagnosticTrail.record("Sync", "sync.baseline.token_free table=agent_preferences matched=\(side.name) seq=\(entry.seq.map(String.init) ?? "nil")")
+                return entry
+            }
+        }
+        unexplainedPreferencesBases.insert(attempt)
+        DiagnosticTrail.record("Sync", "sync.baseline.token_free table=agent_preferences matched=none seq=\(entry.seq.map(String.init) ?? "nil")")
+        return entry
     }
 
     /// Same shape `syncAgentConversations` uploads.
@@ -3835,13 +3939,7 @@ final class SupabaseSyncService: ObservableObject {
         // re-uploaded for no change.
         let preferencesKey = Self.restoreSingletonKey("agent_preferences")
         if let seq = seqs[preferencesKey] {
-            let row = agentPreferencesRow(
-                rules: cloud.agentRules ?? [],
-                decisionHistory: cloud.agentDecisionHistory ?? [],
-                dynamic: cloud.tokenDynamicHypotheses ?? [],
-                meta: cloud.tokenMetaHypotheses ?? [],
-                projections: cloud.tokenProjections ?? []
-            )
+            let row = agentPreferencesRow(rules: cloud.agentRules ?? [], decisionHistory: cloud.agentDecisionHistory ?? [])
             baseline.setEntry(SyncBaselineEntry(hash: Self.rowHash(row), seq: seq), table: "agent_preferences", id: userId)
         } else if let preferenceStore = attachedPreferenceStore {
             replaySingleton(table: "agent_preferences", hash: Self.rowHash(agentPreferencesToRow(preferenceStore)))

@@ -1363,14 +1363,17 @@ extension SyncApplierTests {
 
     /// A slice this build cannot decode makes the row undecodable; it is
     /// never adopted as empty arrays. Missing or null columns are empty.
+    /// The token columns are not slices this build reads at all.
     func testThePreferencesAdapterNeverReadsAnUndecodableSliceAsEmpty() {
         let adapter = preferencesAdapter()
         XCTAssertNotNil(adapter.projected(["rules": [Any](), "decision_history": [Any](),
                                            "token_dynamic_hypotheses": NSNull()]), "control")
-        for column in ["rules", "decision_history", "token_dynamic_hypotheses",
-                       "token_meta_hypotheses", "token_projections"] {
+        for column in ["rules", "decision_history"] {
             XCTAssertNil(adapter.projected([column: [["from_a_newer_build": true]]]), column)
             XCTAssertFalse(adapter.adopt([column: [["from_a_newer_build": true]]]), column)
+        }
+        for column in SupabaseSyncService.agentPreferencesTokenColumns {
+            XCTAssertNotNil(adapter.projected([column: [["from_a_newer_build": true]]]), column)
         }
         var ctx = context()
         ctx.singletons = ["agent_preferences": adapter]
@@ -1829,25 +1832,6 @@ extension SyncApplierTests {
         XCTAssertNil(service.cursor.value)
     }
 
-    /// The token half of the preferences adopt: a slice that does not
-    /// encode is not reported as saved.
-    func testATokenSliceThatDoesNotEncodeIsNotReportedAsSaved() {
-        let suite = "SyncApplierTokens-\(UUID().uuidString)"
-        let tokenDefaults = UserDefaults(suiteName: suite)!
-        addTeardownBlock { UserDefaults().removePersistentDomain(forName: suite) }
-        let repository = TokenInferenceRepository(defaults: tokenDefaults)
-        XCTAssertTrue(repository.applyRestore(dynamicHypotheses: [], metaHypotheses: nil, projections: nil,
-                                              strategy: .cloudOverwritesLocal, resolution: .keepCloud), "control")
-        let unencodable = TokenDynamicHypothesisRecord(
-            id: "h", category: .state, statement: "s", confidence: .nan, weight: 1,
-            windowStart: Self.t0, windowEnd: Self.t0, relatedOccurrenceKeys: [], rationale: "r",
-            derivedFromIDs: [], status: .active, updatedAt: Self.t0)
-        XCTAssertFalse(repository.applyRestore(dynamicHypotheses: [unencodable], metaHypotheses: nil, projections: nil,
-                                               strategy: .cloudOverwritesLocal, resolution: .keepCloud))
-        XCTAssertTrue(TokenInferenceRepository(defaults: tokenDefaults).snapshot().dynamic.isEmpty,
-                      "positive control: nothing reached the defaults")
-    }
-
     /// An undecodable row was never compared and moved no baseline, so its
     /// pending-verify element stays; its table still moves the cursor.
     func testAnUndecodableRowLeavesItsPendingVerifyElement() {
@@ -1891,9 +1875,7 @@ extension SyncApplierTests {
                                        triggerPattern: .init(kind: .exactEventTypeTitle, value: "gym"),
                                        preferredAction: .init(kind: .keepTypeOnly, value: nil),
                                        source: .explicitSelection, lastUsedAt: Self.t0)
-        let snap = TokenInferenceRepository.shared.snapshot()
-        var data = service.agentPreferencesRow(rules: [rule], decisionHistory: [], dynamic: snap.dynamic,
-                                               meta: snap.meta, projections: snap.projections)
+        var data = service.agentPreferencesRow(rules: [rule], decisionHistory: [])
         data["seq"] = NSNumber(value: 2)
         data["deleted_at"] = NSNull()
         var ctx = context()
@@ -1933,9 +1915,7 @@ extension SyncApplierTests {
                                        triggerPattern: .init(kind: .exactEventTypeTitle, value: "gym"),
                                        preferredAction: .init(kind: .keepTypeOnly, value: nil),
                                        source: .explicitSelection, lastUsedAt: Self.t0)
-        let snap = TokenInferenceRepository.shared.snapshot()
-        var data = service.agentPreferencesRow(rules: [rule], decisionHistory: [], dynamic: snap.dynamic,
-                                               meta: snap.meta, projections: snap.projections)
+        var data = service.agentPreferencesRow(rules: [rule], decisionHistory: [])
         data["seq"] = NSNumber(value: seq)
         data["deleted_at"] = NSNull()
         return SyncFeedRow(table: "agent_preferences", seq: seq, data: data)
@@ -2051,7 +2031,7 @@ extension SyncApplierTests {
     }
 
     private func noBasePreferencesRow(_ rules: [AgentPreferenceRule], seq: Int64) -> SyncFeedRow {
-        var data = service.agentPreferencesRow(rules: rules, decisionHistory: [], dynamic: [], meta: [], projections: [])
+        var data = service.agentPreferencesRow(rules: rules, decisionHistory: [])
         data["seq"] = NSNumber(value: seq)
         data["deleted_at"] = NSNull()
         return SyncFeedRow(table: "agent_preferences", seq: seq, data: data)

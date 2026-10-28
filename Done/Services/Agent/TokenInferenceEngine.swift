@@ -183,32 +183,36 @@ private struct TokenDeterministicPreview {
     var evidence: TokenEvidenceBundle
 }
 
-extension Notification.Name {
-    /// Posted whenever `TokenInferenceRepository` mutates its persisted
-    /// arrays. `SupabaseSyncService` listens to debounce + re-upload the
-    /// `agent_preferences` row whose token columns the repository owns.
-    static let tokenInferenceStateDidChange = Notification.Name("io.maymei.Done.tokenInferenceStateDidChange")
-}
-
+/// The token-inference state is device-local: no sync path reads or writes
+/// it (see `SupabaseSyncService.agentPreferencesTokenColumns`).
 @MainActor
 final class TokenInferenceRepository {
     static let shared = TokenInferenceRepository()
 
+    typealias Snapshot = (dynamic: [TokenDynamicHypothesisRecord],
+                          meta: [TokenMetaHypothesisRecord],
+                          projections: [TokenOccurrenceProjectionRecord])
+
     private let defaults: UserDefaults
     private let dynamicKey = "tokenInferenceDynamicHypotheses.v2"
     private let metaKey = "tokenInferenceMetaHypotheses.v2"
-    private let projectionKey = "tokenInferenceProjections.v2"
+    static let projectionKey = "tokenInferenceProjections.v2"
+    private var projectionKey: String { Self.projectionKey }
     private let activeDynamicCap = 12
 
     private var dynamicStorage: [TokenDynamicHypothesisRecord]
     private var metaStorage: [TokenMetaHypothesisRecord]
     private var projectionsStorage: [TokenOccurrenceProjectionRecord]
+    /// `batchingProjectionSaves` nesting, and the upserts inside it whose
+    /// save is still owed.
+    private var projectionBatchDepth = 0
+    private var projectionBatchUpserts = 0
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         dynamicStorage = defaults.codableValue([TokenDynamicHypothesisRecord].self, forKey: dynamicKey) ?? []
         metaStorage = defaults.codableValue([TokenMetaHypothesisRecord].self, forKey: metaKey) ?? []
-        projectionsStorage = defaults.codableValue([TokenOccurrenceProjectionRecord].self, forKey: projectionKey) ?? []
+        projectionsStorage = defaults.codableValue([TokenOccurrenceProjectionRecord].self, forKey: Self.projectionKey) ?? []
     }
 
     var dynamicHypotheses: [TokenDynamicHypothesisRecord] {
@@ -374,6 +378,10 @@ final class TokenInferenceRepository {
         return touched
     }
 
+    /// A reconciled projection replaces the predicted one for the same
+    /// occurrence; a record with the same id is replaced; the array stays
+    /// ordered by start, then `updatedAt`. Saved at once, or once at the end
+    /// of the enclosing `batchingProjectionSaves`.
     func upsertProjection(_ record: TokenOccurrenceProjectionRecord) {
         if record.phase == .reconciled {
             projectionsStorage.removeAll {
@@ -381,15 +389,50 @@ final class TokenInferenceRepository {
             }
         }
         if let index = projectionsStorage.firstIndex(where: { $0.id == record.id }) {
-            projectionsStorage[index] = record
+            projectionsStorage.remove(at: index)
+        }
+        // A restore can leave the array unordered; the first upsert after it
+        // sorts once, every later one inserts in place, so a batch of N
+        // upserts costs at most one sort.
+        if !Self.isOrdered(projectionsStorage) {
+            projectionsStorage.sort(by: Self.projectionPrecedes)
+        }
+        let slot = projectionsStorage.firstIndex { Self.projectionPrecedes(record, $0) } ?? projectionsStorage.endIndex
+        projectionsStorage.insert(record, at: slot)
+        if projectionBatchDepth > 0 {
+            projectionBatchUpserts += 1
         } else {
-            projectionsStorage.append(record)
+            saveProjections()
         }
-        projectionsStorage.sort { lhs, rhs in
-            if lhs.start != rhs.start { return lhs.start < rhs.start }
-            return lhs.updatedAt < rhs.updatedAt
-        }
-        saveProjections()
+    }
+
+    /// Runs `body` with every `upsertProjection` it makes landing in memory
+    /// only, then saves the projections once if any did. The JSON encode of
+    /// the whole array is what an upsert costs, so a loop over N occurrences
+    /// pays it once instead of N times. Synchronous on the main actor like
+    /// every other write here: nothing outlives the call, so the erase
+    /// (`LocalDataEraseEpoch`) never meets a save it did not see coming.
+    /// See TokenProjectionBatchSaveTests.
+    func batchingProjectionSaves(_ body: () -> Void) {
+        projectionBatchDepth += 1
+        body()
+        projectionBatchDepth -= 1
+        guard projectionBatchDepth == 0, projectionBatchUpserts > 0 else { return }
+        let upserts = projectionBatchUpserts
+        projectionBatchUpserts = 0
+        let started = Date()
+        let saved = saveProjections()
+        let ms = Int(Date().timeIntervalSince(started) * 1000)
+        DiagnosticTrail.record("Persistence", "tokens: projections batch upserts=\(upserts) saves=1 count=\(projectionsStorage.count) landed=\(saved) ms=\(ms)")
+    }
+
+    private static func projectionPrecedes(_ lhs: TokenOccurrenceProjectionRecord, _ rhs: TokenOccurrenceProjectionRecord) -> Bool {
+        if lhs.start != rhs.start { return lhs.start < rhs.start }
+        return lhs.updatedAt < rhs.updatedAt
+    }
+
+    private static func isOrdered(_ records: [TokenOccurrenceProjectionRecord]) -> Bool {
+        zip(records, records.dropFirst()).allSatisfy { !projectionPrecedes($1, $0) }
     }
 
     func invalidatePredictedProjections(after date: Date) {
@@ -408,58 +451,12 @@ final class TokenInferenceRepository {
         defaults.removeObject(forKey: projectionKey)
     }
 
-    // MARK: - Backup / restore plumbing
-    //
-    // The repository is a singleton that loads from UserDefaults on init.
-    // The sync layer needs to (a) read the current state to upload, and
-    // (b) overwrite the in-memory + on-disk state after a restore lands.
-
-    /// Read-only access to the three underlying arrays so the sync layer
-    /// can encode them into the `agent_preferences` row. Returns whatever
-    /// the in-memory storage holds — same source the engine itself reads.
-    func snapshot() -> (dynamic: [TokenDynamicHypothesisRecord],
-                       meta: [TokenMetaHypothesisRecord],
-                       projections: [TokenOccurrenceProjectionRecord]) {
+    /// The three arrays as memory holds them. The only reader outside the
+    /// engine is the sync upgrade transition, which hashes them the way
+    /// builds that still synced this state did
+    /// (`SupabaseSyncService.preferencesBaseInTokenFreeProjection`).
+    func snapshot() -> Snapshot {
         (dynamicStorage, metaStorage, projectionsStorage)
-    }
-
-    /// Replace in-memory state + persisted state with a cloud-restored
-    /// payload. Used by `RestoreCoordinator` after applying a snapshot.
-    /// Any nil array is treated as "no cloud state for this slice" and
-    /// the corresponding local slice is preserved.
-    ///
-    /// Returns whether every slice it wrote is persisted (the remote applier
-    /// reads it; the restore flow ignores it).
-    @discardableResult
-    func applyRestore(
-        dynamicHypotheses cloudDynamic: [TokenDynamicHypothesisRecord]?,
-        metaHypotheses cloudMeta: [TokenMetaHypothesisRecord]?,
-        projections cloudProjections: [TokenOccurrenceProjectionRecord]?,
-        strategy: RestoreStrategy,
-        resolution: ConflictResolution
-    ) -> Bool {
-        let shouldOverwrite: Bool = {
-            switch strategy {
-            case .cloudOverwritesLocal: return true
-            case .merge:                return resolution == .keepCloud
-            }
-        }()
-        guard shouldOverwrite else { return true }
-
-        var landed = true
-        if let cloudDynamic {
-            dynamicStorage = cloudDynamic
-            if !saveDynamicHypotheses() { landed = false }
-        }
-        if let cloudMeta {
-            metaStorage = cloudMeta
-            if !saveMetaHypotheses() { landed = false }
-        }
-        if let cloudProjections {
-            projectionsStorage = cloudProjections
-            if !saveProjections() { landed = false }
-        }
-        return landed
     }
 
     private func compressAndPruneDynamicHypotheses(referenceDate: Date) {
@@ -544,35 +541,17 @@ final class TokenInferenceRepository {
 
     @discardableResult
     private func saveDynamicHypotheses() -> Bool {
-        let saved = defaults.setCodable(dynamicStorage, forKey: dynamicKey)
-        broadcastChange()
-        return saved
+        defaults.setCodable(dynamicStorage, forKey: dynamicKey)
     }
 
     @discardableResult
     private func saveMetaHypotheses() -> Bool {
-        let saved = defaults.setCodable(metaStorage, forKey: metaKey)
-        broadcastChange()
-        return saved
+        defaults.setCodable(metaStorage, forKey: metaKey)
     }
 
     @discardableResult
     private func saveProjections() -> Bool {
-        let saved = defaults.setCodable(projectionsStorage, forKey: projectionKey)
-        broadcastChange()
-        return saved
-    }
-
-    /// Token state isn't `@Published` (the storage arrays are private
-    /// `var`s, not Combine sources) so the sync layer can't observe
-    /// changes via a publisher chain. Post a Notification on every save
-    /// so `SupabaseSyncService` can debounce and re-upload the
-    /// `agent_preferences` row when token columns change. Without this
-    /// the agent's learned state drifts away from cloud during a session
-    /// until something else (a rule edit, the next fullSync) pokes the
-    /// row.
-    private func broadcastChange() {
-        NotificationCenter.default.post(name: .tokenInferenceStateDidChange, object: nil)
+        defaults.setCodable(projectionsStorage, forKey: projectionKey)
     }
 
     private func phaseRank(_ phase: TokenProjectionPhase) -> Int {
@@ -627,10 +606,15 @@ final class TokenInferenceService {
 
     static let bootstrapSourceLabel = "Rules Bootstrap"
 
-    private let repository = TokenInferenceRepository.shared
+    private let repository: TokenInferenceRepository
     private let calculator = TokenDeterministicCalculator()
     private let calendar = Calendar.current
     private let predictionHorizonDays = 14
+
+    /// `repository` nil is the shared one.
+    init(repository: TokenInferenceRepository? = nil) {
+        self.repository = repository ?? .shared
+    }
 
     /// Master gate for the engine's LLM loop (`AppSettingsKeys` doc has the
     /// full rationale — default OFF until the output has a UI surface).  Read
@@ -906,40 +890,48 @@ final class TokenInferenceService {
         for plans: [TokenAnalysisRunPlan],
         store: EventStore
     ) {
-        for plan in plans {
-            let occurrenceKey = resolveOccurrenceKey(for: plan.occurrence, store: store)
-            let phase: TokenProjectionPhase = plan.mode == .prediction ? .predicted : .reconciled
-            guard repository.projection(for: occurrenceKey, phase: phase) == nil,
-                  let resolved = resolvedOccurrence(for: plan.occurrence, store: store) else {
-                continue
+        // One save for the whole loop: each occurrence still reads the ones
+        // placed before it (`latestProjection(before:)` chains them).
+        repository.batchingProjectionSaves {
+            for plan in plans {
+                bootstrapProjection(for: plan, store: store)
             }
-
-            let preview = calculator.preview(
-                occurrence: resolved.occurrence,
-                occurrenceDay: resolved.day,
-                store: store,
-                repository: repository,
-                mode: plan.mode
-            )
-
-            let projection = calculator.project(
-                occurrence: resolved.occurrence,
-                occurrenceDay: resolved.day,
-                store: store,
-                repository: repository,
-                mode: plan.mode,
-                abstain: false,
-                reasoningSummary: bootstrapReasoningSummary(for: plan.mode),
-                evidence: preview.evidence,
-                stateTags: preview.suggestedStateTags,
-                dynamicHypothesisIDs: [],
-                metaHypothesisKinds: [],
-                projectionHint: nil,
-                sourceLabel: Self.bootstrapSourceLabel,
-                prior: preview
-            )
-            repository.upsertProjection(projection)
         }
+    }
+
+    private func bootstrapProjection(for plan: TokenAnalysisRunPlan, store: EventStore) {
+        let occurrenceKey = resolveOccurrenceKey(for: plan.occurrence, store: store)
+        let phase: TokenProjectionPhase = plan.mode == .prediction ? .predicted : .reconciled
+        guard repository.projection(for: occurrenceKey, phase: phase) == nil,
+              let resolved = resolvedOccurrence(for: plan.occurrence, store: store) else {
+            return
+        }
+
+        let preview = calculator.preview(
+            occurrence: resolved.occurrence,
+            occurrenceDay: resolved.day,
+            store: store,
+            repository: repository,
+            mode: plan.mode
+        )
+
+        let projection = calculator.project(
+            occurrence: resolved.occurrence,
+            occurrenceDay: resolved.day,
+            store: store,
+            repository: repository,
+            mode: plan.mode,
+            abstain: false,
+            reasoningSummary: bootstrapReasoningSummary(for: plan.mode),
+            evidence: preview.evidence,
+            stateTags: preview.suggestedStateTags,
+            dynamicHypothesisIDs: [],
+            metaHypothesisKinds: [],
+            projectionHint: nil,
+            sourceLabel: Self.bootstrapSourceLabel,
+            prior: preview
+        )
+        repository.upsertProjection(projection)
     }
 
     private func bootstrapReasoningSummary(for mode: TokenInferenceMode) -> String {

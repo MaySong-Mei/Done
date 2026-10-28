@@ -425,21 +425,8 @@ final class RestoreCoordinator: ObservableObject {
             )
         }
 
-        // TokenInferenceRepository's learned state (migration 011 — lives
-        // on the same agent_preferences row). Same merge semantics: a
-        // single-row blob per slice, keepLocal is a no-op, keepCloud
-        // replaces in-memory + on-disk via the singleton's applyRestore.
-        if snapshot.tokenDynamicHypotheses != nil ||
-           snapshot.tokenMetaHypotheses != nil ||
-           snapshot.tokenProjections != nil {
-            TokenInferenceRepository.shared.applyRestore(
-                dynamicHypotheses: snapshot.tokenDynamicHypotheses,
-                metaHypotheses: snapshot.tokenMetaHypotheses,
-                projections: snapshot.tokenProjections,
-                strategy: strategy,
-                resolution: resolution
-            )
-        }
+        // The token-inference state on that row is not restored: it is
+        // device-local (`SupabaseSyncService.agentPreferencesTokenColumns`).
 
         // Agent conversation history. Re-encode the cloud's jsonb blob and hand
         // it to the durable repository, which commits it and posts its change

@@ -24,12 +24,9 @@ struct RestoreSnapshot {
     /// Nil when the user has no cloud-side row yet.
     var agentRules: [AgentPreferenceRule]?
     /// Decoded `AgentPreferenceStore.decisionHistory` from the same row.
+    /// The row's token columns are not read
+    /// (`SupabaseSyncService.agentPreferencesTokenColumns`).
     var agentDecisionHistory: [AgentDecisionRecord]?
-    /// `TokenInferenceRepository`'s learned state (migration 011). All three
-    /// slices live on the same `agent_preferences` row.
-    var tokenDynamicHypotheses: [TokenDynamicHypothesisRecord]?
-    var tokenMetaHypotheses: [TokenMetaHypothesisRecord]?
-    var tokenProjections: [TokenOccurrenceProjectionRecord]?
     /// Raw JSON for the `conversations` jsonb column — we don't decode the
     /// typed `AgentConversation` array here because the sync layer doesn't
     /// depend on it directly; the AgentService consumer round-trips this
@@ -58,9 +55,6 @@ struct RestoreSnapshot {
         settings: nil as [String: Any]?,
         agentRules: nil as [AgentPreferenceRule]?,
         agentDecisionHistory: nil as [AgentDecisionRecord]?,
-        tokenDynamicHypotheses: nil as [TokenDynamicHypothesisRecord]?,
-        tokenMetaHypotheses: nil as [TokenMetaHypothesisRecord]?,
-        tokenProjections: nil as [TokenOccurrenceProjectionRecord]?,
         agentConversationsBlob: nil as Any?
     )
 }
@@ -205,14 +199,17 @@ extension SupabaseSyncService {
             .first
             .flatMap { $0["settings"] as? [String: Any] }
 
-        // agent_preferences: one row, rules + decision_history as jsonb arrays
-        // + (migration 011) the three TokenInferenceRepository slices.
+        // agent_preferences: one row, rules + decision_history as jsonb arrays.
+        // Its token columns (migration 011) are left on the server.
         let prefsRow = (raw["agent_preferences"] ?? []).first
         let agentRules: [AgentPreferenceRule]? = decodeJSONArray(prefsRow?["rules"])
         let agentDecisions: [AgentDecisionRecord]? = decodeJSONArray(prefsRow?["decision_history"])
-        let tokenDynamic: [TokenDynamicHypothesisRecord]? = decodeJSONArray(prefsRow?["token_dynamic_hypotheses"])
-        let tokenMeta: [TokenMetaHypothesisRecord]? = decodeJSONArray(prefsRow?["token_meta_hypotheses"])
-        let tokenProj: [TokenOccurrenceProjectionRecord]? = decodeJSONArray(prefsRow?["token_projections"])
+        if let prefsRow {
+            let ignored = agentPreferencesTokenColumnsPresent(prefsRow)
+            if !ignored.isEmpty {
+                DiagnosticTrail.record("Sync", "restore.ignored_columns table=agent_preferences columns=\(ignored.joined(separator: ","))")
+            }
+        }
 
         // agent_conversations: one row, conversations jsonb passed through raw
         // for the consumer (AgentService) to re-encode into its UserDefaults key.
@@ -235,9 +232,6 @@ extension SupabaseSyncService {
             settings: settingsBlob,
             agentRules: agentRules,
             agentDecisionHistory: agentDecisions,
-            tokenDynamicHypotheses: tokenDynamic,
-            tokenMetaHypotheses: tokenMeta,
-            tokenProjections: tokenProj,
             agentConversationsBlob: conversationsBlob
         )
         snapshot.cloudSeqs = cloudSeqs(raw)
