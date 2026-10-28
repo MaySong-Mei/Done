@@ -305,6 +305,29 @@ final class CalendarScrollTouchDelayTests: XCTestCase {
         }
     }
 
+    /// Once a probe has differed from the open before it, it writes the
+    /// rest of its changes too, even one that happens to match: here the
+    /// inner scroll view's delay is already off, so the first pass reads
+    /// delayingBefore=1 (new), and the second pass's delayingBefore=0 is
+    /// the same content the previous open wrote — written anyway, because
+    /// it is how this open's story ends.
+    func testOnceAProbeDiffersItWritesTheRestOfItsChanges() {
+        withCleanTrail {
+            let first = open()
+            XCTAssertEqual(touchDelayLines().count, 2)
+            let differs = open(inner: {
+                let inner = InnerScroll()
+                inner.delaysContentTouches = false
+                return inner
+            })
+            let lines = touchDelayLines()
+            XCTAssertEqual(lines.count, 4, "\(lines)")
+            XCTAssertTrue(lines.last?.hasSuffix("pass=2 found=2 paging=yes delayingBefore=0 views=InnerScroll|PagerScroll") ?? false,
+                          "\(lines)")
+            _ = (first, differs)
+        }
+    }
+
     /// What the probes remember stands for lines in the trail: once the
     /// trail is cleared, an open identical to the last one writes again.
     func testClearingTheTrailForgetsWhatWasWritten() {
