@@ -126,6 +126,119 @@ final class CalendarScrollTouchDelayTests: XCTestCase {
         XCTAssertFalse(vertical.delaysContentTouches)
         XCTAssertFalse(pager.delaysContentTouches)
     }
+
+    // MARK: The trail line (gh#201 follow-up: does the walk still reach the pager?)
+
+    /// Named stand-ins, so the line's class names and their order are
+    /// checkable — every real ancestor here would otherwise read
+    /// "UIScrollView".
+    private final class InnerScroll: UIScrollView {}
+    private final class PagerScroll: UIScrollView {}
+    private final class OuterScroll: UIScrollView {}
+
+    /// `DiagnosticTrail` is process-global and file-backed, so each test
+    /// clears it around itself and reads back only its own category.
+    private func withCleanTrail(_ body: () throws -> Void) rethrows {
+        DiagnosticTrail.clear()
+        defer { DiagnosticTrail.clear() }
+        try body()
+    }
+
+    /// The probe only trails from inside a window; the hierarchy needs one
+    /// above it, not a visible one.
+    private func makeWindow() -> UIWindow {
+        UIWindow(frame: CGRect(x: 0, y: 0, width: 393, height: 852))
+    }
+
+    private func touchDelayLines() -> [String] {
+        DiagnosticTrail.combinedText()
+            .split(separator: "\n")
+            .filter { $0.contains(" \(CalendarScrollTouchDelayProbe.trailCategory) ") }
+            .map(String.init)
+    }
+
+    /// The shape the fix was built for: the probe's first pass in a window
+    /// finds both scroll views still delaying, its next pass finds the
+    /// write held — two lines — and further passes over the same hierarchy
+    /// write nothing. A hierarchy change writes again.
+    func testTheProbeTrailsWhatItFoundOnceAndAgainOnlyWhenThatChanges() {
+        withCleanTrail {
+            let window = makeWindow()
+            let pager = PagerScroll()
+            pager.isPagingEnabled = true
+            let inner = InnerScroll()
+            window.addSubview(pager)
+            pager.addSubview(inner)
+
+            let probe = CalendarScrollTouchDelayProbe.ProbeView()
+            inner.addSubview(probe)
+            for _ in 0..<5 { probe.refreshTouchDelayIfNeeded() }
+
+            let lines = touchDelayLines()
+            XCTAssertEqual(lines.count, 2, "\(lines)")
+            XCTAssertTrue(lines.first?.hasSuffix(
+                "found=2 paging=yes delayingBefore=2 views=InnerScroll|PagerScroll") ?? false, "\(lines)")
+            XCTAssertTrue(lines.last?.hasSuffix(
+                "found=2 paging=yes delayingBefore=0 views=InnerScroll|PagerScroll") ?? false,
+                "the second pass sees the write held: \(lines)")
+            XCTAssertFalse(pager.delaysContentTouches, "the write itself is unchanged")
+            XCTAssertFalse(inner.delaysContentTouches)
+
+            // Something turns the pager's delay back on: that is a change.
+            pager.delaysContentTouches = true
+            probe.refreshTouchDelayIfNeeded()
+            probe.refreshTouchDelayIfNeeded()
+            let after = touchDelayLines()
+            XCTAssertEqual(after.count, 4, "\(after)")
+            XCTAssertTrue(after[2].hasSuffix("delayingBefore=1 views=InnerScroll|PagerScroll"), after[2])
+            XCTAssertFalse(pager.delaysContentTouches)
+        }
+    }
+
+    /// No paging ancestor: the walk returns only the nearest scroll view,
+    /// so the line names what is ABOVE it too — the classes a follow-up
+    /// fix would have to reach.
+    func testWithoutAPagerTheLineNamesTheScrollViewsAboveTheNearest() {
+        withCleanTrail {
+            let window = makeWindow()
+            let outer = OuterScroll()
+            let middle = PagerScroll()   // a pager in name only: paging off
+            let inner = InnerScroll()
+            window.addSubview(outer)
+            outer.addSubview(middle)
+            middle.addSubview(inner)
+
+            let probe = CalendarScrollTouchDelayProbe.ProbeView()
+            inner.addSubview(probe)
+
+            let line = touchDelayLines().first ?? ""
+            XCTAssertTrue(line.hasSuffix(
+                "found=1 paging=no delayingBefore=1 views=InnerScroll above=PagerScroll(paging=no)|OuterScroll(paging=no)"),
+                line)
+            XCTAssertTrue(middle.delaysContentTouches, "the walk's blast radius is unchanged: nothing above the nearest is written")
+        }
+    }
+
+    /// Outside a window the probe writes no line: SwiftUI's first
+    /// `updateUIView` runs before the probe has ancestors, and its
+    /// "found=0" would read like the failure the line is for. Positive
+    /// control: the same probe, once in a window, writes one.
+    func testTheProbeWritesNoLineOutsideAWindow() {
+        withCleanTrail {
+            let pager = PagerScroll()
+            pager.isPagingEnabled = true
+            let probe = CalendarScrollTouchDelayProbe.ProbeView()
+            probe.refreshTouchDelayIfNeeded()
+            pager.addSubview(probe)
+            probe.refreshTouchDelayIfNeeded()
+            XCTAssertEqual(touchDelayLines(), [])
+            XCTAssertFalse(pager.delaysContentTouches, "the write does not wait for a window")
+
+            let window = makeWindow()
+            window.addSubview(pager)
+            XCTAssertEqual(touchDelayLines().count, 1, "positive control: in a window, the probe trails")
+        }
+    }
 }
 
 // MARK: - Fix 1 — the mount point, in the real hierarchy
@@ -178,6 +291,8 @@ final class CalendarScrollTouchDelayMountPointTests: XCTestCase {
     /// `UIScrollView` — and the walk works because `isPagingEnabled` is true
     /// on it, not because of what it is called.
     func testProbeInTheRealDetailHierarchyReachesThePagesScrollViewAndThePager() throws {
+        DiagnosticTrail.clear()
+        defer { DiagnosticTrail.clear() }
         let store = EventStore(defaults: defaults, storage: location, seedsSampleDataIfEmpty: false)
         let start = Calendar.current.date(
             bySettingHour: 9, minute: 0, second: 0, of: Calendar.current.startOfDay(for: Date())
@@ -242,6 +357,17 @@ final class CalendarScrollTouchDelayMountPointTests: XCTestCase {
                 "every scroll view the walk reaches must have had its delay turned off"
             )
         }
+
+        // The probe's trail line, from the REAL mount: written at all (the
+        // probe does get a window there), and it reports the pager. On a
+        // device whose OS reshaped this hierarchy, this is the line that
+        // would say paging=no.
+        let lines = DiagnosticTrail.combinedText()
+            .split(separator: "\n")
+            .filter { $0.contains(" \(CalendarScrollTouchDelayProbe.trailCategory) ") }
+        print("touch-delay trail in the real hierarchy:\n" + lines.joined(separator: "\n"))
+        let first = try XCTUnwrap(lines.first, "the mounted probe never wrote its trail line")
+        XCTAssertTrue(first.contains(" paging=yes "), String(first))
     }
 
     private static func firstProbe(in view: UIView) -> CalendarScrollTouchDelayProbe.ProbeView? {

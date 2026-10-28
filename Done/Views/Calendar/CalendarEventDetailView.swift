@@ -5635,6 +5635,75 @@ func calendarScrollViewsDelayingContentTouches(above view: UIView) -> [UIScrollV
     return Array(found.prefix(1))
 }
 
+/// Every scroll view above `view`, nearest first, with no stop. Read-only
+/// and used only to word the probe's trail line when the walk above found
+/// no pager — never to decide what gets written.
+func calendarScrollViewAncestors(above view: UIView) -> [UIScrollView] {
+    var found: [UIScrollView] = []
+    var current = view.superview
+    while let candidate = current {
+        if let scrollView = candidate as? UIScrollView {
+            found.append(scrollView)
+        }
+        current = candidate.superview
+    }
+    return found
+}
+
+/// What one pass of `CalendarScrollTouchDelayProbe` saw, for its trail
+/// line. The fix only works while the walk reaches the pager; an OS that
+/// reshapes the detail view's hierarchy would make the walk quietly find
+/// less, and the touch hold would come back with no other sign. There is no
+/// simulator for every OS this ships to, so the release build says what it
+/// found.
+///
+/// Equality is the probe's "did anything change" check, so it holds only
+/// cheap facts — counts and class identities; class NAMES are spelled out
+/// only when a line is actually written.
+struct CalendarScrollTouchDelaySnapshot: Equatable {
+    let foundCount: Int
+    let reachedPaging: Bool
+    /// How many of the found scroll views still had the delay on when this
+    /// pass arrived — read before the probe's write.
+    let delayingBeforeWrite: Int
+    /// The found views' classes, nearest first.
+    let classes: [ObjectIdentifier]
+
+    init(found: [UIScrollView]) {
+        foundCount = found.count
+        reachedPaging = found.contains { $0.isPagingEnabled }
+        delayingBeforeWrite = found.filter(\.delaysContentTouches).count
+        classes = found.map { ObjectIdentifier(type(of: $0)) }
+    }
+
+    /// `gh201 probe#<n> found=<count> paging=yes|no delayingBefore=<count>
+    /// views=<class>|<class>…`, nearest first. When no pager was reached
+    /// the walk stops at the nearest scroll view, so ` above=` adds every
+    /// scroll view further up, nearest first, each with its paging flag —
+    /// what a follow-up fix would need to reach. Class names and counts
+    /// only; nothing the user typed.
+    ///
+    /// Reading it: a healthy probe writes `delayingBefore=N` on its first
+    /// pass in a window and `delayingBefore=0` on the next (the write
+    /// held). A probe that never writes the `0` line is having its delay
+    /// turned back on between passes.
+    func trailLine(probe: Int, found: [UIScrollView]) -> String {
+        var line = "gh201 probe#\(probe) found=\(foundCount) paging=\(reachedPaging ? "yes" : "no")"
+            + " delayingBefore=\(delayingBeforeWrite) views=\(found.isEmpty ? "-" : found.map { Self.name($0) }.joined(separator: "|"))"
+        if !reachedPaging {
+            let above = found.last.map { calendarScrollViewAncestors(above: $0) } ?? []
+            line += " above=" + (above.isEmpty ? "-" : above.map {
+                "\(Self.name($0))(paging=\($0.isPagingEnabled ? "yes" : "no"))"
+            }.joined(separator: "|"))
+        }
+        return line
+    }
+
+    private static func name(_ view: UIView) -> String {
+        String(describing: type(of: view))
+    }
+}
+
 /// Turns `delaysContentTouches` off on the scroll views
 /// `calendarScrollViewsDelayingContentTouches` names, for whatever subtree
 /// this probe is installed in (gh#201 fix 1). Mounted as a `.background` of
@@ -5652,6 +5721,9 @@ func calendarScrollViewsDelayingContentTouches(above view: UIView) -> [UIScrollV
 /// `ScrollView`, so there is no longer-lived scroll view left holding a
 /// setting this probe changed.
 struct CalendarScrollTouchDelayProbe: UIViewRepresentable {
+    /// The trail category of the probe's line (`CalendarScrollTouchDelaySnapshot`).
+    static let trailCategory = "TouchDelay"
+
     func makeUIView(context: Context) -> ProbeView {
         ProbeView()
     }
@@ -5661,7 +5733,17 @@ struct CalendarScrollTouchDelayProbe: UIViewRepresentable {
     }
 
     final class ProbeView: UIView {
+        /// Numbers the probes in this process so the trail's lines from one
+        /// probe can be read together.
+        private static var probesMade = 0
+        private let serial: Int
+        /// The last snapshot this probe wrote to the trail; nil until it
+        /// has written one.
+        private var lastTrailed: CalendarScrollTouchDelaySnapshot?
+
         override init(frame: CGRect) {
+            Self.probesMade += 1
+            serial = Self.probesMade
             super.init(frame: frame)
             backgroundColor = .clear
             isUserInteractionEnabled = false
@@ -5690,10 +5772,29 @@ struct CalendarScrollTouchDelayProbe: UIViewRepresentable {
         /// scroll-view hierarchy, which is the only way the wiring between
         /// the walk and the property write is observable at all.
         func refreshTouchDelayIfNeeded() {
-            for scrollView in calendarScrollViewsDelayingContentTouches(above: self)
-            where scrollView.delaysContentTouches {
+            let found = calendarScrollViewsDelayingContentTouches(above: self)
+            // Read before the write below, which is what makes the count
+            // "how many were still delaying when this pass arrived".
+            let snapshot = CalendarScrollTouchDelaySnapshot(found: found)
+            for scrollView in found where scrollView.delaysContentTouches {
                 scrollView.delaysContentTouches = false
             }
+            trailIfChanged(snapshot, found: found)
+        }
+
+        /// One trail line per probe, and another only when what the walk
+        /// saw changes. Nothing while the probe is outside a window: it can
+        /// be refreshed (`updateUIView`, `didMoveToSuperview`) before it is
+        /// mounted under the detail view's scroll views, and such a pass's
+        /// "found=0" would read exactly like the failure this line exists
+        /// to catch.
+        private func trailIfChanged(_ snapshot: CalendarScrollTouchDelaySnapshot, found: [UIScrollView]) {
+            guard window != nil, snapshot != lastTrailed else { return }
+            lastTrailed = snapshot
+            DiagnosticTrail.record(
+                CalendarScrollTouchDelayProbe.trailCategory,
+                snapshot.trailLine(probe: serial, found: found)
+            )
         }
     }
 }
