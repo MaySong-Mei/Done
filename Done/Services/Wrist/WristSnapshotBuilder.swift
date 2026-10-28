@@ -54,6 +54,7 @@ enum WristSnapshotBuilder {
             statsSettings: statsSettings,
             titleHints: titleHints(events: events, types: types, now: now, calendar: calendar),
             takesSettingsEdits: true,
+            takesRangeEdits: true,
             motions: motions
         )
     }
