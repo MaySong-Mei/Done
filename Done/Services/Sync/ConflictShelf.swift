@@ -357,6 +357,115 @@ final class ConflictShelf {
         return Self.parse(data)
     }
 
+    // MARK: Reading without the lines a query leaves out
+
+    /// What one `entries(skippingTables:)` read cost: the lines in the
+    /// file, how many it passed over unparsed and how many it parsed, and
+    /// the file's size in bytes.
+    struct ReadStats: Equatable {
+        var lines = 0
+        var skipped = 0
+        var parsed = 0
+        var bytes = 0
+    }
+
+    /// False makes `entries(skippingTables:)` parse every line: the
+    /// reference the fast path is held to (ConflictShelfSkipTests).
+    var skipsLinesUnparsed = true
+
+    /// Exactly `entries().filter { !tables.contains($0.table) }`, for the
+    /// read-only queries that drop those tables anyway (`SyncRecovery`):
+    /// a line whose top-level table its bytes name conclusively
+    /// (`sniffedTable`) and is one of `tables` is passed over without being
+    /// parsed; every other line is parsed as `entries()` parses it. The
+    /// one-row tables' lines can be megabytes each. Nothing here changes,
+    /// drops or reorders a line on disk — `rewrite` still reads them all.
+    func entries(skippingTables tables: Set<String>) -> (entries: [ConflictShelfEntry], stats: ReadStats) {
+        guard let data = try? Data(contentsOf: fileURL) else { return ([], ReadStats()) }
+        let names = tables.map { Array($0.utf8) }
+        var stats = ReadStats(bytes: data.count)
+        var out: [ConflictShelfEntry] = []
+        data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
+            guard let base = buffer.baseAddress else { return }
+            var start = 0
+            while start < buffer.count {
+                var end = buffer.count
+                if let newline = memchr(base + start, 0x0A, buffer.count - start) {
+                    end = base.distance(to: UnsafeRawPointer(newline))
+                }
+                defer { start = end + 1 }
+                guard end > start else { continue }
+                stats.lines += 1
+                let line = UnsafeRawBufferPointer(rebasing: buffer[start..<end])
+                if skipsLinesUnparsed, let table = Self.sniffedTable(line),
+                   names.contains(where: { $0.elementsEqual(table) }) {
+                    stats.skipped += 1
+                    continue
+                }
+                stats.parsed += 1
+                if let entry = ConflictShelfEntry(jsonLine: Data(line)), !tables.contains(entry.table) {
+                    out.append(entry)
+                }
+            }
+        }
+        return (out, stats)
+    }
+
+    /// The top-level `table` of one line, read off its bytes without
+    /// parsing it; nil whenever they do not settle it.
+    ///
+    /// `jsonLine()` sorts its keys, and `table` and `uid` sort after every
+    /// other one, `row` included, so a line ends `,"table":"T","uid":"U"}`.
+    /// Settled only when all of this holds:
+    /// - it ends exactly so — opening `{`, closing `}`, T and U free of `"`
+    ///   and `\`, the `"table"` key right after a `,` or `{`. No quote in
+    ///   that tail follows a backslash, so each is a string boundary; the
+    ///   last `}` closes the line's object and nothing between the key and
+    ///   it opens another: `"table":"T"` is a member of the top level.
+    /// - the bytes `"table"` occur nowhere else in the line, and neither
+    ///   does `\u`. A key that decodes to `table` is spelled either `"table"`
+    ///   or with a `\u` escape (no other JSON escape yields a letter), so the
+    ///   top level has no second `table` member — a parser keeps the FIRST
+    ///   of two (ConflictShelfSkipTests, the duplicate-key line).
+    /// Anything else — an escape, whitespace after the brace, a line cut
+    /// short, another key order, a row that has a `table` key of its own —
+    /// is nil, and the caller parses the line.
+    static func sniffedTable(_ line: UnsafeRawBufferPointer) -> UnsafeRawBufferPointer? {
+        let quote = UInt8(ascii: "\""), backslash = UInt8(ascii: "\\")
+        let n = line.count
+        guard n >= 2, line[0] == UInt8(ascii: "{"), line[n - 1] == UInt8(ascii: "}"), line[n - 2] == quote,
+              let base = line.baseAddress else { return nil }
+        /// The opening quote of the string whose closing quote is at `close`.
+        func opening(before close: Int) -> Int? {
+            var i = close - 1
+            while i >= 0 {
+                if line[i] == quote { return i }
+                if line[i] == backslash { return nil }
+                i -= 1
+            }
+            return nil
+        }
+        func bytes(_ text: String, endAt end: Int) -> Bool {
+            let pattern = Array(text.utf8)
+            guard end - pattern.count >= 0 else { return false }
+            return line[(end - pattern.count)..<end].elementsEqual(pattern)
+        }
+        func occurs(_ text: String, before end: Int) -> Bool {
+            let pattern = Array(text.utf8)
+            return pattern.withUnsafeBytes { needle in
+                memmem(base, end, needle.baseAddress, needle.count) != nil
+            }
+        }
+        guard let uidOpen = opening(before: n - 2), bytes(",\"uid\":", endAt: uidOpen) else { return nil }
+        let tableClose = uidOpen - 8
+        guard tableClose >= 0, line[tableClose] == quote,
+              let tableOpen = opening(before: tableClose), bytes("\"table\":", endAt: tableOpen) else { return nil }
+        let key = tableOpen - 8
+        guard key >= 1, line[key - 1] == UInt8(ascii: ",") || line[key - 1] == UInt8(ascii: "{"),
+              !occurs("\"table\"", before: key), !occurs("\\u", before: n) else { return nil }
+        return UnsafeRawBufferPointer(rebasing: line[(tableOpen + 1)..<tableClose])
+    }
+
     // MARK: Rewriting (the recovery prompt's decisions)
 
     /// Rewrites the file with `transform` applied to every line (nil drops

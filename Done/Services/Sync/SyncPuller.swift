@@ -158,7 +158,7 @@ final class SyncPuller {
         // A new session probes the feed afresh (design §6.6 下次登录重探).
         engine.outboundFallback = false
         adoptEpochHeader(engine.cursor.epoch)
-        recovery.refreshBadge()
+        recovery.refreshBadge(recordingShelfRead: true)
         doorbell?.credentialsDidChange()
         doorbell?.start()
         startPolling()

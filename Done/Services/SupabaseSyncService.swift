@@ -3114,8 +3114,11 @@ final class SupabaseSyncService: ObservableObject {
     }
 
     nonisolated static func isSingletonTable(_ table: String) -> Bool {
-        table == SyncBaselineStore.settingsTable || SyncBaselineStore.scalarTables.contains(table)
+        singletonTables.contains(table)
     }
+
+    /// user_settings, agent_preferences, agent_conversations.
+    nonisolated static let singletonTables: Set<String> = SyncBaselineStore.scalarTables.union([SyncBaselineStore.settingsTable])
 
     // MARK: - Sync: User Settings
 
