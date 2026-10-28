@@ -164,11 +164,18 @@ final class AwaitingNameTests: XCTestCase {
         let eventID = UUID()
         bridge.handle(start(eventID, awaitsName: true))
         XCTAssertEqual(transport.pushed.last?.occurrences.first { $0.eventID == eventID }?.awaitsName, true)
+        // Let the start's own debounced store push land first, so what
+        // follows can only be the mark's change.
+        let quiet = expectation(description: "start settled")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { quiet.fulfill() }
+        wait(for: [quiet], timeout: 3)
+        let before = transport.pushed.count
         // "Keep" changes no event: only the mark's own change can carry it.
         let settled = expectation(description: "debounced push")
         marks.answer(eventID, name: nil, in: store)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { settled.fulfill() }
         wait(for: [settled], timeout: 3)
+        XCTAssertEqual(transport.pushed.count, before + 1, "the mark's end is pushed on its own")
         XCTAssertEqual(transport.pushed.last?.occurrences.first { $0.eventID == eventID }?.awaitsName, false)
         XCTAssertEqual(transport.pushed.last?.occurrences.first { $0.eventID == eventID }?.title, "Work")
     }

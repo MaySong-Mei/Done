@@ -509,8 +509,19 @@ final class WristSessionClient: NSObject, ObservableObject {
         let types = ["Work", "Meeting", "Read", "Gym"].enumerated().map {
             WristType(id: id(100 + $0.offset), title: $0.element, colorHex: colors[$0.element]!)
         }
+        // `-wristNameLaterFixture`: names for Work, so the names step opens,
+        // and a block waiting for a name at 7:30.
+        var hints: [String: [WristTitleHint]] = [:]
+        if ProcessInfo.processInfo.arguments.contains("-wristNameLaterFixture") {
+            var waiting = occ(18, "Work", "Work", at(7.5), at(8.5))
+            waiting.awaitsName = true
+            list.append(waiting)
+            hints["Work"] = ["Deep work", "Standup", "Review"].enumerated().map {
+                WristTitleHint(title: $0.element, weight: 3 - Double($0.offset), startMinute: 540, concentration: 1, minutes: 60)
+            }
+        }
         return WristSnapshot(
-            generatedAt: now, types: types, occurrences: list, receipts: [],
+            generatedAt: now, types: types, occurrences: list, receipts: [], titleHints: hints,
             motions: WristMotionSettings(create: .assemble, delete: .dissolve, resize: .standard)
         )
     }

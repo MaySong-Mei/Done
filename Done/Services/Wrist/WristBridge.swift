@@ -138,6 +138,7 @@ final class WristBridge: NSObject {
         seedDebugTitlesIfAsked(store: store, templates: templates)
         seedDebugParallelDayIfAsked(store: store)
         seedDebugRepeatingIfAsked(store: store)
+        seedDebugNameLaterIfAsked(store: store, templates: templates)
 #endif
         pushSnapshot()
     }
@@ -201,6 +202,23 @@ final class WristBridge: NSObject {
         event.repeatUnit = .day
         store.addCalendarEvent(event)
         logger.notice("debug: seeded a repeating block")
+    }
+
+    /// `-wristSeedNameLater`: a "name later" start of the catalog's first
+    /// type, today 10:00–11:00, through the applier as the watch's would
+    /// arrive — once (a fixed event id). Debug builds only.
+    private func seedDebugNameLaterIfAsked(store: EventStore, templates: EventTypeTemplateStore) {
+        guard ProcessInfo.processInfo.arguments.contains("-wristSeedNameLater"),
+              let type = templates.templates.first?.title else { return }
+        let today = Calendar.current.startOfDay(for: now())
+        let eventID = UUID(uuidString: "0A0A0A0A-0000-4000-8000-00000000A11E")!
+        let command = WristCommand(id: UUID(), issuedAt: now(), kind: .start(
+            eventID: eventID, typeTitle: type,
+            start: today.addingTimeInterval(10 * 3600), end: today.addingTimeInterval(11 * 3600),
+            awaitsName: true
+        ))
+        let receipt = WristCommandApplier.apply(command, to: store, defaults: defaults, awaitingNames: awaitingNames)
+        logger.notice("debug: name-later seed \(receipt.outcome.rawValue, privacy: .public)")
     }
 
     private func seedDebugTitlesIfAsked(store: EventStore, templates: EventTypeTemplateStore) {

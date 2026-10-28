@@ -6422,10 +6422,12 @@ struct CalendarAwaitingNamePrompt: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .strokeBorder(tint, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
         )
-        .onAppear {
+        .task {
             // After the push settles, so the keyboard does not ride the
-            // navigation transition.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { focused = true }
+            // navigation transition (focus set while the page is still
+            // moving in is dropped).
+            try? await Task.sleep(for: .milliseconds(650))
+            focused = true
         }
         .onDisappear {
             guard !answered, !typed.isEmpty else { return }
