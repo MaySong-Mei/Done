@@ -21,6 +21,8 @@ struct WristRootView: View {
     @AppStorage(WristLocalSettings.statsPeriodKey) private var periodRaw = ""
     /// Where the running bar's top is on the screen.
     @State private var barTop: CGFloat?
+    /// A block's card is up on Today: it takes the running bar's place.
+    @State private var cardUp = false
     private let housekeeping = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -64,7 +66,7 @@ struct WristRootView: View {
             // `containerBackground(for: .navigation)`.
             .overlay(alignment: .bottom) {
                 ZStack {
-                    if page == .today, let running {
+                    if page == .today, !cardUp, let running {
                         WristRunningBar(
                             occurrence: running.occurrence, pending: running.pending, strings: strings,
                             onExtend: { client.extend(running.occurrence) },
@@ -74,7 +76,7 @@ struct WristRootView: View {
                         .transition(.opacity)
                     }
                 }
-                .animation(.easeOut(duration: 0.15), value: page == .today)
+                .animation(.easeOut(duration: 0.15), value: page == .today && !cardUp)
             }
         }
         .onReceive(housekeeping) { now in
@@ -110,7 +112,8 @@ struct WristRootView: View {
                 titleHints: snapshot.titleHints,
                 localCreates: client.localCreates, motions: snapshot.motions,
                 hourHeight: CGFloat(WristLocalSettings.Zoom(stored: zoomRaw).hourHeight),
-                bottomInset: barInset(running != nil),
+                bottomInset: barInset(running != nil && !cardUp),
+                cardUp: $cardUp,
                 takesRangeEdits: snapshot.takesRangeEdits,
                 pendingEventIDs: pendingIDs,
                 onCreate: { type, title, start, end in client.create(type, title: title, start: start, end: end) },
@@ -182,6 +185,8 @@ struct WristTodayView: View {
     /// What the running bar covers at the foot of the page: the day scrolls
     /// clear of it, and drawing scrolls at its top edge.
     var bottomInset: CGFloat = 0
+    /// Whether a block's card is up, for the running bar to make way.
+    var cardUp: Binding<Bool> = .constant(false)
     /// The phone applies range edits (`WristSnapshot.takesRangeEdits`), and
     /// the events with a command it has not answered yet.
     var takesRangeEdits: Bool = false
@@ -230,6 +235,7 @@ struct WristTodayView: View {
     @State private var hintToken = UUID()
     /// The scroll view's width, to find the block under a touch.
     @State private var contentWidth: CGFloat = 0
+    @State private var cardHeight: CGFloat = 0
     /// The draft a block was just created from, and the event it made: the
     /// block starts in the draft's place and look. `sheetUp` holds it there
     /// until the picker is gone.
@@ -411,13 +417,26 @@ struct WristTodayView: View {
                 )
                 .scrollDisabled(holding || draft != nil || edit != nil)
                 .mask(WristEdgeFade(top: 0, bottom: 10))
+                // In the running bar's place (it makes way while the card is
+                // up), with the selected block scrolled clear of it.
                 .overlay(alignment: .bottom) {
                     if draft == nil, edit == nil,
                        let key = selectedKey, let block = blocks.first(where: { $0.motionKey == key }) {
                         card(block)
-                            .padding(.bottom, bottomInset + 2)
+                            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { _, h in cardHeight = h }
+                            .padding(.bottom, 2)
                             .transition(.opacity)
                     }
+                }
+                .onChange(of: selectedKey) { _, key in
+                    cardUp.wrappedValue = key != nil
+                    guard let key, let block = blocks.first(where: { $0.motionKey == key }) else { return }
+                    reveal(block.start, block.end, dayStart: dayStart, dayEnd: dayEnd, height: height, top: top)
+                }
+                // A block dropped low on the page comes clear of the card too.
+                .onChange(of: edit == nil) { _, ended in
+                    guard ended, let key = selectedKey, let block = blocks.first(where: { $0.motionKey == key }) else { return }
+                    reveal(block.start, block.end, dayStart: dayStart, dayEnd: dayEnd, height: height, top: top)
                 }
                 .overlay(alignment: .top) {
                     if let hint {
@@ -618,6 +637,21 @@ struct WristTodayView: View {
         withAnimation(.easeOut(duration: 0.15)) {
             selectedKey = key == selectedKey ? nil : key
         }
+    }
+
+    /// Scrolls the day just enough that `start…end` clears the card at
+    /// the foot, never past its own top.
+    private func reveal(_ start: Date, _ end: Date, dayStart: Date, dayEnd: Date, height: CGFloat, top: CGFloat) {
+        let minY = WristDayLayout.fraction(start, dayStart: dayStart, dayEnd: dayEnd) * height
+        let maxY = WristDayLayout.fraction(end, dayStart: dayStart, dayEnd: dayEnd) * height
+        // The card's height is known after its first layout; a typical one
+        // stands in until then.
+        let clear = viewportHeight - (cardHeight > 0 ? cardHeight : 78) - 6
+        let bottom = maxY + top - scrollY
+        guard bottom > clear else { return }
+        let target = min(scrollY + (bottom - clear), minY, max(0, contentHeight - viewportHeight))
+        guard target > scrollY else { return }
+        withAnimation(.easeOut(duration: 0.2)) { position.scrollTo(y: target) }
     }
 
     private func show(hint text: String) {
