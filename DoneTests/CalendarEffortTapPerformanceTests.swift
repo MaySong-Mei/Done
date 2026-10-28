@@ -288,8 +288,9 @@ final class CalendarScrollTouchDelayTests: XCTestCase {
             let other = open(inner: { OuterScroll() })
             let afterOther = touchDelayLines()
             XCTAssertEqual(afterOther.count, 4, "\(afterOther)")
-            XCTAssertTrue(afterOther[2].hasSuffix("pass=1 found=2 paging=yes delayingBefore=2 views=OuterScroll|PagerScroll"),
-                          afterOther[2])
+            let third = afterOther.count > 2 ? afterOther[2] : ""
+            XCTAssertTrue(third.hasSuffix("pass=1 found=2 paging=yes delayingBefore=2 views=OuterScroll|PagerScroll"),
+                          "\(afterOther)")
 
             let back = open()
             XCTAssertEqual(touchDelayLines().count, 6,
