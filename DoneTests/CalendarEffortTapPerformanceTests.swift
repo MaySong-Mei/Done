@@ -190,7 +190,8 @@ final class CalendarScrollTouchDelayTests: XCTestCase {
             probe.refreshTouchDelayIfNeeded()
             let after = touchDelayLines()
             XCTAssertEqual(after.count, 4, "\(after)")
-            XCTAssertTrue(after[2].hasSuffix("delayingBefore=1 views=InnerScroll|PagerScroll"), after[2])
+            let third = after.count > 2 ? after[2] : ""
+            XCTAssertTrue(third.hasSuffix("delayingBefore=1 views=InnerScroll|PagerScroll"), "\(after)")
             XCTAssertFalse(pager.delaysContentTouches)
         }
     }
