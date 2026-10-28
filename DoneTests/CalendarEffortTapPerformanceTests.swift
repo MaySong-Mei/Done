@@ -214,9 +214,107 @@ final class CalendarScrollTouchDelayTests: XCTestCase {
 
             let line = touchDelayLines().first ?? ""
             XCTAssertTrue(line.hasSuffix(
-                "found=1 paging=no delayingBefore=1 views=InnerScroll above=PagerScroll(paging=no)|OuterScroll(paging=no)"),
+                "found=1 paging=no delayingBefore=1 views=InnerScroll above=PagerScroll|OuterScroll"),
                 line)
             XCTAssertTrue(middle.delaysContentTouches, "the walk's blast radius is unchanged: nothing above the nearest is written")
+        }
+    }
+
+    /// One "detail open": a fresh pager over a fresh inner scroll view
+    /// (`makeInner`, else an `InnerScroll`), in a window, with a fresh probe
+    /// mounted inside.
+    private func open(inner makeInner: (() -> UIScrollView)? = nil)
+        -> (window: UIWindow, pager: UIScrollView, probe: CalendarScrollTouchDelayProbe.ProbeView) {
+        let window = makeWindow()
+        let pager = PagerScroll()
+        pager.isPagingEnabled = true
+        let inner = makeInner?() ?? InnerScroll()
+        window.addSubview(pager)
+        pager.addSubview(inner)
+        let probe = CalendarScrollTouchDelayProbe.ProbeView()
+        inner.addSubview(probe)
+        probe.refreshTouchDelayIfNeeded()
+        return (window, pager, probe)
+    }
+
+    /// Something keeps turning the pager's delay back on: every pass is a
+    /// change, and before the cap every change was a synchronous trail
+    /// write. The probe writes `linesPerProbe` lines, then one saying it
+    /// stopped, then nothing — and keeps turning the delay off throughout.
+    func testAProbeWhoseDelayKeepsComingBackStopsAtTheCap() {
+        withCleanTrail {
+            let (window, pager, probe) = open()
+            for _ in 0..<20 {
+                pager.delaysContentTouches = true
+                probe.refreshTouchDelayIfNeeded()
+                probe.refreshTouchDelayIfNeeded()
+                XCTAssertFalse(pager.delaysContentTouches, "the write still runs on every pass")
+            }
+            let lines = touchDelayLines()
+            XCTAssertEqual(lines.count, CalendarScrollTouchDelayTrail.linesPerProbe + 1, "\(lines)")
+            XCTAssertTrue(lines.last?.hasSuffix(" \(CalendarScrollTouchDelayTrail.capContent)") ?? false, "\(lines)")
+            XCTAssertTrue(lines.dropLast().allSatisfy { $0.contains(" found=2 paging=yes ") }, "\(lines)")
+            XCTAssertTrue(lines.contains { $0.contains(" pass=3 found=2 paging=yes delayingBefore=1 ") },
+                          "the delay coming back is on the record before the cap: \(lines)")
+            _ = window
+        }
+    }
+
+    /// The first open after launch writes its two lines; a second open of
+    /// the same hierarchy, with a new probe, writes none — though that
+    /// probe still turns the delays off.
+    func testASecondIdenticalOpenWritesNothing() {
+        withCleanTrail {
+            let first = open()
+            XCTAssertEqual(touchDelayLines().count, 2, "\(touchDelayLines())")
+
+            let second = open()
+            XCTAssertEqual(touchDelayLines().count, 2, "\(touchDelayLines())")
+            XCTAssertFalse(second.pager.delaysContentTouches)
+            _ = (first, second)
+        }
+    }
+
+    /// Later opens that go differently still write, from where they differ:
+    /// a different inner class writes from its first change; the same shape
+    /// with the delay coming back on writes from its third change, with the
+    /// pass number saying so.
+    func testALaterOpenThatDiffersStillWrites() {
+        withCleanTrail {
+            let first = open()
+            let same = open()
+            XCTAssertEqual(touchDelayLines().count, 2, "rig: the repeat is silent")
+
+            let other = open(inner: { OuterScroll() })
+            let afterOther = touchDelayLines()
+            XCTAssertEqual(afterOther.count, 4, "\(afterOther)")
+            XCTAssertTrue(afterOther[2].hasSuffix("pass=1 found=2 paging=yes delayingBefore=2 views=OuterScroll|PagerScroll"),
+                          afterOther[2])
+
+            let back = open()
+            XCTAssertEqual(touchDelayLines().count, 6,
+                           "back to the first shape differs from the open just before it: \(touchDelayLines())")
+
+            let comesBack = open()
+            XCTAssertEqual(touchDelayLines().count, 6, "rig: silent while it repeats the open before")
+            comesBack.pager.delaysContentTouches = true
+            comesBack.probe.refreshTouchDelayIfNeeded()
+            let last = touchDelayLines().last ?? ""
+            XCTAssertTrue(last.hasSuffix("pass=3 found=2 paging=yes delayingBefore=1 views=InnerScroll|PagerScroll"), last)
+            _ = (first, same, other, back)
+        }
+    }
+
+    /// What the probes remember stands for lines in the trail: once the
+    /// trail is cleared, an open identical to the last one writes again.
+    func testClearingTheTrailForgetsWhatWasWritten() {
+        withCleanTrail {
+            let first = open()
+            XCTAssertEqual(touchDelayLines().count, 2)
+            DiagnosticTrail.clear()
+            let again = open()
+            XCTAssertEqual(touchDelayLines().count, 2, "\(touchDelayLines())")
+            _ = (first, again)
         }
     }
 
@@ -1330,10 +1428,13 @@ final class CalendarScrollTouchDelayTrailQATests: XCTestCase {
     }
 
     /// Two probes keep their own numbers: every line of one probe carries
-    /// one number, and the two numbers differ.
+    /// one number, and the two numbers differ. (Implementer, fix round 1:
+    /// the second pager is an `OuterPager` — two probes over the SAME shape
+    /// are now a repeated open and the second writes nothing, see
+    /// `testASecondIdenticalOpenWritesNothing`.)
     func testTwoProbesNumberTheirLinesApart() throws {
         let host = window()
-        let pagerA = Pager(), pagerB = Pager()
+        let pagerA = Pager(), pagerB = OuterPager()
         pagerA.isPagingEnabled = true
         pagerB.isPagingEnabled = true
         host.addSubview(pagerA)
