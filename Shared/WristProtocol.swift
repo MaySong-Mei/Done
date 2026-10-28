@@ -209,6 +209,9 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
     /// The phone applies `WristCommand.Kind.statsSettings`. False from a
     /// phone before the kind: the watch shows those settings read-only.
     var takesSettingsEdits: Bool
+    /// The phone applies `WristCommand.Kind.setRange`. False from a phone
+    /// before the kind: the watch does not offer moving or resizing a block.
+    var takesRangeEdits: Bool
     /// The phone's timeline motions and their styles, for the watch's page
     /// to play the same ones (`WristMotion.swift`). Off from a phone before
     /// the field.
@@ -225,6 +228,7 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
         statsSettings: WristStatsSettings = .standard,
         titleHints: [String: [WristTitleHint]] = [:],
         takesSettingsEdits: Bool = false,
+        takesRangeEdits: Bool = false,
         motions: WristMotionSettings = .off
     ) {
         self.version = version
@@ -237,12 +241,13 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
         self.statsSettings = statsSettings
         self.titleHints = titleHints
         self.takesSettingsEdits = takesSettingsEdits
+        self.takesRangeEdits = takesRangeEdits
         self.motions = motions
     }
 
     private enum CodingKeys: String, CodingKey {
         case version, generatedAt, language, types, occurrences, receipts, stats, statsSettings, titleHints
-        case takesSettingsEdits, motions
+        case takesSettingsEdits, takesRangeEdits, motions
     }
 
     init(from decoder: Decoder) throws {
@@ -259,6 +264,8 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
         titleHints = (try? container.decodeIfPresent([String: [WristTitleHint]].self, forKey: .titleHints))
             .flatMap { $0 } ?? [:]
         takesSettingsEdits = (try? container.decodeIfPresent(Bool.self, forKey: .takesSettingsEdits))
+            .flatMap { $0 } ?? false
+        takesRangeEdits = (try? container.decodeIfPresent(Bool.self, forKey: .takesRangeEdits))
             .flatMap { $0 } ?? false
         motions = (try? container.decodeIfPresent(WristMotionSettings.self, forKey: .motions))
             .flatMap { $0 } ?? .off
@@ -282,6 +289,9 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
         if takesSettingsEdits {
             try container.encode(takesSettingsEdits, forKey: .takesSettingsEdits)
         }
+        if takesRangeEdits {
+            try container.encode(takesRangeEdits, forKey: .takesRangeEdits)
+        }
         if motions != .off {
             try container.encode(motions, forKey: .motions)
         }
@@ -299,6 +309,7 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
             && statsSettings == other.statsSettings
             && titleHints == other.titleHints
             && takesSettingsEdits == other.takesSettingsEdits
+            && takesRangeEdits == other.takesRangeEdits
             && motions == other.motions
     }
 }
@@ -322,12 +333,19 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
 /// cannot decode the command at all and drops it (the reply is empty, the
 /// transfer is discarded); the watch only offers the edit when the snapshot
 /// says the phone takes it (`WristSnapshot.takesSettingsEdits`).
+///
+/// `setRange` is a block moved or resized on the watch's today page: the
+/// range starting at `rangeStart` becomes `start…end`. A phone that
+/// predates the kind drops it the same way, so the watch only offers the
+/// drag when the snapshot says the phone takes it
+/// (`WristSnapshot.takesRangeEdits`).
 nonisolated struct WristCommand: Codable, Hashable, Identifiable, Sendable {
     enum Kind: Codable, Hashable, Sendable {
         case start(eventID: UUID, typeTitle: String, start: Date, end: Date, title: String? = nil)
         case finish(eventID: UUID, rangeStart: Date?, at: Date)
         case extend(eventID: UUID, rangeStart: Date?, by: TimeInterval)
         case statsSettings(overlap: WristOverlapRule? = nil, excludesBackground: Bool? = nil)
+        case setRange(eventID: UUID, rangeStart: Date?, start: Date, end: Date)
     }
 
     var id: UUID
@@ -339,7 +357,8 @@ nonisolated struct WristCommand: Codable, Hashable, Identifiable, Sendable {
     /// commands.
     var eventID: UUID {
         switch kind {
-        case .start(let eventID, _, _, _, _), .finish(let eventID, _, _), .extend(let eventID, _, _):
+        case .start(let eventID, _, _, _, _), .finish(let eventID, _, _), .extend(let eventID, _, _),
+             .setRange(let eventID, _, _, _):
             return eventID
         case .statsSettings:
             return id
@@ -355,7 +374,8 @@ nonisolated struct WristCommand: Codable, Hashable, Identifiable, Sendable {
     var rangeStart: Date? {
         switch kind {
         case .start(_, _, let start, _, _): return start
-        case .finish(_, let rangeStart, _), .extend(_, let rangeStart, _): return rangeStart
+        case .finish(_, let rangeStart, _), .extend(_, let rangeStart, _), .setRange(_, let rangeStart, _, _):
+            return rangeStart
         case .statsSettings: return nil
         }
     }

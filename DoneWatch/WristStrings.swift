@@ -27,6 +27,15 @@ struct WristStrings {
     func justType(_ type: String) -> String { isChinese ? "仅「\(type)」" : "Just \(type)" }
 
     var editOnPhoneShort: String { isChinese ? "在 iPhone 上调整" : "Adjust on iPhone" }
+    /// A hold on a block the phone does not let the watch move (a repeating
+    /// event, a running timer).
+    var cannotMoveHere: String { isChinese ? "这里不能移动,请在 iPhone 上调整" : "Can't move this here — adjust on iPhone" }
+    var updatePhoneForEdits: String {
+        isChinese ? "更新 iPhone 上的 Done 后可在这里移动" : "Update Done on iPhone to move blocks here"
+    }
+    var endEarlier: String { isChinese ? "结束 −15" : "End −15" }
+    var endLater: String { isChinese ? "结束 +15" : "End +15" }
+    var close: String { isChinese ? "关闭" : "Close" }
 
     /// "10:15–11:00": a drawn block's range, on the block and over the
     /// type picker.

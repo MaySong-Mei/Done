@@ -308,6 +308,18 @@ nonisolated enum WristStateReducer {
                 occurrences[i].end = WristTiming.clampedEnd(
                     start: occurrences[i].start, requested: occurrences[i].end.addingTimeInterval(by)
                 )
+            case .setRange(let eventID, let rangeStart, let start, let end):
+                // Only the range it names: a move must never land on another.
+                guard let rangeStart, let i = occurrences.firstIndex(where: {
+                    $0.eventID == eventID && WristTiming.sameInstant($0.start, rangeStart)
+                }) else { continue }
+                let original = WristTimeSpan(start: occurrences[i].start, end: occurrences[i].end)
+                let edges = occurrences.indices.filter { $0 != i }.flatMap { [occurrences[$0].start, occurrences[$0].end] }
+                guard let settled = WristRangeEdit.settled(
+                    original: original, requested: WristTimeSpan(start: start, end: end), edges: edges
+                ) else { continue }
+                occurrences[i].start = settled.start
+                occurrences[i].end = settled.end
             case .statsSettings:
                 continue
             }
