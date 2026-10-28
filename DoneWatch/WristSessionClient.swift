@@ -23,6 +23,7 @@ import Combine
 import Foundation
 import os
 import WatchConnectivity
+import WatchKit
 
 nonisolated struct WristLocalState: Codable {
     var snapshot: WristSnapshot?
@@ -189,6 +190,34 @@ final class WristSessionClient: NSObject, ObservableObject {
         )
     }
 
+    /// A block moved or resized on the today page: the range starting at
+    /// the occurrence's start becomes `start…end`. Nothing goes out when
+    /// the phone would keep the range as it is.
+    func editRange(_ occurrence: WristOccurrence, start: Date, end: Date, now: Date = Date()) {
+        guard end > start, start != occurrence.start || end != occurrence.end else { return }
+        send(
+            WristCommand(
+                id: UUID(), issuedAt: now,
+                kind: .setRange(eventID: occurrence.eventID, rangeStart: occurrence.start, start: start, end: end)
+            )
+        )
+    }
+
+    /// A range edit the phone refused leaves the overlay, so the block goes
+    /// back to where the phone has it; a light tap says it did on purpose.
+    private func noteRefusedEdits(_ receipts: [WristReceipt]) {
+        let refused = Set(receipts.filter { $0.outcome == .rejected }.map(\.id))
+        guard !refused.isEmpty else { return }
+        let edits = pending.filter { entry in
+            guard refused.contains(entry.command.id) else { return false }
+            if case .setRange = entry.command.kind { return true }
+            return false
+        }
+        guard !edits.isEmpty else { return }
+        logger.notice("range edit refused by the phone")
+        WKInterfaceDevice.current().play(.directionDown)
+    }
+
     /// The stats settings as the pages show them: the phone's, with the
     /// edits made here that the phone has not reflected yet.
     var statsSettings: WristStatsSettings {
@@ -339,6 +368,7 @@ final class WristSessionClient: NSObject, ObservableObject {
     /// dropped now. Either way the next command for that event may go.
     private func acknowledge(receiptData: Data?, repliedAt: Date?) {
         guard let receiptData, let receipt = try? WristWire.decode(WristReceipt.self, from: receiptData) else { return }
+        noteRefusedEdits([receipt])
         let updated = WristStateReducer.acknowledge(pending, receipt: receipt, repliedAt: repliedAt, now: Date())
         guard updated != pending else { return }
         pending = updated
@@ -353,7 +383,9 @@ final class WristSessionClient: NSObject, ObservableObject {
         if ProcessInfo.processInfo.arguments.contains("-wristParallelFixture") { return }
 #endif
         do {
-            snapshot = try WristWire.decode(WristSnapshot.self, from: snapshotData)
+            let decoded = try WristWire.decode(WristSnapshot.self, from: snapshotData)
+            noteRefusedEdits(decoded.receipts)
+            snapshot = decoded
         } catch {
             logger.error("undecodable snapshot: \(error.localizedDescription, privacy: .public)")
             return

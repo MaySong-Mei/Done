@@ -252,6 +252,183 @@ nonisolated struct WristDraftMapping: Equatable, Sendable {
     }
 }
 
+/// What a hold on a block grabs: the whole block, or one of its edges.
+nonisolated enum WristEditMode: Equatable, Sendable {
+    case move, resizeTop, resizeBottom
+}
+
+/// Long-press-and-drag on a block of the today page, as data — the phone's
+/// move and edge resize on its day timeline. A press near the top or bottom
+/// edge resizes that edge, anywhere else moves the block. Like the phone's
+/// drag, the finger's travel moves an edge in whole quarter hours (a block
+/// off the grid keeps its minutes), and an edge that comes within
+/// `snapPoints` of another block's edge lands on it. The block never gets
+/// shorter than the minimum, an edge is never dragged out of the day, and a
+/// move never takes the block further out of the day than it already was.
+nonisolated struct WristBlockEdit: Equatable, Sendable {
+    /// The day's geometry; `edges` are every other block's edges.
+    var mapping: WristDraftMapping
+    /// The range being edited, unclipped.
+    var original: WristTimeSpan
+    var mode: WristEditMode
+    /// Where the press was, in the day's points.
+    var anchorY: Double
+
+    /// The points at a block's top and bottom that grab its edge: a quarter
+    /// of the block, but never less than a fingertip can aim at and never so
+    /// much that a tall block is hard to move. A block without room for a
+    /// fingertip at both edges and one in the middle only moves.
+    static let minimumEdgeZone: Double = 12
+    static let maximumEdgeZone: Double = 18
+    static let edgeZoneShare: Double = 0.25
+
+    static func edgeZone(blockHeight: Double) -> Double {
+        guard blockHeight >= 3 * minimumEdgeZone else { return 0 }
+        return min(maximumEdgeZone, max(minimumEdgeZone, blockHeight * edgeZoneShare))
+    }
+
+    /// The grab for a press `pressY` points below the block's top. An edge
+    /// the day clips (the block runs in from yesterday or on into tomorrow)
+    /// cannot be grabbed: a press there moves the block.
+    static func mode(
+        pressY: Double, blockHeight: Double, canResizeTop: Bool, canResizeBottom: Bool
+    ) -> WristEditMode {
+        let zone = edgeZone(blockHeight: blockHeight)
+        guard zone > 0 else { return .move }
+        if canResizeTop, pressY < zone { return .resizeTop }
+        if canResizeBottom, pressY > blockHeight - zone { return .resizeBottom }
+        return .move
+    }
+
+    /// The edited range with the finger at `currentY`. `moving` is the edge
+    /// that follows the finger (a move's start, unless its end is the one on
+    /// a magnet) — each change of it is one tick.
+    func range(currentY: Double) -> WristDraftMapping.Range {
+        let span = mapping.dayEnd.timeIntervalSince(mapping.dayStart)
+        guard mapping.height > 0, span > 0 else {
+            return .init(start: original.start, end: original.end, moving: .init(time: original.start, edge: nil))
+        }
+        let perPoint = span / mapping.height
+        let travel = (currentY - anchorY) * perPoint
+        let quarter = TimeInterval(WristTiming.gridMinutes * 60)
+        let steps = (travel / quarter).rounded() * quarter
+        let reach = mapping.snapPoints * perPoint
+        let minimum = WristTiming.minimumDuration
+        let lower = min(original.start, mapping.dayStart)
+        let upper = max(original.end, mapping.dayEnd)
+
+        func magnet(_ raw: Date) -> (edge: Date, distance: TimeInterval)? {
+            var best: (Date, TimeInterval)?
+            for edge in mapping.edges {
+                let distance = abs(edge.timeIntervalSince(raw))
+                if distance <= reach, distance <= (best?.1 ?? .infinity) { best = (edge, distance) }
+            }
+            return best
+        }
+
+        switch mode {
+        case .move:
+            let length = original.end.timeIntervalSince(original.start)
+            var start = original.start.addingTimeInterval(steps)
+            var held: Date?
+            let byStart = magnet(original.start.addingTimeInterval(travel))
+            let byEnd = magnet(original.end.addingTimeInterval(travel))
+            if let byStart, byStart.distance <= (byEnd?.distance ?? .infinity) {
+                start = byStart.edge
+                held = byStart.edge
+            } else if let byEnd {
+                start = byEnd.edge.addingTimeInterval(-length)
+                held = byEnd.edge
+            }
+            start = max(start, lower)
+            start = min(start, upper.addingTimeInterval(-length))
+            let end = start.addingTimeInterval(length)
+            if let edge = held, edge != start, edge != end { held = nil }
+            let movingTime = held.map { $0 == end ? end : start } ?? start
+            return .init(start: start, end: end, moving: .init(time: movingTime, edge: held))
+
+        case .resizeBottom:
+            var end = original.end.addingTimeInterval(steps)
+            var held: Date?
+            if let hit = magnet(original.end.addingTimeInterval(travel)) {
+                end = hit.edge
+                held = hit.edge
+            }
+            end = min(max(end, original.start.addingTimeInterval(minimum)), upper)
+            if held != end { held = nil }
+            return .init(start: original.start, end: end, moving: .init(time: end, edge: held))
+
+        case .resizeTop:
+            var start = original.start.addingTimeInterval(steps)
+            var held: Date?
+            if let hit = magnet(original.start.addingTimeInterval(travel)) {
+                start = hit.edge
+                held = hit.edge
+            }
+            start = max(min(start, original.end.addingTimeInterval(-minimum)), lower)
+            if held != start { held = nil }
+            return .init(start: start, end: original.end, moving: .init(time: start, edge: held))
+        }
+    }
+}
+
+/// The range the phone stores when the watch asks for `requested` in place
+/// of `original` — the same on both sides, so the watch shows at once what
+/// the phone will keep. An edge left where it was stays; one that moved is
+/// kept when it is on the 15-minute grid, a whole number of quarter hours
+/// from where it was (the phone's drag keeps an off-grid block's minutes),
+/// or on another block's edge (the magnet); anything else goes to the
+/// nearest grid mark. A move keeps the length whichever edge holds it.
+/// Then the minimum length, grown from the edge that did not move. Nil for
+/// an empty or inverted request.
+nonisolated enum WristRangeEdit {
+    static func settled(original: WristTimeSpan, requested: WristTimeSpan, edges: [Date]) -> WristTimeSpan? {
+        guard requested.end > requested.start else { return nil }
+        let quarter = TimeInterval(WristTiming.gridMinutes * 60)
+        /// The edge as kept, or nil when it has to go to the grid.
+        func kept(_ new: Date, from old: Date) -> Date? {
+            if WristTiming.sameInstant(new, old) { return old }
+            if let edge = edges.first(where: { WristTiming.sameInstant($0, new) }) { return edge }
+            let grid = WristTiming.snappedToGrid(new)
+            if WristTiming.sameInstant(grid, new) { return grid }
+            let steps = (new.timeIntervalSince(old) / quarter).rounded()
+            let stepped = old.addingTimeInterval(steps * quarter)
+            if WristTiming.sameInstant(stepped, new) { return stepped }
+            return nil
+        }
+        var start: Date
+        var end: Date
+        let length = original.end.timeIntervalSince(original.start)
+        let moved = !WristTiming.sameInstant(requested.start, original.start)
+            && abs(requested.end.timeIntervalSince(requested.start) - length) < WristTiming.instantTolerance
+        if moved {
+            // A move keeps the length: one edge held is enough (a block
+            // moved onto a neighbour's edge by its end keeps its start's
+            // minutes), else its start goes to the grid.
+            if let held = kept(requested.start, from: original.start) {
+                start = held
+            } else if let held = kept(requested.end, from: original.end) {
+                start = held.addingTimeInterval(-length)
+            } else {
+                start = WristTiming.snappedToGrid(requested.start)
+            }
+            end = start.addingTimeInterval(length)
+        } else {
+            start = kept(requested.start, from: original.start) ?? WristTiming.snappedToGrid(requested.start)
+            end = kept(requested.end, from: original.end) ?? WristTiming.snappedToGrid(requested.end)
+        }
+        let minimum = WristTiming.minimumDuration
+        if end.timeIntervalSince(start) < minimum {
+            if start != original.start && end == original.end {
+                start = end.addingTimeInterval(-minimum)
+            } else {
+                end = start.addingTimeInterval(minimum)
+            }
+        }
+        return WristTimeSpan(start: start, end: end)
+    }
+}
+
 /// The stats page's periods: the last N days, today included. Rolling, so
 /// none of them collapses into today at the start of a week or a month.
 nonisolated enum WristStatsPeriod: String, CaseIterable, Sendable {

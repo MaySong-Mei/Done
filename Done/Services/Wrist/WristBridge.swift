@@ -126,6 +126,7 @@ final class WristBridge: NSObject {
 #if DEBUG
         seedDebugTitlesIfAsked(store: store, templates: templates)
         seedDebugParallelDayIfAsked(store: store)
+        seedDebugRepeatingIfAsked(store: store)
 #endif
         pushSnapshot()
     }
@@ -173,6 +174,22 @@ final class WristBridge: NSObject {
         _ = add("Pair X", "Gym", 20, 21)
         _ = add("Pair Y", "Lunch", 20.5, 21.5)
         logger.notice("debug: seeded the parallel day")
+    }
+
+    /// `-wristSeedRepeating`: a daily "Daily check" 8:00–8:30, once — a
+    /// block the watch must refuse to move. Debug builds only.
+    private func seedDebugRepeatingIfAsked(store: EventStore) {
+        guard ProcessInfo.processInfo.arguments.contains("-wristSeedRepeating"),
+              !store.canvasRenderableCalendarEvents.contains(where: { $0.title == "Daily check" }) else { return }
+        let today = Calendar.current.startOfDay(for: now())
+        var event = Event(
+            title: "Daily check",
+            timeRanges: [.init(start: today.addingTimeInterval(-86_400 + 8 * 3600), end: today.addingTimeInterval(-86_400 + 8.5 * 3600))],
+            type: "Meeting"
+        )
+        event.repeatUnit = .day
+        store.addCalendarEvent(event)
+        logger.notice("debug: seeded a repeating block")
     }
 
     private func seedDebugTitlesIfAsked(store: EventStore, templates: EventTypeTemplateStore) {

@@ -59,6 +59,16 @@ nonisolated enum WristResizePace: String, Codable, CaseIterable, Sendable {
         case .soft: return 0.36
         }
     }
+
+    /// The phone's `stepDuration`: one quarter-hour step of an edge under
+    /// the finger, short enough never to trail it.
+    var stepDuration: Double {
+        switch self {
+        case .brisk: return 0.07
+        case .standard: return 0.1
+        case .soft: return 0.14
+        }
+    }
 }
 
 /// What to play when the page goes from `old` to `new` blocks.
