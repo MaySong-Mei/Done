@@ -384,3 +384,11 @@ build 4 之后两周零 archive。期间四条分支各自跑完独立验证循�
 - **验证**：全量第一轮 3272 中 177 处失败，全在 Telemetry*（`SpikeRunStore.finishRun` 写盘失败「seed must land」）；单独跑 69/0；同机 erase 重跑全量 3272 / 0 失败 / 2 skip。判为环境：swap 12GB、内置盘剩 5GB 时写盘失败，非本次改动（遥测代码与 king 一致）。手表测试 240/0。
 - **身份门**：三个 Info.plist 0.5.0 / 23 ✅；密钥 / 调试参数 ×0 ✅；`sb_publishable_` 仅 app ×1 ✅；codesign 通过；export 预演成功。
 - **上传 TestFlight 是用户动作。**
+
+## 节点 29 — build 24（2026-10-28）：手表点块卡片 + 长按拖拽移动 / 改时长
+
+- **来源**：`release/build24` @ `86d1e31`（king `5407a5f` = build 23 + merge `feat/watch-block-edit` `689fb2c` + bump）。archive `~/Library/Developer/Xcode/Archives/2026-10-28/Done build24.xcarchive`，0.5.0 · 24，103M，本地时间 00:34。
+- **相对 build 23**：点块高亮 + 卡片（计时中 +15 / 结束；其他 结束 ±15；重复 / 计时器提示在 iPhone 调整）；长按块拖动移动或改上下沿（15 分格 + 邻边吸附、最短 15 分、边缘滚动），新命令 `setRange`，旧手机由 `takesRangeEdits` 标志判断、手表不发。
+- **身份门**：三个 Info.plist 0.5.0 / 24 ✅；密钥 / 调试参数 ×0 ✅；`sb_publishable_` 仅 app ×1 ✅；codesign 通过；export 预演成功。
+- **验证**：全量 3292 / 0 失败 / 2 skip（专用机先 erase，一轮过）；手表 241/0；模拟器 QA 表见分支报告。
+- **上传 TestFlight 是用户动作。**
