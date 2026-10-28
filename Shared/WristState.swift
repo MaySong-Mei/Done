@@ -286,7 +286,7 @@ nonisolated enum WristStateReducer {
                 pendingIDs.insert(entry.command.eventID)
             }
             switch entry.command.kind {
-            case .start(let eventID, let typeTitle, let start, let end, let title):
+            case .start(let eventID, let typeTitle, let start, let end, let title, let awaitsName):
                 guard !occurrences.contains(where: { $0.eventID == eventID }) else { continue }
                 let color = snapshot.types.first { $0.title == typeTitle }?.colorHex ?? "#8E8E93"
                 occurrences.append(
@@ -297,7 +297,8 @@ nonisolated enum WristStateReducer {
                         isInterrupt: false, quickActionsEnabled: true,
                         // Made after everything the phone has: laid out last
                         // among blocks that start with it.
-                        createdAt: entry.command.issuedAt
+                        createdAt: entry.command.issuedAt,
+                        awaitsName: awaitsName == true
                     )
                 )
             case .finish(let eventID, let rangeStart, let at):

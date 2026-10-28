@@ -755,6 +755,7 @@ struct DoneApp: App {
             .onAppear {
                 doneApplyIdleTimerPolicy(shouldDisableIdleTimer)
                 appDelegate.wristBridge.attach(store: store, templates: agentRuntime.eventTypeTemplateStore)
+                AwaitingNameStore.shared.attach(to: store)
                 syncOrientationLock(focusActive: focusActive)
                 handleDominoScenePhase(.active)
                 // gh#197 SPIKE: close orphaned spike runs — open records

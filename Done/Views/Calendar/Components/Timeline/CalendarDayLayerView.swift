@@ -129,6 +129,9 @@ struct CalendarDayLayerView: UIViewRepresentable {
     /// Event ids the host considers recently-absorbed-into (drives the §4
     /// absorption pulse). Mirror of `TimelineView.recentlyAbsorbedParents`.
     var recentlyAbsorbedEventIDs: Set<UUID> = []
+    /// Events waiting for a name ("name later" on the watch), as
+    /// `AwaitingNameStore.titles`: event id → the title it was marked with.
+    var awaitingNameTitles: [UUID: String] = [:]
     /// Shared @Observable scratchpad. Coarse fields mirror back here; the
     /// live per-frame offset stays in plain UIKit state (spec 05 section 7).
     var dragState: EventDragState? = nil
@@ -229,7 +232,8 @@ struct CalendarDayLayerView: UIViewRepresentable {
             graceResizeOccurrenceID: graceResizeOccurrenceID,
             graceResizeHandleOpacity: graceResizeHandleOpacity,
             isFocusContextActive: isFocusContextActive,
-            recentlyAbsorbedEventIDs: recentlyAbsorbedEventIDs
+            recentlyAbsorbedEventIDs: recentlyAbsorbedEventIDs,
+            awaitingNameTitles: awaitingNameTitles
         )
     }
 }
@@ -303,6 +307,9 @@ final class DayLayerHostView: UIView {
         /// view detects the edge and fires the pulse on that occurrence's
         /// container (spec 04 §4).
         var recentlyAbsorbedEventIDs: Set<UUID> = []
+        /// Events waiting for a name: their blocks get the dashed ring and
+        /// badge (`AwaitingNameStore.isAwaiting`).
+        var awaitingNameTitles: [UUID: String] = [:]
 
         /// True when two Models share the same non-structural VISUAL state
         /// (focus, grace, creation preview). Used to keep the S3 cheap-pinch
@@ -322,6 +329,7 @@ final class DayLayerHostView: UIView {
                 && a.dayColumnStep == b.dayColumnStep
                 && a.dragPreviewDayStep == b.dragPreviewDayStep
                 && a.recentlyAbsorbedEventIDs == b.recentlyAbsorbedEventIDs
+                && a.awaitingNameTitles == b.awaitingNameTitles
         }
 
         /// Structural identity of everything that affects overlap topology +
@@ -418,6 +426,9 @@ final class DayLayerHostView: UIView {
         let effortBar = CAShapeLayer()      // left effort bar (post-mask, own clip)
         let todoBorder = CAShapeLayer()     // inset stroke (post-mask)
         let dropTargetRing = CAShapeLayer() // §5 accent INSET stroke (post-mask)
+        let awaitingNameRing = CAShapeLayer()   // waiting for a name: dashed INSET stroke (post-mask)
+        let awaitingNameBadge = CALayer()       // waiting for a name: pill (post-mask)
+        let awaitingNameBadgeText = CATextLayer()
         let topHandle = CAShapeLayer()
         let bottomHandle = CAShapeLayer()
         let spinnerBacking = CAShapeLayer() // ultraThinMaterial-ish circle
@@ -530,6 +541,11 @@ final class DayLayerHostView: UIView {
             container.addSublayer(border)      // §2 + §10 effort bar lives in border overlay
             container.addSublayer(effortBar)
             container.addSublayer(todoBorder)  // §4
+            container.addSublayer(awaitingNameRing)
+            container.addSublayer(awaitingNameBadge)
+            awaitingNameBadge.addSublayer(awaitingNameBadgeText)
+            awaitingNameRing.isHidden = true
+            awaitingNameBadge.isHidden = true
             container.addSublayer(dropTargetRing) // §5 (above borders)
             container.addSublayer(topHandle)   // §11
             container.addSublayer(bottomHandle)
@@ -537,7 +553,7 @@ final class DayLayerHostView: UIView {
             container.addSublayer(spinner)
             dropTargetRing.isHidden = true
 
-            for shape in [bg, hatch, triangle, border, effortBar, todoBorder, dropTargetRing,
+            for shape in [bg, hatch, triangle, border, effortBar, todoBorder, awaitingNameRing, dropTargetRing,
                           topHandle, bottomHandle, spinnerBacking, spinner, silhouetteMask] {
                 shape.fillColor = UIColor.clear.cgColor
                 // CAShapeLayer defaults to contentsScale 1.0 → vector paths
@@ -549,6 +565,9 @@ final class DayLayerHostView: UIView {
             // the clip edge re-aliases the crisp sublayers.
             maskedContent.contentsScale = UIScreen.main.scale
             container.contentsScale = UIScreen.main.scale
+            awaitingNameBadge.contentsScale = UIScreen.main.scale
+            awaitingNameBadgeText.contentsScale = UIScreen.main.scale
+            awaitingNameBadgeText.alignmentMode = .center
             agenticGradient.contentsScale = UIScreen.main.scale
             silhouetteMask.fillColor = UIColor.white.cgColor
 
@@ -1152,10 +1171,36 @@ final class DayLayerHostView: UIView {
     /// Lets the benchmark assert the decision is sub-linear in total-N.
     private(set) var lastCullCandidateCount: Int = 0
 
+    /// TEST-ONLY: how many times each of the three occurrence paths painted,
+    /// so a parity test can show which one drew what it reads.
+    struct DebugPaintCounts: Equatable {
+        var render = 0
+        var repaintVertical = 0
+        var cull = 0
+    }
+    private(set) var debugPaintCounts = DebugPaintCounts()
+
     /// TEST-ONLY: directly invoke one cull pass against the current buffered
     /// rect (the same work a scroll-frame KVO would do), so a benchmark can
     /// time the cull DECISION in isolation from UIKit's `setContentOffset`
     /// bookkeeping. Returns false if there is nothing to cull against.
+    /// TEST-ONLY: the live blocks drawn as waiting for a name — ring shown
+    /// — and, of those, the ones with the badge.
+    func debugAwaitingNameBlocks() -> (ringed: Set<String>, badged: Set<String>) {
+        var ringed = Set<String>(), badged = Set<String>()
+        for (id, layers) in pool where layers.container.superlayer != nil {
+            if !layers.awaitingNameRing.isHidden, layers.awaitingNameRing.path != nil { ringed.insert(id) }
+            if !layers.awaitingNameBadge.isHidden { badged.insert(id) }
+        }
+        return (ringed, badged)
+    }
+
+    /// TEST-ONLY: a live block's height and its waiting ring's height.
+    func debugAwaitingNameRingHeight(_ id: String) -> (block: CGFloat, ring: CGFloat)? {
+        guard let layers = pool[id], let path = layers.awaitingNameRing.path else { return nil }
+        return (layers.container.bounds.height, path.boundingBoxOfPath.height)
+    }
+
     @discardableResult
     func debugRunCullPass() -> Bool {
         guard let rect = bufferedVisibleRect() else { return false }
@@ -1647,6 +1692,9 @@ final class DayLayerHostView: UIView {
     // MARK: Render (static)
 
     private func render(_ model: Model) {
+        #if DEBUG
+        debugPaintCounts.render += 1
+        #endif
         // No implicit animations for the static S1 path: layer frame / path
         // changes must be instantaneous (animations are slice S5).
         CATransaction.begin()
@@ -2672,6 +2720,9 @@ final class DayLayerHostView: UIView {
             return
         }
         lastCullVisibleRect = visibleRect
+        #if DEBUG
+        debugPaintCounts.cull += 1
+        #endif
         let manipulatedID = gestureController.activeEventSession?.occurrenceID
 
         CATransaction.begin()
@@ -3952,6 +4003,9 @@ final class DayLayerHostView: UIView {
             render(model)
             return
         }
+        #if DEBUG
+        debugPaintCounts.repaintVertical += 1
+        #endif
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -4646,6 +4700,15 @@ final class DayLayerHostView: UIView {
             layers.todoBorder.path = nil
         }
 
+        // ── Waiting for a name ("name later" on the watch) ───────────────
+        // A dashed inset ring in the block's colour and a "Name?" pill at the
+        // bottom trailing corner when the block has room. Here, so the full
+        // render, the cheap vertical repaint and the cull all draw it.
+        configureAwaitingName(
+            layers, frame: frame, color: color, cornerRadius: cornerRadius,
+            isAwaiting: AwaitingNameStore.isAwaiting(event, titles: model.awaitingNameTitles)
+        )
+
         // ── Resize-handle capsules (spec 01 §11), visual only ────────────
         // Static S1: no edit style / long-press / preview-handle target, so
         // `showHandles` is false → opacity 0 (container present but invisible).
@@ -4712,6 +4775,52 @@ final class DayLayerHostView: UIView {
 
         // Block scale (spec 01 §12a): constant 1.0 — preserve as no-op.
         layers.container.transform = CATransform3DIdentity
+    }
+
+    private func configureAwaitingName(
+        _ layers: EventLayers, frame: CGRect, color: UIColor, cornerRadius: CGFloat, isAwaiting: Bool
+    ) {
+        guard isAwaiting else {
+            layers.awaitingNameRing.isHidden = true
+            layers.awaitingNameRing.path = nil
+            layers.awaitingNameBadge.isHidden = true
+            return
+        }
+        let localBounds = CGRect(origin: .zero, size: frame.size)
+        let lineWidth: CGFloat = 1.5
+        let inset = lineWidth / 2
+        layers.awaitingNameRing.isHidden = false
+        layers.awaitingNameRing.frame = localBounds
+        layers.awaitingNameRing.path = continuousRoundedRectPath(
+            in: localBounds.insetBy(dx: inset, dy: inset), cornerRadius: max(0, cornerRadius - inset)
+        )
+        layers.awaitingNameRing.strokeColor = color.cgColor
+        layers.awaitingNameRing.lineWidth = lineWidth
+        layers.awaitingNameRing.lineDashPattern = [4, 3]
+
+        let text = L(.awaitingNameBadge)
+        let font = UIFont.systemFont(ofSize: 10, weight: .semibold)
+        let textWidth = ceil((text as NSString).size(withAttributes: [.font: font]).width)
+        let badgeSize = CGSize(width: textWidth + 10, height: 15)
+        let margin: CGFloat = 3
+        guard frame.height >= badgeSize.height + margin * 2 + 12,
+              frame.width >= badgeSize.width + margin * 2 + 24 else {
+            layers.awaitingNameBadge.isHidden = true
+            return
+        }
+        layers.awaitingNameBadge.isHidden = false
+        layers.awaitingNameBadge.frame = CGRect(
+            x: frame.width - badgeSize.width - margin, y: frame.height - badgeSize.height - margin,
+            width: badgeSize.width, height: badgeSize.height
+        )
+        layers.awaitingNameBadge.cornerRadius = badgeSize.height / 2
+        layers.awaitingNameBadge.backgroundColor = color.cgColor
+        layers.awaitingNameBadgeText.frame = CGRect(
+            x: 0, y: (badgeSize.height - font.lineHeight) / 2, width: badgeSize.width, height: font.lineHeight
+        )
+        layers.awaitingNameBadgeText.string = NSAttributedString(
+            string: text, attributes: [.font: font, .foregroundColor: UIColor.white]
+        )
     }
 
     // MARK: Resize handles (visual only — gesture is S4)

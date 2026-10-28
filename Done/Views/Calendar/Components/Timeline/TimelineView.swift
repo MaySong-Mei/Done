@@ -1788,6 +1788,9 @@ struct TimelinePagerView: View {
     /// want a single owning set across all visible day columns.
     @State private var calayerRecentlyAbsorbedParents: Set<UUID> = []
     @EnvironmentObject private var calayerEventStore: EventStore
+    /// Events waiting for a name: their blocks are drawn asking for one.
+    /// Changes only when a mark is made or ends.
+    @ObservedObject private var awaitingNames = AwaitingNameStore.shared
 
     private var resolvedCreationEditMapping: (date: Date, range: Event.TimeRange)? {
         calendarResolvedCreationEditMapping(
@@ -2988,6 +2991,7 @@ struct TimelinePagerView: View {
             graceResizeHandleOpacity: graceResizeHandleOpacity,
             isFocusContextActive: isFocusContextActive,
             recentlyAbsorbedEventIDs: calayerRecentlyAbsorbedParents,
+            awaitingNameTitles: awaitingNames.titles,
             dragState: dragState,
             onEventTap: onEventTap,
             onEventLongPressBegan: onEventLongPressBegan,

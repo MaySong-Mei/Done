@@ -41,6 +41,7 @@ enum WristSnapshotBuilder {
         stats: CategoryStatsPayload? = nil,
         statsSettings: WristStatsSettings = .standard,
         motions: WristMotionSettings = .off,
+        awaitingNameTitles: [UUID: String] = [:],
         colorHex: (String) -> String
     ) -> WristSnapshot {
         let types = rankedTypes(events: events, templates: templates, now: now, calendar: calendar)
@@ -48,7 +49,10 @@ enum WristSnapshotBuilder {
             generatedAt: now,
             language: language,
             types: types,
-            occurrences: occurrences(events: events, now: now, calendar: calendar, colorHex: colorHex),
+            occurrences: occurrences(
+                events: events, now: now, calendar: calendar,
+                awaitingNameTitles: awaitingNameTitles, colorHex: colorHex
+            ),
             receipts: receipts,
             stats: stats.flatMap { trimmed($0, now: now, reach: .thirtyDays) },
             statsSettings: statsSettings,
@@ -386,7 +390,8 @@ enum WristSnapshotBuilder {
     /// timer projects open-ended: its stored end is the moment it was last
     /// looked at, which would read as "over" on the wrist within seconds.
     static func occurrences(
-        events: [Event], now: Date, calendar: Calendar, colorHex: (String) -> String
+        events: [Event], now: Date, calendar: Calendar,
+        awaitingNameTitles: [UUID: String] = [:], colorHex: (String) -> String
     ) -> [WristOccurrence] {
         var seen = Set<String>()
         var result: [WristOccurrence] = []
@@ -417,7 +422,8 @@ enum WristSnapshotBuilder {
                         createdAt: event.createdAt,
                         seriesID: event.recurrenceParentId,
                         interruptParentID: event.interruptRelation?.state == .embedded
-                            ? event.interruptRelation?.parentEventID : nil
+                            ? event.interruptRelation?.parentEventID : nil,
+                        awaitsName: AwaitingNameStore.isAwaiting(event, titles: awaitingNameTitles)
                     )
                 )
             }

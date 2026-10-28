@@ -97,11 +97,15 @@ nonisolated struct WristOccurrence: Codable, Hashable, Identifiable, Sendable {
     var createdAt: Date?
     var seriesID: UUID?
     var interruptParentID: UUID?
+    /// "Name later" was picked for the event and it has not been named yet
+    /// (the phone's `AwaitingNameStore`): the watch draws the block as
+    /// waiting. False from a phone before the field.
+    var awaitsName: Bool
 
     init(
         id: String, eventID: UUID, title: String, type: String, colorHex: String,
         start: Date, end: Date, isInterrupt: Bool, quickActionsEnabled: Bool, isOpenEnded: Bool = false,
-        createdAt: Date? = nil, seriesID: UUID? = nil, interruptParentID: UUID? = nil
+        createdAt: Date? = nil, seriesID: UUID? = nil, interruptParentID: UUID? = nil, awaitsName: Bool = false
     ) {
         self.id = id
         self.eventID = eventID
@@ -116,6 +120,7 @@ nonisolated struct WristOccurrence: Codable, Hashable, Identifiable, Sendable {
         self.createdAt = createdAt
         self.seriesID = seriesID
         self.interruptParentID = interruptParentID
+        self.awaitsName = awaitsName
     }
 
     /// The event a series' occurrences and its exception instances share.
@@ -123,7 +128,7 @@ nonisolated struct WristOccurrence: Codable, Hashable, Identifiable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, eventID, title, type, colorHex, start, end, isInterrupt, quickActionsEnabled, isOpenEnded
-        case createdAt, seriesID, interruptParentID
+        case createdAt, seriesID, interruptParentID, awaitsName
     }
 
     init(from decoder: Decoder) throws {
@@ -141,6 +146,7 @@ nonisolated struct WristOccurrence: Codable, Hashable, Identifiable, Sendable {
         createdAt = try? c.decodeIfPresent(Date.self, forKey: .createdAt)
         seriesID = try? c.decodeIfPresent(UUID.self, forKey: .seriesID)
         interruptParentID = try? c.decodeIfPresent(UUID.self, forKey: .interruptParentID)
+        awaitsName = (try? c.decodeIfPresent(Bool.self, forKey: .awaitsName)).flatMap { $0 } ?? false
     }
 
     /// A false flag is left out — it decodes as false, here and on every
@@ -160,6 +166,7 @@ nonisolated struct WristOccurrence: Codable, Hashable, Identifiable, Sendable {
         try c.encodeIfPresent(createdAt, forKey: .createdAt)
         try c.encodeIfPresent(seriesID, forKey: .seriesID)
         try c.encodeIfPresent(interruptParentID, forKey: .interruptParentID)
+        if awaitsName { try c.encode(awaitsName, forKey: .awaitsName) }
     }
 }
 
@@ -327,6 +334,12 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
 /// the start (an unknown key is ignored) and stores the type as the title,
 /// and a start queued by an older watch still decodes here.
 ///
+/// A start's `awaitsName` is "name later" picked on the watch: the event is
+/// created exactly as a start without a name (titled after its type) and the
+/// phone marks it as waiting for a name. Optional and left out when not set,
+/// for the same reason as `title`: a phone that predates it ignores the key
+/// and simply stores the type-titled event.
+///
 /// `statsSettings` is an edit made on the watch's settings page to the
 /// phone-owned part of `WristStatsSettings`: each field it carries replaces
 /// the phone's, a nil field is left alone. A phone that predates the kind
@@ -341,7 +354,7 @@ nonisolated struct WristSnapshot: Codable, Equatable, Sendable {
 /// (`WristSnapshot.takesRangeEdits`).
 nonisolated struct WristCommand: Codable, Hashable, Identifiable, Sendable {
     enum Kind: Codable, Hashable, Sendable {
-        case start(eventID: UUID, typeTitle: String, start: Date, end: Date, title: String? = nil)
+        case start(eventID: UUID, typeTitle: String, start: Date, end: Date, title: String? = nil, awaitsName: Bool? = nil)
         case finish(eventID: UUID, rangeStart: Date?, at: Date)
         case extend(eventID: UUID, rangeStart: Date?, by: TimeInterval)
         case statsSettings(overlap: WristOverlapRule? = nil, excludesBackground: Bool? = nil)
@@ -357,7 +370,7 @@ nonisolated struct WristCommand: Codable, Hashable, Identifiable, Sendable {
     /// commands.
     var eventID: UUID {
         switch kind {
-        case .start(let eventID, _, _, _, _), .finish(let eventID, _, _), .extend(let eventID, _, _),
+        case .start(let eventID, _, _, _, _, _), .finish(let eventID, _, _), .extend(let eventID, _, _),
              .setRange(let eventID, _, _, _):
             return eventID
         case .statsSettings:
@@ -373,7 +386,7 @@ nonisolated struct WristCommand: Codable, Hashable, Identifiable, Sendable {
 
     var rangeStart: Date? {
         switch kind {
-        case .start(_, _, let start, _, _): return start
+        case .start(_, _, let start, _, _, _): return start
         case .finish(_, let rangeStart, _), .extend(_, let rangeStart, _), .setRange(_, let rangeStart, _, _):
             return rangeStart
         case .statsSettings: return nil

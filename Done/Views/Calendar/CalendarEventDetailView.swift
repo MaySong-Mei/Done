@@ -563,6 +563,9 @@ struct CalendarEventDetailView: View {
     // SwiftUI `miniDayTimelineVisual` tree; the CALayer host is unreachable.
     private let useCALayerMiniDayTimeline = false
     @StateObject private var multiTypeTemplateStore = EventTypeTemplateStore()
+    /// "Name later" from the watch: an event waiting for a name opens with
+    /// the naming prompt on top.
+    @ObservedObject private var awaitingNames = AwaitingNameStore.shared
     @State private var editSheetRequest: CalendarDetailEditSheetRequest?
     @State private var manageRepeatContext: CalendarManageRepeatContext?
     @State private var showAbsorbPicker = false
@@ -1316,6 +1319,15 @@ private extension CalendarEventDetailView {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 12) {
+                    if let event = currentEvent, awaitingNames.isAwaiting(event) {
+                        CalendarAwaitingNamePrompt(
+                            eventID: event.id,
+                            currentTitle: event.title,
+                            tint: CalendarLayout.eventColor(for: event),
+                            onName: nameAwaitingEvent
+                        )
+                        .id(event.id)
+                    }
                     overviewSection(draft: draft)
                     timelineSection
                     if let event = currentEvent {
@@ -3822,6 +3834,12 @@ private extension CalendarEventDetailView {
             deltaMinutes: deltaMinutes,
             scope: event.isRecurringSeries ? .single : nil
         )
+    }
+
+    /// The naming prompt's answer (`AwaitingNameStore.answer`).
+    func nameAwaitingEvent(_ name: String?) {
+        guard let event = currentEvent else { return }
+        awaitingNames.answer(event.id, name: name, in: store)
     }
 
     func startEditFlow() {
@@ -6342,3 +6360,84 @@ private extension CalendarEventDetailView {
 
 // MARK: - Detail Header Settings
 
+// MARK: - Waiting for a name
+
+/// The detail page's ask for an event started with "name later" on the
+/// watch: a name field, focused as the page opens, with Save and "keep" the
+/// current (type) title. The typed text lives here, so a keystroke redraws
+/// only this card. A name typed but not saved is saved when the page goes
+/// away — what the user typed is never dropped.
+struct CalendarAwaitingNamePrompt: View {
+    let eventID: UUID
+    let currentTitle: String
+    let tint: Color
+    let onName: (String?) -> Void
+
+    @State private var text = ""
+    @State private var answered = false
+    @FocusState private var focused: Bool
+
+    private var typed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "applewatch")
+                Text(L(.awaitingNameTitle))
+                    .font(.subheadline.weight(.semibold))
+            }
+            .foregroundStyle(tint)
+            Text(String(format: L(.awaitingNameMessageFormat), currentTitle))
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            TextField(currentTitle, text: $text)
+                .font(.body.weight(.semibold))
+                .focused($focused)
+                .submitLabel(.done)
+                .onSubmit(save)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .accessibilityIdentifier("awaitingName.field")
+            HStack {
+                Button(String(format: L(.awaitingNameKeepFormat), currentTitle)) {
+                    answered = true
+                    onName(nil)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("awaitingName.keep")
+                Spacer(minLength: 8)
+                Button(L(.awaitingNameSave), action: save)
+                    .buttonStyle(.borderedProminent)
+                    .tint(tint)
+                    .disabled(typed.isEmpty)
+                    .accessibilityIdentifier("awaitingName.save")
+            }
+            .font(.subheadline.weight(.semibold))
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(tint, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+        )
+        .onAppear {
+            // After the push settles, so the keyboard does not ride the
+            // navigation transition.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { focused = true }
+        }
+        .onDisappear {
+            guard !answered, !typed.isEmpty else { return }
+            answered = true
+            onName(typed)
+        }
+    }
+
+    private func save() {
+        guard !typed.isEmpty, !answered else { return }
+        answered = true
+        focused = false
+        onName(typed)
+    }
+}

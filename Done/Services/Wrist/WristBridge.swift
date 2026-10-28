@@ -64,6 +64,7 @@ final class WristBridge: NSObject {
     private var subscriptions: [AnyCancellable] = []
     private var ledger: WristAppliedLedger
     private let defaults: UserDefaults
+    private let awaitingNames: AwaitingNameStore
     private(set) var lastSent: WristSnapshot?
     private(set) var pushCount = 0
     var now: () -> Date = Date.init
@@ -71,11 +72,13 @@ final class WristBridge: NSObject {
     init(
         ledger: WristAppliedLedger = WristAppliedLedger(),
         defaults: UserDefaults = .standard,
-        transport: WristSessionTransport? = nil
+        transport: WristSessionTransport? = nil,
+        awaitingNames: AwaitingNameStore = .shared
     ) {
         self.ledger = ledger
         self.defaults = defaults
         self.transport = transport
+        self.awaitingNames = awaitingNames
         super.init()
     }
 
@@ -109,6 +112,14 @@ final class WristBridge: NSObject {
         // The stats are built off the main thread after a calendar change
         // and land later than the change itself: push again when they do.
         store.categoryStatsLanded
+            .debounce(for: .milliseconds(400), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.pushSnapshot() }
+            .store(in: &subscriptions)
+        // A block named later stops waiting on the wrist too; "keep the
+        // type" changes no event.
+        awaitingNames.$marks
+            .dropFirst()
+            .removeDuplicates()
             .debounce(for: .milliseconds(400), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in self?.pushSnapshot() }
             .store(in: &subscriptions)
@@ -238,6 +249,7 @@ final class WristBridge: NSObject {
                 delete: EventDeletionMotionFlag.isEnabled ? EventDeletionMotionFlag.variant : nil,
                 resize: EventResizeTweenFlag.isEnabled ? EventResizeTweenFlag.variant : nil
             ),
+            awaitingNameTitles: awaitingNames.titles,
             colorHex: { EventTypeTemplateStore.colorHex(for: $0) }
         )
         guard let (snapshot, data) = Self.fitting(full, latestStats: store.latestCategoryStats, now: now) else {
@@ -360,7 +372,7 @@ final class WristBridge: NSObject {
         if ledger.contains(command.id) {
             receipt = WristReceipt(id: command.id, outcome: .duplicate, reason: nil)
         } else {
-            receipt = WristCommandApplier.apply(command, to: store, defaults: defaults)
+            receipt = WristCommandApplier.apply(command, to: store, defaults: defaults, awaitingNames: awaitingNames)
             // A finish or extend that outran its start is answered "not
             // found"; the watch gets the receipt, but the id is deliberately
             // not remembered: the durable copy that arrives after the start
