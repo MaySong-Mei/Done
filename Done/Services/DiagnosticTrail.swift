@@ -45,6 +45,7 @@ nonisolated enum DiagnosticTrail {
     nonisolated(unsafe) private static var handle: FileHandle?
     nonisolated(unsafe) private static var liveByteCount = 0
     nonisolated(unsafe) private static var didWriteSessionBanner = false
+    nonisolated(unsafe) private static var clears = 0
     /// Stable for the lifetime of the process, so entries from different runs
     /// interleaved in one file can still be told apart.
     nonisolated(unsafe) private static var sessionID = String(UUID().uuidString.prefix(8))
@@ -227,6 +228,15 @@ nonisolated enum DiagnosticTrail {
 
     // MARK: - Clearing
 
+    /// Goes up by one on every `clear()`. A writer that skips lines it has
+    /// already written compares this to tell that what it remembers writing
+    /// is no longer in the trail.
+    static var clearGeneration: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return clears
+    }
+
     /// Drops everything retained. Wired into the app's "erase local data" paths
     /// — the trail carries event IDs and counts, and a user asking for local
     /// traces to be erased means this one too.
@@ -238,6 +248,7 @@ nonisolated enum DiagnosticTrail {
         liveByteCount = 0
         // A fresh banner belongs in the emptied file, not carried over.
         didWriteSessionBanner = false
+        clears += 1
         try? FileManager.default.removeItem(at: liveURL)
         try? FileManager.default.removeItem(at: rotatedURL)
         // The share-ready copy is part of "everything retained".

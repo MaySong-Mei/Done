@@ -5635,6 +5635,146 @@ func calendarScrollViewsDelayingContentTouches(above view: UIView) -> [UIScrollV
     return Array(found.prefix(1))
 }
 
+/// Every scroll view above `view`, nearest first, with no stop. Read-only
+/// and used only to word the probe's trail line when the walk above found
+/// no pager — never to decide what gets written.
+func calendarScrollViewAncestors(above view: UIView) -> [UIScrollView] {
+    var found: [UIScrollView] = []
+    var current = view.superview
+    while let candidate = current {
+        if let scrollView = candidate as? UIScrollView {
+            found.append(scrollView)
+        }
+        current = candidate.superview
+    }
+    return found
+}
+
+/// What one pass of `CalendarScrollTouchDelayProbe` saw, for its trail
+/// line. The fix only works while the walk reaches the pager; an OS that
+/// reshapes the detail view's hierarchy would make the walk quietly find
+/// less, and the touch hold would come back with no other sign. There is no
+/// simulator for every OS this ships to, so the release build says what it
+/// found.
+///
+/// Equality is the probe's "did anything change" check, so it holds only
+/// cheap facts — counts and class identities; class NAMES are spelled out
+/// only when a line is actually written.
+struct CalendarScrollTouchDelaySnapshot: Equatable {
+    let foundCount: Int
+    let reachedPaging: Bool
+    /// How many of the found scroll views still had the delay on when this
+    /// pass arrived — read before the probe's write.
+    let delayingBeforeWrite: Int
+    /// The found views' classes, nearest first.
+    let classes: [ObjectIdentifier]
+
+    init(found: [UIScrollView]) {
+        foundCount = found.count
+        reachedPaging = found.contains { $0.isPagingEnabled }
+        delayingBeforeWrite = found.filter(\.delaysContentTouches).count
+        classes = found.map { ObjectIdentifier(type(of: $0)) }
+    }
+
+    /// The line's content, without the probe and pass numbers that
+    /// `CalendarScrollTouchDelayTrail` puts in front of it:
+    /// `found=<count> paging=yes|no delayingBefore=<count>
+    /// views=<class>|<class>…`, nearest first. When no pager was reached
+    /// the walk stops at the nearest scroll view, so ` above=` adds the
+    /// classes of every scroll view further up, nearest first — what a
+    /// follow-up fix would need to reach (none of them pages, or the walk
+    /// would have stopped there). Class names and counts only; nothing the
+    /// user typed.
+    func trailContent(found: [UIScrollView]) -> String {
+        var content = "found=\(foundCount) paging=\(reachedPaging ? "yes" : "no")"
+            + " delayingBefore=\(delayingBeforeWrite) views=\(found.isEmpty ? "-" : found.map { Self.name($0) }.joined(separator: "|"))"
+        if !reachedPaging {
+            let above = found.last.map { calendarScrollViewAncestors(above: $0) } ?? []
+            content += " above=" + (above.isEmpty ? "-" : above.map { Self.name($0) }.joined(separator: "|"))
+        }
+        return content
+    }
+
+    private static func name(_ view: UIView) -> String {
+        String(describing: type(of: view))
+    }
+}
+
+/// The probe's trail line, written so a flood cannot rotate away the rest
+/// of the trail: the line is a synchronous file write from `layoutSubviews`
+/// / `updateUIView`, and the failure it exists to catch (something turning
+/// the delay back on) is exactly the one that would change the snapshot on
+/// every pass.
+///
+/// Line: `gh201 probe#<n> pass=<i> <content>` — `n` numbers the probes in
+/// this process, `i` the changes this probe has seen in a window, and
+/// `content` is `CalendarScrollTouchDelaySnapshot.trailContent`.
+///
+/// Two limits:
+/// - A probe stays silent while its changes repeat, in order, what the
+///   previous probe saw; from its first change that differs, or that goes
+///   past the end of what the previous probe recorded, it writes. A probe
+///   records only a bounded number of its own changes, so the comparison
+///   covers no more than that.
+/// - A probe writes at most `linesPerProbe` lines, then one line saying it
+///   stopped, then nothing.
+///
+/// What that writes:
+/// - The first detail open after launch writes all its lines. A healthy
+///   open writes `delayingBefore=N`, then `delayingBefore=0` (the write
+///   held); later healthy opens of the same hierarchy write nothing.
+/// - An open with a new shape writes from its first change.
+/// - An open whose delay keeps coming back runs past what the previous
+///   probe recorded, so every such open writes its own capped run of lines,
+///   identical to the last one's when the problem is the same. Repeated
+///   runs mean the problem is still there.
+/// - An open whose changes are a prefix of the previous probe's writes
+///   nothing — including a healthy open after one whose delay kept coming
+///   back. Silence after a run of lines therefore does not mean the problem
+///   stopped; only a later run means it was still there.
+///
+/// Reading a line: a nonzero `delayingBefore` at a `pass=` past the first
+/// means something turned the delay back on after the probe had turned it
+/// off. A shape that never shows `delayingBefore=0` means the write is not
+/// holding at all.
+///
+/// The remembered sequence is cleared with the trail
+/// (`DiagnosticTrail.clearGeneration`): it stands for lines that are in the
+/// trail, and after a clear they are not.
+enum CalendarScrollTouchDelayTrail {
+    static let linesPerProbe = 4
+    static let capContent = "suppressed after cap"
+
+    private static var previousSequence: [String] = []
+    private static var generation = 0
+
+    /// What the most recent probe saw, in order, since the trail was last
+    /// cleared.
+    static func referenceSequence() -> [String] {
+        forgetIfTrailCleared()
+        return previousSequence
+    }
+
+    /// Called by a probe on each change it sees, with everything it has
+    /// seen so far (bounded by the probe).
+    static func noteSequence(_ sequence: [String]) {
+        forgetIfTrailCleared()
+        previousSequence = sequence
+    }
+
+    static func write(probe: Int, pass: Int, _ content: String) {
+        DiagnosticTrail.record(CalendarScrollTouchDelayProbe.trailCategory, "gh201 probe#\(probe) pass=\(pass) \(content)")
+    }
+
+    private static func forgetIfTrailCleared() {
+        let current = DiagnosticTrail.clearGeneration
+        if current != generation {
+            generation = current
+            previousSequence = []
+        }
+    }
+}
+
 /// Turns `delaysContentTouches` off on the scroll views
 /// `calendarScrollViewsDelayingContentTouches` names, for whatever subtree
 /// this probe is installed in (gh#201 fix 1). Mounted as a `.background` of
@@ -5652,6 +5792,9 @@ func calendarScrollViewsDelayingContentTouches(above view: UIView) -> [UIScrollV
 /// `ScrollView`, so there is no longer-lived scroll view left holding a
 /// setting this probe changed.
 struct CalendarScrollTouchDelayProbe: UIViewRepresentable {
+    /// The trail category of the probe's line (`CalendarScrollTouchDelayTrail`).
+    static let trailCategory = "TouchDelay"
+
     func makeUIView(context: Context) -> ProbeView {
         ProbeView()
     }
@@ -5661,7 +5804,26 @@ struct CalendarScrollTouchDelayProbe: UIViewRepresentable {
     }
 
     final class ProbeView: UIView {
+        /// Numbers the probes in this process so the trail's lines from one
+        /// probe can be read together.
+        private static var probesMade = 0
+        private let serial: Int
+        /// The last snapshot this probe saw in a window; nil until it has
+        /// seen one. Passes that see the same snapshot are not changes.
+        private var lastSeen: CalendarScrollTouchDelaySnapshot?
+        /// The contents of this probe's changes so far, in order — kept to
+        /// a bound, since only the first few are ever compared.
+        private var seen: [String] = []
+        private var changes = 0
+        /// The previous probe's sequence, taken at this probe's first change.
+        private var reference: [String]?
+        private var diverged = false
+        private var linesWritten = 0
+        private var capped = false
+
         override init(frame: CGRect) {
+            Self.probesMade += 1
+            serial = Self.probesMade
             super.init(frame: frame)
             backgroundColor = .clear
             isUserInteractionEnabled = false
@@ -5690,10 +5852,44 @@ struct CalendarScrollTouchDelayProbe: UIViewRepresentable {
         /// scroll-view hierarchy, which is the only way the wiring between
         /// the walk and the property write is observable at all.
         func refreshTouchDelayIfNeeded() {
-            for scrollView in calendarScrollViewsDelayingContentTouches(above: self)
-            where scrollView.delaysContentTouches {
+            let found = calendarScrollViewsDelayingContentTouches(above: self)
+            // Read before the write below, which is what makes the count
+            // "how many were still delaying when this pass arrived".
+            let snapshot = CalendarScrollTouchDelaySnapshot(found: found)
+            for scrollView in found where scrollView.delaysContentTouches {
                 scrollView.delaysContentTouches = false
             }
+            trailIfChanged(snapshot, found: found)
+        }
+
+        /// Trails only changes, and only as `CalendarScrollTouchDelayTrail`
+        /// allows (repeats of the previous probe skipped, a cap per probe).
+        /// Nothing while the probe is outside a window: it can be refreshed
+        /// (`updateUIView`, `didMoveToSuperview`) before it is mounted under
+        /// the detail view's scroll views, and such a pass's "found=0" would
+        /// read exactly like the failure this line exists to catch.
+        private func trailIfChanged(_ snapshot: CalendarScrollTouchDelaySnapshot, found: [UIScrollView]) {
+            guard window != nil, !capped, snapshot != lastSeen else { return }
+            lastSeen = snapshot
+            let content = snapshot.trailContent(found: found)
+            let reference = self.reference ?? CalendarScrollTouchDelayTrail.referenceSequence()
+            self.reference = reference
+            let index = changes
+            changes += 1
+            if seen.count <= CalendarScrollTouchDelayTrail.linesPerProbe {
+                seen.append(content)
+            }
+            CalendarScrollTouchDelayTrail.noteSequence(seen)
+
+            if !diverged, index < reference.count, reference[index] == content { return }
+            diverged = true
+            guard linesWritten < CalendarScrollTouchDelayTrail.linesPerProbe else {
+                capped = true
+                CalendarScrollTouchDelayTrail.write(probe: serial, pass: changes, CalendarScrollTouchDelayTrail.capContent)
+                return
+            }
+            linesWritten += 1
+            CalendarScrollTouchDelayTrail.write(probe: serial, pass: changes, content)
         }
     }
 }

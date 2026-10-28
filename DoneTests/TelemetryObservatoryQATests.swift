@@ -75,6 +75,10 @@ private final class ObservatoryQARig {
 /// every fixture day — 2026-09-21 and the day before — is inside it.
 private let qaWindowStart = "2026-07-23"
 
+/// The segment `TelemetryFixtures.run` stamps (model and OS), read as this
+/// phone's: the deck's timing verdicts are judged on it.
+private let qaSegment = FixWatchSegment(deviceModel: "iPhone17,2", osVersion: "26.0")
+
 /// A daily whose Me-tab liveness counter reads `visible` — the number the
 /// deck shows as "visible computes (liveness)", so which copy of a record
 /// the deck evaluated is visible in its output.
@@ -233,11 +237,11 @@ final class TelemetryObservatoryMergeQATests: XCTestCase {
         XCTAssertEqual(merged.count, 1)
         XCTAssertEqual(merged.first?.revision, 3, "the local copy is newer")
         XCTAssertEqual(merged.first?.metrics["meComputedVisible"], .number(9))
-        let deck = FixWatchAttention.observatory(localDailies: [local], localWindows: [], cloud: [staleCloud], localInstall: install, sinceDayKey: qaWindowStart)
+        let deck = FixWatchAttention.observatory(localDailies: [local], localWindows: [], cloud: [staleCloud], localInstall: install, sinceDayKey: qaWindowStart, currentSegment: qaSegment)
         XCTAssertEqual(meTabVisible(deck.verdicts), "9", "the deck reads the fresher local count")
 
         let newerCloud = try rig.viaCloud(daily(id: id, visible: 5, revision: 4, install: install))
-        let replaced = FixWatchAttention.observatory(localDailies: [local], localWindows: [], cloud: [newerCloud], localInstall: install, sinceDayKey: qaWindowStart)
+        let replaced = FixWatchAttention.observatory(localDailies: [local], localWindows: [], cloud: [newerCloud], localInstall: install, sinceDayKey: qaWindowStart, currentSegment: qaSegment)
         XCTAssertEqual(meTabVisible(replaced.verdicts), "5", "positive control: a newer cloud copy does win")
     }
 
@@ -252,11 +256,11 @@ final class TelemetryObservatoryMergeQATests: XCTestCase {
         let theirs = try rig.viaCloud(daily(visible: 2, revision: 1, install: otherPhone,
                                             startedAt: rig.clock.addingTimeInterval(-86_400)))
         let debugHere = daily(visible: 4, revision: 1, install: here, configuration: "debug")
-        let debugOnly = FixWatchAttention.observatory(localDailies: [debugHere], localWindows: [], cloud: [theirs], localInstall: here, sinceDayKey: qaWindowStart)
+        let debugOnly = FixWatchAttention.observatory(localDailies: [debugHere], localWindows: [], cloud: [theirs], localInstall: here, sinceDayKey: qaWindowStart, currentSegment: qaSegment)
         XCTAssertEqual(debugOnly.source, .cloud(devices: 1), "a Debug build's own records are not a device the verdicts came from")
 
         let releaseHere = daily(visible: 4, revision: 1, install: here)
-        let both = FixWatchAttention.observatory(localDailies: [releaseHere], localWindows: [], cloud: [theirs], localInstall: here, sinceDayKey: qaWindowStart)
+        let both = FixWatchAttention.observatory(localDailies: [releaseHere], localWindows: [], cloud: [theirs], localInstall: here, sinceDayKey: qaWindowStart, currentSegment: qaSegment)
         XCTAssertEqual(both.source, .cloud(devices: 2), "positive control: a release record here is a second device")
     }
 }
@@ -309,5 +313,99 @@ final class TelemetrySwitchWritePathScanTests: XCTestCase {
         let edge = try XCTUnwrap(fixWatch.range(of: "TelemetrySwitchEdge.apply(", range: setter.upperBound..<fixWatch.endIndex))
         let label = try XCTUnwrap(fixWatch.range(of: "L(.telemetryShareToggle)", range: binding.upperBound..<fixWatch.endIndex))
         XCTAssertLessThan(edge.lowerBound, label.lowerBound, "the edge sits in the statistics toggle's own setter")
+    }
+}
+
+// MARK: - Independent QA: segments on the cloud path (feat/fixwatch-segment)
+
+/// The deck's segments, read off rows that came back over the wire. The
+/// shapes the slice's own cloud test does not build: this phone's segment
+/// present ONLY in the cloud (a reinstall — another install id, the same
+/// model and OS major, a different point release), and a Me-tab hidden
+/// compute only in a cloud-only, non-current segment.
+@MainActor
+final class FixWatchSegmentCloudQATests: XCTestCase {
+    private var rig: ObservatoryQARig!
+
+    override func setUp() {
+        super.setUp()
+        rig = ObservatoryQARig()
+    }
+
+    override func tearDown() {
+        rig.tearDown()
+        rig = nil
+        super.tearDown()
+    }
+
+    private func segmentDaily(model: String, os: String, install: UUID, dayKey: String, startedAt: Date,
+                              taps: String, hidden: Int = 0, visible: Int = 0) -> SpikeRun {
+        var metrics = ResidentCounterSet().metrics
+        metrics[ResidentCounterSet.tapLagBucketsKey] = .string(taps)
+        metrics["meComputedHidden"] = .number(Double(hidden))
+        metrics["meComputedVisible"] = .number(Double(visible))
+        var run = SpikeRun(
+            id: UUID(), spikeID: FixObservationRegistry.residentDailySpikeID,
+            scenarioID: FixObservationRegistry.residentDailyScenarioID, variantID: nil,
+            startedAt: startedAt, endedAt: startedAt.addingTimeInterval(60),
+            appVersion: "0.5.0", appBuild: "24", appCommit: nil,
+            deviceModel: model, osVersion: os,
+            timeZoneIdentifier: "America/Los_Angeles", localeIdentifier: "zh_CN",
+            buildConfiguration: "release", metrics: metrics, note: nil, outcome: .completed, abortReason: nil
+        )
+        run.installID = install
+        run.ownerUID = rig.uid
+        run.dayKey = dayKey
+        run.dayTZOffsetMin = -420
+        run.revision = 1
+        run.kind = .dailyRollup
+        return run
+    }
+
+    private func card(_ id: String, _ verdicts: [FixVerdict]) throws -> FixVerdict {
+        try XCTUnwrap(verdicts.first { $0.entryID == id })
+    }
+
+    /// No local records at all (a fresh install). The cloud holds this
+    /// phone's model and OS major from the previous install — 12 taps in
+    /// 40–80 → 0/12 → 未达标 — and the old phone's 12 fast taps plus one
+    /// hidden compute. Judged on the cloud's copy of this phone's segment;
+    /// the old phone shows report-only; the hidden compute alarms.
+    /// Positive control: offline, the same deck is 观察中 with no rows
+    /// beyond its own and no alarm.
+    func testThisPhonesSegmentOnlyInTheCloudIsJudgedAndAnotherCloudOnlySegmentIsNot() throws {
+        let here = UUID(), previousInstall = UUID(), oldPhone = UUID()
+        let current = FixWatchSegment(deviceModel: "iPhone19,2", osVersion: "27.0")
+        let mineBefore = try rig.viaCloud(segmentDaily(
+            model: "iPhone19,2", os: "27.0.1", install: previousInstall, dayKey: "2026-09-21",
+            startedAt: rig.clock, taps: "0 0 0 12 0 0 0 0", visible: 1))
+        let theirs = try rig.viaCloud(segmentDaily(
+            model: "iPhone16,2", os: "26.6", install: oldPhone, dayKey: "2026-09-20",
+            startedAt: rig.clock - 86_400, taps: "12 0 0 0 0 0 0 0", hidden: 1))
+        XCTAssertEqual(mineBefore.osVersion, "27.0.1", "rig: the wire keeps the point release")
+
+        let online = FixWatchAttention.observatory(localDailies: [], localWindows: [], cloud: [mineBefore, theirs],
+                                                   localInstall: here, sinceDayKey: qaWindowStart, currentSegment: current)
+        XCTAssertEqual(online.source, .cloud(devices: 2))
+        let touch = try card(FixObservationRegistry.touchDeliveryFixID, online.verdicts)
+        XCTAssertEqual(touch.state, .failing)
+        XCTAssertEqual(touch.readouts.map(\.measured), ["0/12 ≤ 40ms", "12/12 ≤ 120ms", "12/12 ≤ 40ms", "12/12 ≤ 120ms"])
+        XCTAssertEqual(touch.readouts.map(\.passing), [false, true, nil, nil])
+        XCTAssertEqual(touch.readouts[2].id, "iPhone16,2 · iOS 26 · tap lag p50")
+        XCTAssertEqual(touch.releaseDayCount, 1)
+        XCTAssertTrue(touch.notes.contains { $0.contains("合计 2 天") }, "\(touch.notes)")
+        let gate = try card(FixObservationRegistry.meTabGateFixID, online.verdicts)
+        XCTAssertTrue(gate.alarm, "a hidden compute on any phone is a regression")
+        XCTAssertEqual(try card(FixObservationRegistry.effortPathFixID, online.verdicts).state, .failing,
+                       "Entry 1 on the cloud's copy of this phone: lag 0/12 decided-failing dominates the empty commit")
+
+        let offline = FixWatchAttention.observatory(localDailies: [], localWindows: [], cloud: nil,
+                                                    localInstall: here, sinceDayKey: qaWindowStart, currentSegment: current)
+        XCTAssertEqual(offline.source, .localOnly)
+        let offTouch = try card(FixObservationRegistry.touchDeliveryFixID, offline.verdicts)
+        XCTAssertEqual(offTouch.state, .observing)
+        XCTAssertEqual(offTouch.readouts.count, 2)
+        XCTAssertFalse(offTouch.notes.contains { $0.contains("还没有 Release 数据") })
+        XCTAssertFalse(try card(FixObservationRegistry.meTabGateFixID, offline.verdicts).alarm)
     }
 }

@@ -842,6 +842,11 @@ final class TelemetryCloudPagerTests: XCTestCase {
 
 @MainActor
 final class TelemetryObservatoryMergeTests: XCTestCase {
+    /// `TelemetryFixtures.run` stamps every record with this model and OS,
+    /// so every deck test here but the segment one reads a single
+    /// population — the pre-segment pooling.
+    private let fixtureSegment = FixWatchSegment(deviceModel: "iPhone17,2", osVersion: "26.0")
+
     private var rig: ObservatoryRig!
 
     override func setUp() {
@@ -968,18 +973,18 @@ final class TelemetryObservatoryMergeTests: XCTestCase {
                                                dayKey: "2026-09-20"), revision: 1)
 
         let offline = FixWatchAttention.observatory(localDailies: [mine], localWindows: [], cloud: nil, localInstall: local,
-                                                    sinceDayKey: since)
+                                                    sinceDayKey: since, currentSegment: fixtureSegment)
         XCTAssertEqual(offline.source, .localOnly)
         XCTAssertEqual(meTabDays(offline.verdicts), 1)
-        XCTAssertEqual(offline.verdicts, FixWatchAttention.evaluate(dailies: [mine], windows: []),
+        XCTAssertEqual(offline.verdicts, FixWatchAttention.evaluate(dailies: [mine], windows: [], currentSegment: fixtureSegment),
                        "the fallback is exactly this device's evaluation")
 
         let empty = FixWatchAttention.observatory(localDailies: [mine], localWindows: [], cloud: [], localInstall: local,
-                                                  sinceDayKey: since)
+                                                  sinceDayKey: since, currentSegment: fixtureSegment)
         XCTAssertEqual(empty.source, .localOnly, "an empty cloud is not a source")
 
         let cloud = FixWatchAttention.observatory(localDailies: [mine], localWindows: [], cloud: [staleCopy, theirs],
-                                                  localInstall: local, sinceDayKey: since)
+                                                  localInstall: local, sinceDayKey: since, currentSegment: fixtureSegment)
         XCTAssertEqual(cloud.source, .cloud(devices: 2))
         XCTAssertEqual(meTabDays(cloud.verdicts), 2, "this phone's day once (not twice) plus the other phone's")
         XCTAssertEqual(FixWatchSource.localOnly.label, L(.fixWatchSourceLocal))
@@ -1045,7 +1050,7 @@ final class TelemetryObservatoryMergeTests: XCTestCase {
         let read = await FixWatchAttention.loadObservatory(
             local: (dailies: [boundary, tooOld], windows: []),
             readCloud: { await uploader.fetchObservatoryCloudRuns(sinceDayKey: $0) },
-            now: rig.clock, calendar: losAngeles, localInstall: local)
+            now: rig.clock, calendar: losAngeles, localInstall: local, currentSegment: fixtureSegment)
         XCTAssertEqual(reader.sinceDayKeys, ["2026-07-23"], "the cloud was asked from the window's first day")
         XCTAssertEqual(reader.spikeIDs.first, [FixObservationRegistry.residentDailySpikeID, FixObservationRegistry.effortPathFixID])
         XCTAssertEqual(read.source, .cloud(devices: 2))
@@ -1065,9 +1070,9 @@ final class TelemetryObservatoryMergeTests: XCTestCase {
         let mine = releaseDaily(install: local, startedAt: rig.clock, visible: 2)
         let old = releaseDaily(install: local, startedAt: rig.clock - 70 * 86_400, dayKey: "2026-07-13", visible: 40)
         let records = (dailies: [mine, old], windows: [SpikeRun]())
-        let expected = FixWatchAttention.evaluate(dailies: [mine], windows: [])
+        let expected = FixWatchAttention.evaluate(dailies: [mine], windows: [], currentSegment: fixtureSegment)
         XCTAssertEqual(meTabDays(expected), 1, "rig: this device has a release day in the window")
-        XCTAssertEqual(meTabVisible(FixWatchAttention.evaluate(dailies: [mine, old], windows: [])), "42",
+        XCTAssertEqual(meTabVisible(FixWatchAttention.evaluate(dailies: [mine, old], windows: [], currentSegment: fixtureSegment)), "42",
                        "liveness: the old day's counts do show wherever the whole pool is read")
         struct ReadFailed: Error {}
         let reads: [(label: String, read: (String) async throws -> [SpikeRun]?)] = [
@@ -1077,7 +1082,7 @@ final class TelemetryObservatoryMergeTests: XCTestCase {
         ]
         for (label, read) in reads {
             let deck = await FixWatchAttention.loadObservatory(local: records, readCloud: read, now: rig.clock,
-                                                               calendar: losAngeles, localInstall: local)
+                                                               calendar: losAngeles, localInstall: local, currentSegment: fixtureSegment)
             XCTAssertEqual(deck.source, .localOnly, label)
             XCTAssertEqual(deck.verdicts, expected, label)
             XCTAssertEqual(deck.verdicts.count, 3, "\(label): never an empty deck")
@@ -1087,7 +1092,7 @@ final class TelemetryObservatoryMergeTests: XCTestCase {
         let theirs = try viaCloud(releaseDaily(install: UUID(), startedAt: rig.clock - 86_400, dayKey: "2026-09-20", visible: 3),
                                   revision: 1)
         let merged = await FixWatchAttention.loadObservatory(local: records, readCloud: { _ in [theirs] }, now: rig.clock,
-                                                             calendar: losAngeles, localInstall: local)
+                                                             calendar: losAngeles, localInstall: local, currentSegment: fixtureSegment)
         XCTAssertEqual(merged.source, .cloud(devices: 2), "positive control: a readable cloud is merged")
         XCTAssertEqual(meTabDays(merged.verdicts), 2)
         XCTAssertEqual(meTabVisible(merged.verdicts), "5", "online too, the 70-day-old counts are out")
@@ -1104,16 +1109,103 @@ final class TelemetryObservatoryMergeTests: XCTestCase {
         XCTAssertEqual(theirsSameDay.dayKey, "2026-09-21", "rig: the cloud copy keeps its day")
 
         let oneDay = FixWatchAttention.observatory(localDailies: [mine, reminted], localWindows: [], cloud: [theirsSameDay],
-                                                   localInstall: local, sinceDayKey: since)
+                                                   localInstall: local, sinceDayKey: since, currentSegment: fixtureSegment)
         XCTAssertEqual(oneDay.source, .cloud(devices: 2), "liveness: both phones' records are in")
         XCTAssertEqual(meTabDays(oneDay.verdicts), 1, "three records, two phones, one day")
 
         let nextDay = try viaCloud(releaseDaily(install: otherPhone, startedAt: rig.clock - 86_400, dayKey: "2026-09-20"), revision: 1)
         let twoDays = FixWatchAttention.observatory(localDailies: [mine, reminted], localWindows: [],
-                                                    cloud: [theirsSameDay, nextDay], localInstall: local, sinceDayKey: since)
+                                                    cloud: [theirsSameDay, nextDay], localInstall: local, sinceDayKey: since, currentSegment: fixtureSegment)
         XCTAssertEqual(meTabDays(twoDays.verdicts), 2)
-        XCTAssertEqual(FixWatchVerdictEvaluator.evaluateTouchDelivery(dailies: [mine, reminted]).releaseDayCount, 1,
+        XCTAssertEqual(FixWatchVerdictEvaluator.evaluateTouchDelivery(dailies: [mine, reminted], currentSegment: fixtureSegment).releaseDayCount, 1,
                        "the same rule on this device alone")
+    }
+
+    /// A daily stamped with a phone model and OS — the two columns the
+    /// deck's segments are read from on a cloud row.
+    private func segmentDaily(model: String, os: String, install: UUID, dayKey: String, startedAt: Date,
+                              tapBuckets: String) -> SpikeRun {
+        var metrics = ResidentCounterSet().metrics
+        metrics[ResidentCounterSet.tapLagBucketsKey] = .string(tapBuckets)
+        var run = SpikeRun(
+            id: UUID(), spikeID: FixObservationRegistry.residentDailySpikeID,
+            scenarioID: FixObservationRegistry.residentDailyScenarioID, variantID: nil,
+            startedAt: startedAt, endedAt: startedAt.addingTimeInterval(60),
+            appVersion: "0.5.0", appBuild: "24", appCommit: nil,
+            deviceModel: model, osVersion: os,
+            timeZoneIdentifier: "America/Los_Angeles", localeIdentifier: "zh_CN",
+            buildConfiguration: "release", metrics: metrics, note: nil, outcome: .completed, abortReason: nil
+        )
+        run.installID = install
+        run.ownerUID = rig.uid
+        run.dayKey = dayKey
+        run.dayTZOffsetMin = -420
+        run.revision = 1
+        run.kind = .dailyRollup
+        return run
+    }
+
+    /// The deck's timing verdicts are this phone's segment, through the
+    /// cloud path too: the old phone's rows come back off the wire with
+    /// their own model and OS, land in their own segment, and show
+    /// report-only. Read as the old phone, the same merged set holds. The
+    /// segment reaches the evaluator through `observatory` AND
+    /// `loadObservatory`, online and in the no-cloud fallback.
+    /// Buckets (≤10, ≤20, ≤40, ≤80, ≤120, ≤320, >320, missing): this phone
+    /// 0/38 ≤40ms and 30/38 ≤120ms; the old phone 9/12 and 12/12.
+    func testCloudRowsLandInTheirOwnSegmentAndTheDeckJudgesThisPhones() async throws {
+        let here = UUID(), oldInstall = UUID()
+        let newPhone = FixWatchSegment(deviceModel: "iPhone19,2", osVersion: "27.0")
+        let oldPhone = FixWatchSegment(deviceModel: "iPhone16,2", osVersion: "26.6.1")
+        let mine = segmentDaily(model: "iPhone19,2", os: "27.0", install: here, dayKey: "2026-09-21",
+                                startedAt: rig.clock, tapBuckets: "0 0 0 10 20 8 0 0")
+        let theirs = try viaCloud(segmentDaily(model: "iPhone16,2", os: "26.6.1", install: oldInstall,
+                                               dayKey: "2026-09-20", startedAt: rig.clock - 86_400,
+                                               tapBuckets: "0 0 9 3 0 0 0 0"), revision: 1)
+        XCTAssertEqual(theirs.deviceModel, "iPhone16,2", "rig: the wire carries the model")
+        XCTAssertEqual(theirs.osVersion, "26.6.1", "rig: and the OS")
+
+        func touch(_ verdicts: [FixVerdict]) throws -> FixVerdict {
+            try XCTUnwrap(verdicts.first { $0.entryID == FixObservationRegistry.touchDeliveryFixID })
+        }
+
+        let onNew = FixWatchAttention.observatory(localDailies: [mine], localWindows: [], cloud: [theirs],
+                                                  localInstall: here, sinceDayKey: since, calendar: losAngeles,
+                                                  currentSegment: newPhone)
+        XCTAssertEqual(onNew.source, .cloud(devices: 2), "liveness: both phones' records are in")
+        XCTAssertEqual(try touch(onNew.verdicts).state, .failing)
+        XCTAssertEqual(try touch(onNew.verdicts).readouts.map(\.id), [
+            "tap lag p50", "tap lag p95", "iPhone16,2 · iOS 26 · tap lag p50", "iPhone16,2 · iOS 26 · tap lag p95",
+        ])
+        XCTAssertEqual(try touch(onNew.verdicts).readouts.map(\.measured),
+                       ["0/38 ≤ 40ms", "30/38 ≤ 120ms", "9/12 ≤ 40ms", "12/12 ≤ 120ms"])
+        XCTAssertEqual(try touch(onNew.verdicts).readouts.map(\.passing), [false, false, nil, nil])
+        XCTAssertEqual(try touch(onNew.verdicts).releaseDayCount, 1)
+
+        let onOld = FixWatchAttention.observatory(localDailies: [mine], localWindows: [], cloud: [theirs],
+                                                  localInstall: here, sinceDayKey: since, calendar: losAngeles,
+                                                  currentSegment: oldPhone)
+        XCTAssertEqual(try touch(onOld.verdicts).state, .holding)
+        XCTAssertEqual(try touch(onOld.verdicts).readouts.map(\.measured),
+                       ["9/12 ≤ 40ms", "12/12 ≤ 120ms", "0/38 ≤ 40ms", "30/38 ≤ 120ms"])
+        XCTAssertEqual(try touch(onOld.verdicts).readouts.map(\.passing), [true, true, nil, nil])
+
+        let loaded = await FixWatchAttention.loadObservatory(
+            local: (dailies: [mine], windows: []), readCloud: { _ in [theirs] },
+            now: rig.clock, calendar: losAngeles, localInstall: here, currentSegment: oldPhone)
+        XCTAssertEqual(loaded.verdicts, onOld.verdicts, "loadObservatory hands the segment on")
+
+        let offline = await FixWatchAttention.loadObservatory(
+            local: (dailies: [mine], windows: []), readCloud: { _ in nil },
+            now: rig.clock, calendar: losAngeles, localInstall: here, currentSegment: newPhone)
+        XCTAssertEqual(offline.source, .localOnly)
+        XCTAssertEqual(try touch(offline.verdicts).readouts.map(\.measured), ["0/38 ≤ 40ms", "30/38 ≤ 120ms"],
+                       "offline: this phone's own records only, still judged")
+        let offlineAsOld = await FixWatchAttention.loadObservatory(
+            local: (dailies: [mine], windows: []), readCloud: { _ in nil },
+            now: rig.clock, calendar: losAngeles, localInstall: here, currentSegment: oldPhone)
+        XCTAssertEqual(try touch(offlineAsOld.verdicts).state, .observing,
+                       "the fallback path judges the segment it is handed, not the records' own")
     }
 }
 
