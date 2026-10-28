@@ -684,16 +684,17 @@ enum FixObservationRegistry {
 // MARK: - Segments (pure)
 
 /// The population a Release record's TIMING belongs to: the phone model
-/// and the OS major version it was recorded on. Delivery lag and commit
-/// time are properties of the hardware and the OS's touch pipeline as much
-/// as of the app, so two phones' records pooled into one percentile read
-/// as a fix regressing when the phone changed. Counter checks (tripwires,
-/// liveness) do not care which phone counted, and stay pooled.
+/// plus the OS major version it was recorded on. Delivery lag and commit
+/// time depend on the hardware and the OS's touch pipeline as well as on
+/// the app, so records from different phones or OS versions pooled into one
+/// percentile mix populations, and a change of phone or OS can read as the
+/// fix regressing. Counter checks (tripwires, liveness) do not care which
+/// phone counted, and stay pooled.
 ///
-/// The major version, not the full string: the tap sample grows slowly,
-/// so restarting it at every point release would keep it under its floor,
-/// and the measured shift was between majors. A version whose leading component is not a plain
-/// integer keeps its whole string, so it never merges with a parsed one.
+/// The OS major, not the full version string, because the tap sample grows
+/// slowly: restarting it at every point release would keep it under its
+/// floor. A version whose leading component is not a plain integer keeps
+/// its whole string, so it never merges with a parsed one.
 struct FixWatchSegment: Hashable {
     enum OS: Hashable {
         case major(Int)
@@ -1038,8 +1039,10 @@ enum FixWatchVerdictEvaluator {
             allSegmentDayCount: distinctDayCount(releaseDailies)
         )
         notes.append("残余 settle storm(664–1009ms)未宣称修复,仅展示,不参与判定")
-        if cleanWindows.count < releaseWindows.count {
-            notes.append("\(releaseWindows.count - cleanWindows.count) 个窗口因外部写入污染被排除")
+        // This phone's segment only, like every number the note sits under;
+        // other segments' rows exclude theirs too, without a count.
+        if currentCleanWindows.count < currentWindows.count {
+            notes.append("\(currentWindows.count - currentCleanWindows.count) 个窗口因外部写入污染被排除")
         }
 
         return FixVerdict(

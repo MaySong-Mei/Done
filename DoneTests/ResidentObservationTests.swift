@@ -2006,6 +2006,36 @@ final class FixWatchSegmentTests: XCTestCase {
                        "0/10 ≤ 40ms")
         XCTAssertEqual(touch.nonReleaseCount, 1)
     }
+
+    /// The contamination note sits under this phone's numbers, so it counts
+    /// this phone's contaminated windows only: one here, against two on the
+    /// old phone. Read as a phone with none of its own contaminated, the
+    /// card carries no note at all.
+    func testTheContaminationNoteCountsThisPhonesWindowsOnly() throws {
+        func dirty(_ model: String, _ os: String, day: Int) -> SpikeRun {
+            var run = window(model: model, os: os, day: day, commitMs: Array(repeating: 30, count: 20),
+                             frameAfterCommitMs: [700])
+            run.metrics["wContaminated"] = .bool(true)
+            return run
+        }
+        let records = usersRecords()
+        let windows = records.windows + [
+            dirty("iPhone16,2", "26.6.1", day: 9), dirty("iPhone16,2", "26.6.1", day: 10),
+            dirty("iPhone19,2", "27.0", day: 22),
+        ]
+        let onNew = FixWatchVerdictEvaluator.evaluateEffortPath(dailies: records.dailies, windows: windows,
+                                                                currentSegment: newPhone)
+        XCTAssertEqual(onNew.notes.filter { $0.contains("污染") }, ["1 个窗口因外部写入污染被排除"])
+
+        let onOld = FixWatchVerdictEvaluator.evaluateEffortPath(dailies: records.dailies, windows: windows,
+                                                                currentSegment: oldPhone)
+        XCTAssertEqual(onOld.notes.filter { $0.contains("污染") }, ["2 个窗口因外部写入污染被排除"])
+
+        let clean = FixWatchVerdictEvaluator.evaluateEffortPath(
+            dailies: records.dailies, windows: records.windows + [dirty("iPhone16,2", "26.6.1", day: 9)],
+            currentSegment: newPhone)
+        XCTAssertFalse(clean.notes.contains { $0.contains("污染") }, "\(clean.notes)")
+    }
 }
 
 // MARK: - Rest-state cost pin (blueprint T1)
@@ -2544,8 +2574,8 @@ final class FixWatchSegmentIndependentQATests: XCTestCase {
 
     /// Contaminated windows stay out of EVERY segment's numbers: the other
     /// phone's 20 contaminated taps at 30ms must not lift its 5 clean ones
-    /// over the floor. The exclusion note counts both phones' contaminated
-    /// windows (2) — it is a count over the card, like before the split.
+    /// over the floor. The exclusion note counts this phone's contaminated
+    /// windows only (1) — the segment the card's numbers are read from.
     func testContaminatedWindowsStayOutOfOtherSegmentsToo() throws {
         let windows = [
             window("iPhone16,2", "26.6", day: 3, commitMs: Array(repeating: 30, count: 20), contaminated: true),
@@ -2565,7 +2595,7 @@ final class FixWatchSegmentIndependentQATests: XCTestCase {
         XCTAssertTrue(effort.readouts.contains(FixMetricReadout(
             id: "iPhone16,2 · iOS 26 · settle: first frame after commit", measured: "p50 900ms · max 900ms (n=1)",
             threshold: "report-only", passing: nil)))
-        XCTAssertTrue(effort.notes.contains("2 个窗口因外部写入污染被排除"), "\(effort.notes)")
+        XCTAssertTrue(effort.notes.contains("1 个窗口因外部写入污染被排除"), "\(effort.notes)")
     }
 
     // MARK: Counters pool
