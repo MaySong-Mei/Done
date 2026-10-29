@@ -42,6 +42,8 @@ struct FixWatchView: View {
     /// device only.
     @Environment(\.telemetryUploader) private var telemetryUploader
     @State private var isPresentingTelemetrySample = false
+    /// perf batch 2a: the follower timing readout — report-only, this device.
+    @State private var followerSummary: FollowerReport.Summary?
 
     var body: some View {
         settingsPage("观察站") {
@@ -60,6 +62,10 @@ struct FixWatchView: View {
 
             ForEach(FixObservationRegistry.all) { entry in
                 fixCard(entry)
+            }
+
+            if let followerSummary {
+                followerCard(followerSummary)
             }
 
             settingsCard("Manual Spikes") {
@@ -215,6 +221,71 @@ struct FixWatchView: View {
         .opacity(entry.lifecycle == .retired ? 0.55 : 1)
     }
 
+    // MARK: Followers (perf batch 2a, report-only)
+
+    /// Main-thread work that ran because a store changed, attributed per
+    /// follower. Never a verdict: no badge, no threshold, no colour.
+    @ViewBuilder
+    private func followerCard(_ summary: FollowerReport.Summary) -> some View {
+        settingsCard("Followers · report-only") {
+            Text("提交之后主线程上跟着跑的工作:同步、日历缓存重建、备份快照、colorDepth 镜像、小组件 / 手表投影、图片扫描。只展示,永不参与判定;本机数据。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if summary.windowCount == 0 && summary.todayRows.isEmpty {
+                Text("还没有数据")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            if summary.windowCount > 0 {
+                Text(followerWindowHeadline(summary))
+                    .font(.caption.weight(.semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(summary.windowRows.prefix(8)) { row in
+                    followerRow(row)
+                }
+            }
+            if !summary.todayRows.isEmpty {
+                Text("今天(前台)")
+                    .font(.caption.weight(.semibold))
+                ForEach(summary.todayRows.prefix(8)) { row in
+                    followerRow(row)
+                }
+            }
+        }
+    }
+
+    private func followerWindowHeadline(_ summary: FollowerReport.Summary) -> String {
+        var line = "最近 \(summary.windowCount) 个自动窗口"
+        if let largest = summary.largestFrameMs {
+            line += String(format: " · 最大帧 %.0fms", largest)
+        }
+        if let inFrames = summary.inLargestFramesMs {
+            line += String(format: " · 各窗口最大帧内跟随者合计 %.0fms", inFrames)
+        }
+        return line
+    }
+
+    private func followerRow(_ row: FollowerReport.Row) -> some View {
+        var value = String(format: "%.1fms / %d 次 · 最长 %.1fms", row.totalMs, row.runs, row.maxMs)
+        if let inMax = row.inMaxFrameMs {
+            value += String(format: " · 最大帧内 %.1fms", inMax)
+        }
+        return ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top) {
+                Text(row.id).font(.caption.monospaced())
+                Spacer(minLength: 8)
+                Text(value).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.trailing)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(row.id).font(.caption.monospaced())
+                Text(value).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+        }
+    }
+
     private func stateBadge(_ verdict: FixVerdict) -> some View {
         let (label, color): (String, Color) = {
             switch verdict.state {
@@ -284,6 +355,7 @@ struct FixWatchView: View {
             sinceDayKey: FixWatchAttention.observatorySinceDayKey(now: now), currentSegment: segment)
         verdicts = firstPaint.verdicts
         source = firstPaint.source
+        followerSummary = FixWatchAttention.followerSummary(local: local, now: now)
         storageBytes = spikeRunsDirectoryBytes()
         guard let telemetryUploader else { return }
         Task {
@@ -407,6 +479,22 @@ enum FixWatchAttention {
                                                               localInstall: localInstall)
         return (evaluate(dailies: dailies, windows: windows, currentSegment: currentSegment),
                 .cloud(devices: max(installs, 1)))
+    }
+
+    /// perf batch 2a: the follower readout over this device's records — the
+    /// windows inside the deck's window and today's daily line (the latest
+    /// one for today when the day has several). Report-only; no verdict
+    /// reads it.
+    static func followerSummary(
+        local: (dailies: [SpikeRun], windows: [SpikeRun]), now: Date, calendar: Calendar = .current
+    ) -> FollowerReport.Summary {
+        let since = observatorySinceDayKey(now: now, calendar: calendar)
+        let today = TelemetryClaimKey.dayKey(forDayStart: calendar.startOfDay(for: now), calendar: calendar).dayKey
+        let windows = local.windows.filter { FixWatchVerdictEvaluator.dayKey(of: $0, calendar: calendar) >= since }
+        let todays = local.dailies
+            .filter { FixWatchVerdictEvaluator.dayKey(of: $0, calendar: calendar) == today }
+            .max { ($0.endedAt ?? $0.startedAt) < ($1.endedAt ?? $1.startedAt) }
+        return FollowerReport.summarize(windows: windows, today: todays)
     }
 
     /// The settings row's indicator: this device's records only — the deck

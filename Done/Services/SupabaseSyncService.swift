@@ -2271,17 +2271,24 @@ final class SupabaseSyncService: ObservableObject {
             return
         }
 
+        // Follower probe (perf batch 2a): three main-thread spans per flush —
+        // the hashing, the baseline work before the sends, the baseline work
+        // after them. The awaits in between are never inside a span.
+        let follower = FollowerSyncTable(baselineTable: table)
         var current: [String: PushRow] = [:]
-        for row in rows {
-            guard let id = row["id"] as? String else { continue }
-            let sent = Self.withholding(withheld, from: row)
-            current[id] = PushRow(
-                key: SyncBaselineKey(table: table, id: id),
-                row: sent,
-                payload: .rowHash(Self.rowHash(sent))
-            )
+        FollowerTiming.measure(follower.hash) {
+            for row in rows {
+                guard let id = row["id"] as? String else { continue }
+                let sent = Self.withholding(withheld, from: row)
+                current[id] = PushRow(
+                    key: SyncBaselineKey(table: table, id: id),
+                    row: sent,
+                    payload: .rowHash(Self.rowHash(sent))
+                )
+            }
         }
 
+        let baselineSpan = FollowerTiming.begin()
         // A row that left the local array while awaiting its echo still has
         // its `?` baseline entry (survey S4, gap G23), so the delete below
         // reaches it; only the echo bookkeeping lets go of it here.
@@ -2362,6 +2369,7 @@ final class SupabaseSyncService: ObservableObject {
             return marked
         }
         baseline.persist()
+        FollowerTiming.end(follower.baseline, baselineSpan)
 
         await sendTombstones(serverTable: serverTable, table: table, ids: toTombstone, individually: false, tally: tally)
         if !tally.accountMissing, !tally.gateStopped {
@@ -2370,9 +2378,11 @@ final class SupabaseSyncService: ObservableObject {
         if !tally.accountMissing, !tally.gateStopped {
             await sendInserts(serverTable: serverTable, keyColumn: "id", items: posts, tally: tally)
         }
-        baseline.persist()
-        settleGate(tally, table: table)
-        oweFlushAfterFailure(tally, table: table)
+        FollowerTiming.measure(follower.baseline) {
+            baseline.persist()
+            settleGate(tally, table: table)
+            oweFlushAfterFailure(tally, table: table)
+        }
 
         if tally.failed == 0, tally.rejected == 0 {
             logger.info("\(table, privacy: .public): \(tally.succeeded, privacy: .public) pushed, \(tally.deletes, privacy: .public) tombstoned, \(tally.stale, privacy: .public) pending verify, \(tally.awaitingEcho, privacy: .public) awaiting echo, \(tally.superseded, privacy: .public) settled by a pull (of \(rows.count, privacy: .public) total)")
@@ -2392,13 +2402,17 @@ final class SupabaseSyncService: ObservableObject {
     /// The baseline follows king's rule — the hash as sent, no seq — and the
     /// `?` written before the send keeps a failed row dirty.
     private func pushTableFallback(serverTable: String, table: String, rows: [[String: Any]], withheld: Set<String>) async {
+        let follower = FollowerSyncTable(baselineTable: table)
         let previous = baseline.entries(table: table)
         var current: [String: PushRow] = [:]
-        for row in rows {
-            guard let id = row["id"] as? String else { continue }
-            let sent = Self.withholding(withheld, from: row)
-            current[id] = PushRow(key: SyncBaselineKey(table: table, id: id), row: sent, payload: .rowHash(Self.rowHash(sent)))
+        FollowerTiming.measure(follower.hash) {
+            for row in rows {
+                guard let id = row["id"] as? String else { continue }
+                let sent = Self.withholding(withheld, from: row)
+                current[id] = PushRow(key: SyncBaselineKey(table: table, id: id), row: sent, payload: .rowHash(Self.rowHash(sent)))
+            }
         }
+        let baselineSpan = FollowerTiming.begin()
         let tally = FlushTally()
         let deletedIds = Set(previous.keys).subtracting(current.keys).filter { !undoHold.isHeld($0) }
         pruneRejected(table: table, live: Set(current.keys), deleted: deletedIds)
@@ -2415,13 +2429,16 @@ final class SupabaseSyncService: ObservableObject {
             upserts.append(marked)
         }
         baseline.persist()
+        FollowerTiming.end(follower.baseline, baselineSpan)
 
         await sendPhysicalDeletes(serverTable: serverTable, table: table, ids: toDelete, individually: false, tally: tally)
         if !tally.accountMissing {
             await sendUpserts(serverTable: serverTable, keyColumn: "id", items: upserts, individually: false, tally: tally)
         }
-        baseline.persist()
-        oweFlushAfterFailure(tally, table: table)
+        FollowerTiming.measure(follower.baseline) {
+            baseline.persist()
+            oweFlushAfterFailure(tally, table: table)
+        }
         if tally.failed == 0, tally.rejected == 0 {
             logger.info("\(table, privacy: .public): fallback \(tally.succeeded, privacy: .public) upserted, \(tally.deletes, privacy: .public) deleted (of \(rows.count, privacy: .public) total)")
             statusReporter?.structuredRecord(table: table, upserts: tally.succeeded, deletes: tally.deletes)
@@ -3128,11 +3145,15 @@ final class SupabaseSyncService: ObservableObject {
     func syncSettings() async {
         guard flushGate("user_settings") else { return }
         guard !Self.settingsExportSuppressed(defaults) else { return }
+        // Follower probe (perf batch 2a): the settings row and its per-key
+        // hashes, which every UserDefaults write re-arms (5 s debounce).
+        let span = FollowerTiming.begin()
         let local = SyncedSettings.currentSnapshot(defaults)
         let base = baseline.settings
         let blob = Self.settingsBlobForUpload(local: local, serverZone: base?.zone)
         let sentKeys = Self.settingsKeyHashes(blob)
         let row = settingsRow(blob)
+        FollowerTiming.end(.syncSettings, span)
 
         switch base {
         case .versioned(let seq, let keys, _):
@@ -3495,8 +3516,14 @@ final class SupabaseSyncService: ObservableObject {
     func syncEvents(_ events: [Event], kind: String) async {
         guard !exportSuppressed(kind == "todo" ? .events : .calendarEvents,
                                 table: "events(\(kind))") else { return }
-        let rows = events.map { e in eventToRow(e, kind: kind) }
-        await pushTable(serverTable: "events", table: Self.eventsBaselineTable(kind: kind), rows: rows)
+        let table = Self.eventsBaselineTable(kind: kind)
+        // Follower probe (perf batch 2a): building the rows is its own span;
+        // `pushTable` times the hashing and the baseline work around the
+        // network awaits.
+        let rows = FollowerTiming.measure(FollowerSyncTable(baselineTable: table).build) {
+            events.map { e in eventToRow(e, kind: kind) }
+        }
+        await pushTable(serverTable: "events", table: table, rows: rows)
     }
 
     nonisolated(unsafe) private static let isoFormatter: ISO8601DateFormatter = {
@@ -3644,7 +3671,7 @@ final class SupabaseSyncService: ObservableObject {
 
     func syncLogs(_ logs: [CalendarEventLogRecord]) async {
         guard !exportSuppressed(.calendarEventLogRecords, table: "event_logs") else { return }
-        let rows = logs.map { logToRow($0) }
+        let rows = FollowerTiming.measure(.syncLogsBuild) { logs.map { logToRow($0) } }
         await pushTable(serverTable: "event_logs", table: "event_logs", rows: rows)
     }
 
@@ -3692,7 +3719,7 @@ final class SupabaseSyncService: ObservableObject {
 
     func syncFeedback(_ records: [CalendarEventFeedbackRecord]) async {
         guard !exportSuppressed(.calendarEventFeedbackRecords, table: "event_feedback") else { return }
-        let rows = records.map(feedbackToRow)
+        let rows = FollowerTiming.measure(.syncFeedbackBuild) { records.map(feedbackToRow) }
         await pushTable(serverTable: "event_feedback", table: "event_feedback", rows: rows)
     }
 
@@ -3726,7 +3753,7 @@ final class SupabaseSyncService: ObservableObject {
 
     func syncTodoLists(_ lists: [TodoList]) async {
         guard !exportSuppressed(.todoLists, table: "todo_lists") else { return }
-        let rows = lists.map(todoListToRow)
+        let rows = FollowerTiming.measure(.syncOtherBuild) { lists.map(todoListToRow) }
         await pushTable(serverTable: "todo_lists", table: "todo_lists", rows: rows)
     }
 
@@ -3749,7 +3776,7 @@ final class SupabaseSyncService: ObservableObject {
         // Seeds that go to the cloud are written down first, so the next
         // launch serves them under the ids the cloud holds.
         attachedEventTypeStore?.catalog.commitServedFallback()
-        let rows = templates.map(eventTypeToRow)
+        let rows = FollowerTiming.measure(.syncOtherBuild) { templates.map(eventTypeToRow) }
         await pushTable(serverTable: "event_types", table: "event_types", rows: rows)
     }
 
@@ -3767,7 +3794,7 @@ final class SupabaseSyncService: ObservableObject {
     // MARK: - Sync: Skills
 
     func syncSkills(_ insights: [SkillInsight]) async {
-        let rows = insights.map(skillToRow)
+        let rows = FollowerTiming.measure(.syncOtherBuild) { insights.map(skillToRow) }
         await pushTable(serverTable: "skill_insights", table: "skill_insights", rows: rows)
     }
 

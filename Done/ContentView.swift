@@ -139,7 +139,6 @@ struct ContentView: View {
     /// after a background-cancel, the remaining backlog waits for the next
     /// app launch rather than restarting (and re-spending) on re-foreground.
     @State private var skillAnalysisTask: Task<Void, Never>?
-    @State private var tokenInferenceCoordinator: TokenInferenceCoordinator?
     @State private var selectedTab: RootTab = .calendar
     @State private var isPresentingRestoreSheet = false
     /// Design §10.7: the account was erased on another device (a terminal
@@ -303,9 +302,10 @@ struct ContentView: View {
                 service = SkillAnalysisService(insightStore: skillInsightStore)
                 skillAnalysisService = service
             }
-            if tokenInferenceCoordinator == nil {
-                tokenInferenceCoordinator = TokenInferenceCoordinator(store: store)
-            }
+            // gh#282: token inference is switched off (user decision
+            // 2026-10-29). No `TokenInferenceCoordinator` is created, so a
+            // calendar record, log or feedback change no longer runs a
+            // predict / reconcile / bootstrap pass on the main actor.
             store.onCalendarEventRecordCompleted = { event in
                 Task { await service.analyzeEvent(event) }
             }

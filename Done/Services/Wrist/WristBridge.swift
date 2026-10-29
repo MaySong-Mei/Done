@@ -223,6 +223,14 @@ final class WristBridge: NSObject {
     func pushSnapshot() {
         guard let store, let templates else { return }
         guard let transport, transport.isReadyForSnapshot else { return }
+        // Follower probe (perf batch 2a): the watch projection runs 400 ms
+        // after every calendar change while a watch is paired.
+        FollowerTiming.measure(.wristSnapshot) {
+            pushSnapshotMeasured(store: store, templates: templates, transport: transport)
+        }
+    }
+
+    private func pushSnapshotMeasured(store: EventStore, templates: EventTypeTemplateStore, transport: WristSessionTransport) {
         let now = self.now()
         let full = WristSnapshotBuilder.snapshot(
             events: store.canvasRenderableCalendarEvents,

@@ -483,10 +483,16 @@ final class ImageBackupCoordinator: ObservableObject {
         // Pre-scan: count work so we can decide whether to surface activity.
         // Cheap relative to the actual upload; avoids spinner flicker on
         // scans that find nothing to do.
-        let candidateCount = Self.countUploadCandidates(
-            eventStore: eventStore,
-            suppressedObjectKeys: attemptedObjectKeys.union(confirmedUploadedObjectKeys)
-        )
+        //
+        // Follower probe (perf batch 2a): this walk over every event and log
+        // runs 5 s after any event change. The upload loops below await per
+        // image and are not measured.
+        let candidateCount = FollowerTiming.measure(.imageScan) {
+            Self.countUploadCandidates(
+                eventStore: eventStore,
+                suppressedObjectKeys: attemptedObjectKeys.union(confirmedUploadedObjectKeys)
+            )
+        }
         // Two independent gates can disable uploads:
         //  1. DEBUG safety net (compile-time) — simulator/dev builds never write
         //  2. User toggle (`syncUploadsEnabled`) — Release users opt-in per device

@@ -448,7 +448,8 @@ final class TelemetryWireConformanceTests: XCTestCase {
         let daily = try XCTUnwrap(rows[0]["metrics"] as? [String: Any])
         let dailyRegistered = Set((bySpike[FixObservationRegistry.residentDailySpikeID] ?? []).map(\.key))
         XCTAssertEqual(Set(daily.keys), dailyRegistered, "resident-daily keys: client vs registry, both directions")
-        XCTAssertEqual(Set(daily.keys), Set(ResidentCounterSet().metrics.keys), "and the writer emits every one")
+        XCTAssertEqual(Set(daily.keys), Set(ResidentCounterSet().metrics.keys).union(FollowerStatTable.dailyKeys),
+                       "and the writer emits every one: the counters and the follower probe's day keys (perf batch 2a)")
 
         let window = try XCTUnwrap(rows[1]["metrics"] as? [String: Any])
         let windowRegistered = Set((bySpike[FixObservationRegistry.effortPathFixID] ?? []).map(\.key))

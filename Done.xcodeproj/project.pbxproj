@@ -246,6 +246,7 @@
 		F0C51001FE00000000000001 /* OrientationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50001FE00000000000001 /* OrientationManager.swift */; };
 		FA57000000000000000B0001 /* SpikeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0001 /* SpikeModel.swift */; };
 		FA57000000000000000B0009 /* ResidentObservationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0009 /* ResidentObservationModel.swift */; };
+		FTIM10013000000000000001 /* FollowerTiming.swift in Sources */ = {isa = PBXBuildFile; fileRef = FTIM00013000000000000001 /* FollowerTiming.swift */; };
 		FA57000000000000000B0010 /* ResidentObservationCenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0010 /* ResidentObservationCenter.swift */; };
 		TELE10012FE8000000000001 /* TelemetryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = TELE00012FE8000000000001 /* TelemetryModel.swift */; };
 		TELE10012FE8000000000002 /* TelemetryUploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = TELE00012FE8000000000002 /* TelemetryUploader.swift */; };
@@ -369,6 +370,10 @@
 		SSTT10012FE8000000000262 /* SyncSingletonTombstoneTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSTT00012FE8000000000262 /* SyncSingletonTombstoneTests.swift */; };
 		CSHT10012FE8000000000262 /* ConflictShelfTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSHT00012FE8000000000262 /* ConflictShelfTests.swift */; };
 		SRBT10012FE8000000000261 /* SyncRestoreBaselineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRBT00012FE8000000000261 /* SyncRestoreBaselineTests.swift */; };
+		FPIT10013000000000000001 /* FollowerProbeIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FPIT00013000000000000001 /* FollowerProbeIntegrationTests.swift */; };
+		FTMT10013000000000000001 /* FollowerTimingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FTMT00013000000000000001 /* FollowerTimingTests.swift */; };
+		TIOF10013000000000000001 /* TokenInferenceOffTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TIOF00013000000000000001 /* TokenInferenceOffTests.swift */; };
+		QAPB201130000000000000A1 /* PerfBatch2QATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QAPB200130000000000000A1 /* PerfBatch2QATests.swift */; };
 		QPB110013000000000000001 /* PerfBatch1QATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QPB100013000000000000001 /* PerfBatch1QATests.swift */; };
 		SOCT10013000000000000305 /* SettingsOrphanCleanupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SOCT00013000000000000305 /* SettingsOrphanCleanupTests.swift */; };
 		CSFP10013000000000000303 /* ConflictShelfSkipTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSFP00013000000000000303 /* ConflictShelfSkipTests.swift */; };
@@ -707,6 +712,7 @@
 		F0C50001FE00000000000001 /* OrientationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrientationManager.swift; sourceTree = "<group>"; };
 		FA57000000000000000A0001 /* SpikeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeModel.swift; sourceTree = "<group>"; };
 		FA57000000000000000A0009 /* ResidentObservationModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResidentObservationModel.swift; sourceTree = "<group>"; };
+		FTIM00013000000000000001 /* FollowerTiming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowerTiming.swift; sourceTree = "<group>"; };
 		FA57000000000000000A0010 /* ResidentObservationCenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResidentObservationCenter.swift; sourceTree = "<group>"; };
 		TELE00012FE8000000000001 /* TelemetryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryModel.swift; sourceTree = "<group>"; };
 		TELE00012FE8000000000002 /* TelemetryUploader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryUploader.swift; sourceTree = "<group>"; };
@@ -830,6 +836,10 @@
 		SSTT00012FE8000000000262 /* SyncSingletonTombstoneTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSingletonTombstoneTests.swift; sourceTree = "<group>"; };
 		CSHT00012FE8000000000262 /* ConflictShelfTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConflictShelfTests.swift; sourceTree = "<group>"; };
 		SRBT00012FE8000000000261 /* SyncRestoreBaselineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRestoreBaselineTests.swift; sourceTree = "<group>"; };
+		FPIT00013000000000000001 /* FollowerProbeIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowerProbeIntegrationTests.swift; sourceTree = "<group>"; };
+		FTMT00013000000000000001 /* FollowerTimingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowerTimingTests.swift; sourceTree = "<group>"; };
+		TIOF00013000000000000001 /* TokenInferenceOffTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TokenInferenceOffTests.swift; sourceTree = "<group>"; };
+		QAPB200130000000000000A1 /* PerfBatch2QATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerfBatch2QATests.swift; sourceTree = "<group>"; };
 		QPB100013000000000000001 /* PerfBatch1QATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerfBatch1QATests.swift; sourceTree = "<group>"; };
 		SOCT00013000000000000305 /* SettingsOrphanCleanupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsOrphanCleanupTests.swift; sourceTree = "<group>"; };
 		CSFP00013000000000000303 /* ConflictShelfSkipTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConflictShelfSkipTests.swift; sourceTree = "<group>"; };
@@ -1066,6 +1076,10 @@
 				ACEN00012FE8000000000262 /* AgentConversationEncodingTests.swift */,
 				SCGT00012FE8000000000261 /* SyncCursorGenerationTests.swift */,
 				SRBT00012FE8000000000261 /* SyncRestoreBaselineTests.swift */,
+				FPIT00013000000000000001 /* FollowerProbeIntegrationTests.swift */,
+				FTMT00013000000000000001 /* FollowerTimingTests.swift */,
+				TIOF00013000000000000001 /* TokenInferenceOffTests.swift */,
+				QAPB200130000000000000A1 /* PerfBatch2QATests.swift */,
 				QPB100013000000000000001 /* PerfBatch1QATests.swift */,
 				SOCT00013000000000000305 /* SettingsOrphanCleanupTests.swift */,
 				CSFP00013000000000000303 /* ConflictShelfSkipTests.swift */,
@@ -1208,6 +1222,7 @@
 				F0C50001FE00000000000001 /* OrientationManager.swift */,
 				FA57000000000000000A0001 /* SpikeModel.swift */,
 				FA57000000000000000A0009 /* ResidentObservationModel.swift */,
+				FTIM00013000000000000001 /* FollowerTiming.swift */,
 				TELE00012FE8000000000001 /* TelemetryModel.swift */,
 				L10N00000000000000000001 /* AppLocalization.swift */,
 			);
@@ -1787,6 +1802,7 @@
 				F0C51001FE00000000000001 /* OrientationManager.swift in Sources */,
 				FA57000000000000000B0001 /* SpikeModel.swift in Sources */,
 				FA57000000000000000B0009 /* ResidentObservationModel.swift in Sources */,
+				FTIM10013000000000000001 /* FollowerTiming.swift in Sources */,
 				FA57000000000000000B0010 /* ResidentObservationCenter.swift in Sources */,
 				TELE10012FE8000000000001 /* TelemetryModel.swift in Sources */,
 				TELE10012FE8000000000002 /* TelemetryUploader.swift in Sources */,
@@ -1833,6 +1849,10 @@
 				ACEN10012FE8000000000262 /* AgentConversationEncodingTests.swift in Sources */,
 				SCGT10012FE8000000000261 /* SyncCursorGenerationTests.swift in Sources */,
 				SRBT10012FE8000000000261 /* SyncRestoreBaselineTests.swift in Sources */,
+				FPIT10013000000000000001 /* FollowerProbeIntegrationTests.swift in Sources */,
+				FTMT10013000000000000001 /* FollowerTimingTests.swift in Sources */,
+				TIOF10013000000000000001 /* TokenInferenceOffTests.swift in Sources */,
+				QAPB201130000000000000A1 /* PerfBatch2QATests.swift in Sources */,
 				QPB110013000000000000001 /* PerfBatch1QATests.swift in Sources */,
 				SOCT10013000000000000305 /* SettingsOrphanCleanupTests.swift in Sources */,
 				CSFP10013000000000000303 /* ConflictShelfSkipTests.swift in Sources */,

@@ -1671,20 +1671,25 @@ final class EventStore: ObservableObject {
         colorDepthMirrorDebounceTask?.cancel()
         colorDepthMirrorDebounceTask = nil
         guard !pendingColorDepthMirror.isEmpty else { return }
-        let pending = pendingColorDepthMirror
-        pendingColorDepthMirror = [:]
-        var didChange = false
-        for (eventID, colorDepth) in pending {
-            // Resolved at FLUSH time, not at schedule time: the event may
-            // have been deleted, or another path may have moved its
-            // colorDepth, in the window.
-            guard let index = calendarEventIndex(id: eventID) else { continue }
-            guard abs(rawCalendarEvents[index].colorDepth - colorDepth) > 0.0001 else { continue }
-            rawCalendarEvents[index].colorDepth = colorDepth
-            didChange = true
+        // Follower probe (perf batch 2a): the mirror lands 250 ms after an
+        // effort commit; its span includes the calendar commit it makes and
+        // the synchronous half of the publish that commit causes.
+        FollowerTiming.measure(.colorDepthMirror) {
+            let pending = pendingColorDepthMirror
+            pendingColorDepthMirror = [:]
+            var didChange = false
+            for (eventID, colorDepth) in pending {
+                // Resolved at FLUSH time, not at schedule time: the event may
+                // have been deleted, or another path may have moved its
+                // colorDepth, in the window.
+                guard let index = calendarEventIndex(id: eventID) else { continue }
+                guard abs(rawCalendarEvents[index].colorDepth - colorDepth) > 0.0001 else { continue }
+                rawCalendarEvents[index].colorDepth = colorDepth
+                didChange = true
+            }
+            guard didChange else { return }
+            _ = saveCalendarEvents(refreshInterrupts: false)
         }
-        guard didChange else { return }
-        _ = saveCalendarEvents(refreshInterrupts: false)
     }
 
     // MARK: - Log-record commit debounce (gh#219 note typing)
@@ -1863,6 +1868,14 @@ final class EventStore: ObservableObject {
     /// group already holds, and keep the app running until the build lands
     /// and writes the stats.
     private func syncWidgetSnapshots(deferringStats: Bool = false) {
+        // Follower probe (perf batch 2a): the widget projection runs 250 ms
+        // after every calendar commit.
+        FollowerTiming.measure(.widgetSnapshot) {
+            syncWidgetSnapshotsMeasured(deferringStats: deferringStats)
+        }
+    }
+
+    private func syncWidgetSnapshotsMeasured(deferringStats: Bool) {
         // `Calendar.current`, NOT `CalendarOccurrenceKey.referenceCalendar`:
         // the widget mirrors what the CANVAS shows, and every canvas day
         // boundary (`CalendarLayout.occurrencesForDate`, and the widget's own
@@ -1978,8 +1991,10 @@ final class EventStore: ObservableObject {
     ) {
         guard generation == categoryStatsGeneration else { return }
         categoryStatsCache = CategoryStatsCacheEntry(inputs: inputs, payload: categoryStats)
-        writeWidgetPayload(snapshots: snapshots, sourceCount: sourceCount,
-                           categoryStats: categoryStats, statsMillis: statsMillis, now: now, calendar: calendar)
+        FollowerTiming.measure(.widgetSnapshot) {
+            writeWidgetPayload(snapshots: snapshots, sourceCount: sourceCount,
+                               categoryStats: categoryStats, statsMillis: statsMillis, now: now, calendar: calendar)
+        }
     }
 
     /// Lets a test wait for a deferred category-stats build and its write.
