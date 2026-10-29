@@ -222,6 +222,27 @@ final class EraseWiringQATests: XCTestCase {
             SharedWidgetData.suiteName.hasSuffix(".test-host"),
             "clearAllLocalData() flushes the widget payload synchronously, and 22 test call "
             + "sites reach it — unredirected they blank the dogfood device's real widget")
+        XCTAssertEqual(
+            ReportStore().directoryURL.lastPathComponent,
+            "Reports-test-host",
+            "ReportStore().wipe() is in the erase and removes the whole directory — "
+            + "unredirected, a suite run deletes the device's reports, userNote included")
+        XCTAssertEqual(
+            LLMUsageStore.shared.fileURL.deletingLastPathComponent().lastPathComponent,
+            "DeveloperStats-test-host",
+            "LLMUsageStore.shared.clearAll() is in the erase and rewrites llm-usage.json whole")
+        XCTAssertEqual(
+            AgentConversationRepository.shared.directory.lastPathComponent,
+            "AgentChat-TestHost",
+            "AgentConversationRepository.shared.wipe() is in the erase — the chat history")
+        XCTAssertEqual(
+            OccurrenceKeyMetadataStore.shared.directory.lastPathComponent,
+            "OccurrenceKey-TestHost",
+            "OccurrenceKeyMetadataStore.shared.wipe() is in the erase — the frozen reference zone")
+        XCTAssertEqual(
+            EventTypeCatalog.shared.directory.lastPathComponent,
+            "EventTypes-TestHost",
+            "resetToDefaults() on the app's store is in the erase and rewrites the event types whole")
     }
 
     /// The assertion above pins the suite's NAME; this pins the INSTANCE the
