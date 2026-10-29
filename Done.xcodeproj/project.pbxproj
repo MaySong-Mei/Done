@@ -378,6 +378,7 @@
 		SOCT10013000000000000305 /* SettingsOrphanCleanupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SOCT00013000000000000305 /* SettingsOrphanCleanupTests.swift */; };
 		CSFP10013000000000000303 /* ConflictShelfSkipTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSFP00013000000000000303 /* ConflictShelfSkipTests.swift */; };
 		TPBS10013000000000000302 /* TokenProjectionBatchSaveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TPBS00013000000000000302 /* TokenProjectionBatchSaveTests.swift */; };
+		SRRP10013000000000000403 /* SpikeRunReadPathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRRP00013000000000000403 /* SpikeRunReadPathTests.swift */; };
 		FWRR10013000000000000402 /* FixWatchRowReadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FWRR00013000000000000402 /* FixWatchRowReadTests.swift */; };
 		RERT10013000000000000401 /* ResidentEraseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RERT00013000000000000401 /* ResidentEraseTests.swift */; };
 		APTF10013000000000000301 /* AgentPreferencesTokenFreeSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = APTF00013000000000000301 /* AgentPreferencesTokenFreeSyncTests.swift */; };
@@ -846,6 +847,7 @@
 		SOCT00013000000000000305 /* SettingsOrphanCleanupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsOrphanCleanupTests.swift; sourceTree = "<group>"; };
 		CSFP00013000000000000303 /* ConflictShelfSkipTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConflictShelfSkipTests.swift; sourceTree = "<group>"; };
 		TPBS00013000000000000302 /* TokenProjectionBatchSaveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TokenProjectionBatchSaveTests.swift; sourceTree = "<group>"; };
+		SRRP00013000000000000403 /* SpikeRunReadPathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeRunReadPathTests.swift; sourceTree = "<group>"; };
 		FWRR00013000000000000402 /* FixWatchRowReadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FixWatchRowReadTests.swift; sourceTree = "<group>"; };
 		RERT00013000000000000401 /* ResidentEraseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResidentEraseTests.swift; sourceTree = "<group>"; };
 		APTF00013000000000000301 /* AgentPreferencesTokenFreeSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentPreferencesTokenFreeSyncTests.swift; sourceTree = "<group>"; };
@@ -1088,6 +1090,7 @@
 				SOCT00013000000000000305 /* SettingsOrphanCleanupTests.swift */,
 				CSFP00013000000000000303 /* ConflictShelfSkipTests.swift */,
 				TPBS00013000000000000302 /* TokenProjectionBatchSaveTests.swift */,
+				SRRP00013000000000000403 /* SpikeRunReadPathTests.swift */,
 				FWRR00013000000000000402 /* FixWatchRowReadTests.swift */,
 				RERT00013000000000000401 /* ResidentEraseTests.swift */,
 				APTF00013000000000000301 /* AgentPreferencesTokenFreeSyncTests.swift */,
@@ -1863,6 +1866,7 @@
 				SOCT10013000000000000305 /* SettingsOrphanCleanupTests.swift in Sources */,
 				CSFP10013000000000000303 /* ConflictShelfSkipTests.swift in Sources */,
 				TPBS10013000000000000302 /* TokenProjectionBatchSaveTests.swift in Sources */,
+				SRRP10013000000000000403 /* SpikeRunReadPathTests.swift in Sources */,
 				FWRR10013000000000000402 /* FixWatchRowReadTests.swift in Sources */,
 				RERT10013000000000000401 /* ResidentEraseTests.swift in Sources */,
 				APTF10013000000000000301 /* AgentPreferencesTokenFreeSyncTests.swift in Sources */,
