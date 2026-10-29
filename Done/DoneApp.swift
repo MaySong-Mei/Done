@@ -767,6 +767,12 @@ struct DoneApp: App {
                 // under a live measurement. No-op when no spike has ever
                 // run.
                 SpikeRunStore.reconcileAllRegisteredSpikesAtLaunch(excludingRunIDs: spikeSession.armedRunIDs)
+                // Keys and temp files nothing reads any more, off the main
+                // thread; idempotent, so every launch may run it. Not under
+                // XCTest: the host's preferences are not a test's to clean.
+                if !EventStorageLocation.isRunningUnderXCTest {
+                    SettingsOrphanCleanup.runForAppInBackground()
+                }
                 // FIX WATCH: wire the resident tier — real app only, never
                 // under XCTest (see `residentObservation`'s doc).
                 if residentObservation == nil, !EventStorageLocation.isRunningUnderXCTest, let uploader = telemetryUploader {
