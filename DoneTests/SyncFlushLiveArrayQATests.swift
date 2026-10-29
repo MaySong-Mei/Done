@@ -627,4 +627,71 @@ final class SyncFlushLiveArrayQATests: XCTestCase {
         print(line)
         XCTContext.runActivity(named: line) { _ in }
     }
+
+    // MARK: - 8. An erase in the gap
+
+    /// The live read is new exposure: a flush task queued before an erase
+    /// and run after it reads EMPTY stores, where the delivered array used
+    /// to carry the pre-erase rows. Against the old baseline with the gate
+    /// open that is a tombstone for every row in the cloud. What closes it is
+    /// that `resetAllLocalData(keepingSession: false)` signs out in the same
+    /// main-actor turn as it clears the stores, and the `$session` sink ends
+    /// the engine's session synchronously (`userId` empty, gate shut). This
+    /// pins that: the erase's sync-visible steps, in its order, in the gap.
+    func testQA11_AnEraseLandingInTheGapTombstonesNothing() async throws {
+        let a = makeEvent("a"), b = makeEvent("b"), t = makeTodo("t")
+        try await flushCalendar([a, b])
+        try await flushTodos([t])
+        let mine = makeEvent("mine")
+        store.addCalendarEvent(mine)
+        let writesBefore = server.requests.filter { [.patch, .insert, .tombstone, .upsert, .delete].contains($0.verb) }.count
+
+        scheduler.advance(by: debounce)                                  // flush task queued with [a, b, mine]
+        defaults.set(false, forKey: AppSettingsKeys.syncUploadsEnabled)  // LocalDataEraser order: uploads off,
+        store.clearAllLocalData()                                        // the stores,
+        auth.signOut()                                                   // then the sign-out
+        XCTAssertTrue(store.rawCalendarEvents.isEmpty && store.events.isEmpty, "fixture: the stores are empty")
+        XCTAssertEqual(service.userId, "", "fixture: the sign-out ended the engine's session in the same turn")
+
+        try await settle()
+        scheduler.advance(by: debounce)                                  // the erase's own publications
+        try await settle()
+        let writes = server.requests.filter { [.patch, .insert, .tombstone, .upsert, .delete].contains($0.verb) }
+        XCTAssertEqual(writes.count, writesBefore, "a flush after the erase wrote: \(writes.dropFirst(writesBefore).map { "\($0.verb) \($0.keys)" })")
+        for e in [a, b, t] {
+            XCTAssertFalse(server.isTombstoned(table: "events", key: e.id.uuidString), "\(e.title) tombstoned by the erase")
+        }
+    }
+
+    // MARK: - 9. Observed while building QA2c/QA3 (pre-existing, not this fix)
+
+    /// A merge restore writes every LOCAL row into the baseline: a row the
+    /// cloud did not carry gets the hash of the local row (`replayBaseline`,
+    /// "keeps the legacy shape"). A row that never reached the cloud — made
+    /// while the master switch was off, or still in its debounce — then
+    /// reads clean, and no later flush sends it until it is edited.
+    func testQA12_PreExisting_ALocalOnlyRowAtAMergeRestoreStillReachesTheCloud() async throws {
+        // Strict: this test turns red the day the restore stops marking
+        // never-uploaded rows clean — then delete this line. Without it the
+        // last assertion fails (on 3111ef1 and on the fix alike).
+        XCTExpectFailure("pre-existing (restore baseline replay), not the live-array fix", strict: true)
+        defaults.set(false, forKey: AppSettingsKeys.syncUploadsEnabled)   // made while uploads were off
+        let offline = makeEvent("made-offline")
+        store.addCalendarEvent(offline)
+        scheduler.advance(by: debounce)
+        try await settle()
+        XCTAssertNil(server.row(table: "events", key: offline.id.uuidString), "fixture: never uploaded")
+
+        let snapshot = try await service.fetchRestoreSnapshot()
+        _ = store.applyRestore(snapshot, strategy: .merge, resolution: .keepLocal)
+        service.markRestoreCompleted(eventStore: store, eventTypeStore: types, skillStore: skills, snapshot: snapshot)
+        XCTAssertTrue(store.rawCalendarEvents.contains { $0.id == offline.id }, "fixture: the merge kept the local row")
+
+        defaults.set(true, forKey: AppSettingsKeys.syncUploadsEnabled)
+        service.markNeedsFlush("calendar_events")                         // the flush a chain at head owes
+        await service.flushPendingTables()
+        try await settle()
+        XCTAssertNotNil(server.row(table: "events", key: offline.id.uuidString),
+                        "a row that was only ever local reads clean after a merge restore and is never uploaded")
+    }
 }
