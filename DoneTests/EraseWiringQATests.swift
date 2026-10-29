@@ -76,6 +76,10 @@ final class EraseWiringQATests: XCTestCase {
             ("telemetryUploader?.forgetAfterErase()",
              "the uploader's in-memory status — last upload time, row counts, the request sample, the last "
              + "outcome and the daily throttle clock — describing the previous owner's uploads (gh#273)"),
+            ("ResidentObservationCenter.shared?.forgetAfterErase()",
+             "the resident observer's day in memory — counters, followers, an open auto-window and the "
+             + "daily id with its owner — which the next flush wrote back into the wiped directory "
+             + "under the erased owner"),
             ("AppSettingsKeys.removeResettableKeys(from: defaults)",
              "the by-name sweep, which now also carries the telemetry switch, its consent moment, "
              + "the note opt-in, the decided bit and the by-default bit (gh#273): the next account on "
@@ -148,6 +152,26 @@ final class EraseWiringQATests: XCTestCase {
         XCTAssertEqual(body.components(separatedBy: "MeAvatarStore.delete()").count - 1, 1,
                        "exactly one occurrence — more than one means the scan is matching "
                        + "something other than the call, which is how this went green before")
+    }
+
+    /// The resident's forget mints the next daily id under the owner that holds
+    /// at the moment it runs, so it must follow everything that changes that
+    /// owner or that answers for it: the sign-out, the wipe of the records'
+    /// directory, and the uploader's reset (which drops the owner it cached
+    /// before attaching to a session).
+    func testTheResidentForgetsAfterTheSignOutTheWipeAndTheUploaderReset() throws {
+        let body = try EraseWiringScan.functionBody(
+            of: "func resetAllLocalData(keepingSession: Bool) {",
+            inFileAt: "Done/Services/LocalDataEraser.swift"
+        )
+        let forget = try XCTUnwrap(body.range(of: "ResidentObservationCenter.shared?.forgetAfterErase()"))
+        for earlier in ["authService.signOut()", "SpikeRunStore.wipe()", "telemetryUploader?.forgetAfterErase()"] {
+            let call = try XCTUnwrap(body.range(of: earlier), "liveness: \(earlier) is in the erase")
+            XCTAssertTrue(call.lowerBound < forget.lowerBound,
+                          "\(earlier) must run before the resident forgets: its fresh id is minted for the owner after it")
+        }
+        XCTAssertEqual(body.components(separatedBy: "ResidentObservationCenter.shared?.forgetAfterErase()").count - 1, 1,
+                       "exactly one occurrence — more means the scan matches something other than the call")
     }
 
     /// gh#239 made the widget render its chrome from the App Group's language

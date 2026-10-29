@@ -306,6 +306,13 @@ struct LocalDataEraser {
         // knows its fields); the files themselves went with the wipe above.
         #if canImport(UIKit)
         telemetryUploader?.forgetAfterErase()
+        // The resident observer's day in memory: its counters, open window
+        // and daily id are the erased owner's, and its next flush would
+        // write them back into the directory the wipe above just removed.
+        // After the sign-out and the uploader's reset, because it mints the
+        // next id under the owner that holds from here on. Phone-only: the
+        // Mac has no resident observer.
+        ResidentObservationCenter.shared?.forgetAfterErase()
         #endif
         // Round 2. MetricKit payloads in `Diagnostics/MetricKit/` and the
         // legacy `Documents/Diagnostics` pile. `DiagnosticTrail.clear()`

@@ -541,15 +541,21 @@ final class ResidentObservationCenter {
         // civil day stays unambiguous.
         writeDailyRecord(endedAt: dayBounds.dayEnd)
         // Re-base for the new day: fresh counters, fresh id, fresh cached
-        // bound (the ONLY places calendar math runs are init and here —
-        // flush edges, never the signal path).
+        // bound.
         resetCountsForNewDaily()
-        let bounds = ResidentDayBounds.compute(for: currentNow, calendar: calendar)
-        dayBounds = bounds
-        dayEndSinceReference = bounds.dayEnd.timeIntervalSinceReferenceDate
-        mintDailyRun(at: currentNow, bounds: bounds)
+        mintDailyRun(at: currentNow, bounds: rebaseDay(at: currentNow))
         // gh#273 §7.1 edge 2: yesterday's line is final; send it.
         onUploadTrigger?(.dayRollover)
+    }
+
+    /// Recomputes the cached day bound for the day holding `date`. The ONLY
+    /// places calendar math runs are init and here — reached from the
+    /// rollover and the erase, never from the signal path.
+    private func rebaseDay(at date: Date) -> ResidentDayBounds {
+        let bounds = ResidentDayBounds.compute(for: date, calendar: calendar)
+        dayBounds = bounds
+        dayEndSinceReference = bounds.dayEnd.timeIntervalSinceReferenceDate
+        return bounds
     }
 
     /// gh#273 review P2-3 — consent is a claim change in time. The day's
@@ -579,6 +585,35 @@ final class ResidentObservationCenter {
         resetCountsForNewDaily()
         mintDailyRun(at: now(), bounds: dayBounds)
         writeDailyRecord()
+    }
+
+    // MARK: Erase
+
+    /// "Erase all local data": everything this center holds in memory is the
+    /// erased owner's day — the counters, the followers, the gesture log, the
+    /// daily id and the claim it was minted under, and an auto-window that may
+    /// be open right now. `SpikeRunStore.wipe()` took the files; without this
+    /// the next flush wrote the whole pre-erase day back under the old owner
+    /// (a claim change closes the old id under its OWN claim), and the open
+    /// window's close wrote the pre-erase gestures. Told, not reached around,
+    /// like `TelemetryUploader.forgetAfterErase`.
+    ///
+    /// Writes NOTHING: the window is torn down without a record, and the day
+    /// starts over under a fresh id minted for the claim that holds now — so
+    /// the eraser calls this after signing out and after the wipe. The day
+    /// bound is recomputed here rather than by the rollover path, which would
+    /// first close the old id with a write.
+    func forgetAfterErase() {
+        windowCloseWorkItem?.cancel()
+        windowCloseWorkItem = nil
+        window = nil
+        _ = frameProbe?.stopAndSummarize()
+        frameProbe = nil
+        _ = followers.disarmWindow()
+
+        resetCountsForNewDaily()
+        let currentNow = now()
+        mintDailyRun(at: currentNow, bounds: rebaseDay(at: currentNow))
     }
 
     /// "Upload now"'s read barrier (device fix, build 17): writes today's
