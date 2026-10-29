@@ -211,7 +211,7 @@ final class SyncFlushLiveArrayTests: XCTestCase {
 
     // MARK: - A remote create in the gap, table by table
 
-    func testACalendarRowCreatedRemotelyInTheGapIsNotTombstoned_killsCalendarSinkPushesItsCapture() async throws {
+    func testACalendarRowCreatedRemotelyInTheGapIsNotTombstoned_killsCalendarSinkPushesItsCapture_killsNoTrailLine() async throws {
         let mine = makeEvent("mine"), theirs = makeEvent("theirs")
         let linesBefore = liveLines("calendar_events").count
         try await remoteWriteLandsInTheGap(
@@ -348,7 +348,7 @@ final class SyncFlushLiveArrayTests: XCTestCase {
         XCTAssertFalse(server.isTombstoned(table: "events", key: theirs.id.uuidString))
     }
 
-    func testAPlainLocalTodoDeleteIsTombstonedThroughTheSink_killsLiveReadSkipsDeletes() async throws {
+    func testAPlainLocalTodoDeleteIsTombstonedThroughTheSink_killsLiveReadSkipsDeletes_killsTrailOnEveryFlush() async throws {
         let doomed = makeTodo("doomed"), kept = makeTodo("kept")
         let linesBefore = liveLines("events").count
         store.add(doomed)
