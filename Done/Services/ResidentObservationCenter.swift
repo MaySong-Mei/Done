@@ -30,6 +30,16 @@
 //  undefined-behavior-during-view-update hazard (adversary F10). The
 //  deck reads state by asking for a flush and loading the files.
 //
+//  Follower timing (perf batch 2a, report-only): the center owns the
+//  `FollowerTimingRecorder` and installs it as `FollowerTiming.recorder`
+//  while active. The day's follower stats ride the daily record (foreground
+//  only), an auto-window's ride its window record, and each window close
+//  writes one `followers:` trail line. Under XCTest the recorder is NOT
+//  installed unless a test asks (`installsFollowerProbe`): the host app's own
+//  followers run on the same main thread and would leak into a test's
+//  records. Uninstalled, the daily line still carries the follower keys, all
+//  zero.
+//
 //  Not wired under XCTest (R-F10): `DoneApp` creates this only when
 //  `EventStorageLocation.isRunningUnderXCTest` is false. DoneTests is a
 //  host-app bundle — a resident registered at app launch would run
@@ -73,6 +83,16 @@ final class ResidentObservationCenter {
     var onUploadTrigger: ((TelemetryTrigger) -> Void)?
 
     private(set) var core: ResidentTierOneCore
+    /// perf batch 2a: the follower probe's accumulator. Always present (the
+    /// daily line carries its keys); installed process-wide only when
+    /// `installsFollowerProbe`.
+    let followers: FollowerTimingRecorder
+    private let installsFollowerProbe: Bool
+    private let isAppActive: @MainActor () -> Bool
+    /// What the last successful daily append carried for the followers — the
+    /// follower half of the dirty check (B·F6).
+    private var lastWrittenFollowers: FollowerStatTable?
+    private var lastWrittenFollowerOverflow = 0
     private var dayBounds: ResidentDayBounds
     /// The signal path's rollover check is one compare against this
     /// cached Double; it is recomputed only at init and flush edges.
@@ -123,7 +143,10 @@ final class ResidentObservationCenter {
         mediaNow: @escaping () -> Double = CACurrentMediaTime,
         makeFrameProbe: @escaping @MainActor () -> SpikeFrameProbe = { SpikeFrameProbe() },
         ownerUID: @escaping () -> String? = { nil },
-        stamp: @escaping () -> SpikeRunContext.Stamp = SpikeRunContext.stamp
+        stamp: @escaping () -> SpikeRunContext.Stamp = SpikeRunContext.stamp,
+        followerClock: @escaping () -> UInt64 = FollowerClock.now,
+        installsFollowerProbe: Bool = !EventStorageLocation.isRunningUnderXCTest,
+        isAppActive: @escaping @MainActor () -> Bool = { UIApplication.shared.applicationState == .active }
     ) {
         self.coordinator = coordinator
         self.store = store
@@ -134,6 +157,10 @@ final class ResidentObservationCenter {
         self.makeFrameProbe = makeFrameProbe
         self.ownerUID = ownerUID
         self.stamp = stamp
+        self.installsFollowerProbe = installsFollowerProbe
+        self.isAppActive = isAppActive
+        let followers = FollowerTimingRecorder(now: followerClock, isForeground: false)
+        self.followers = followers
 
         let today = now()
         let bounds = ResidentDayBounds.compute(for: today, calendar: calendar)
@@ -162,6 +189,13 @@ final class ResidentObservationCenter {
         var seededCore = ResidentTierOneCore()
         if let todays = Self.latestDailyRecord(location: location, within: bounds, claim: claim) {
             seededCore.counters = ResidentCounterSet(metrics: todays.metrics)
+            // The follower stats come back with the counters, for the same
+            // reason (latest-record-wins would erase the morning's).
+            let seededFollowers = FollowerStatTable(dailyMetrics: todays.metrics)
+            let seededOverflow = FollowerStatTable.dailyOverflow(in: todays.metrics)
+            followers.resetDaily(seed: seededFollowers, overflow: seededOverflow)
+            lastWrittenFollowers = seededFollowers
+            lastWrittenFollowerOverflow = seededOverflow
             dailyRunID = todays.id
             dailyRunStartedAt = todays.startedAt
             // The adopted line IS the last written state: a flush with no
@@ -212,6 +246,15 @@ final class ResidentObservationCenter {
         dailyDay = TelemetryClaimKey.dayKey(forDayStart: bounds.dayStart, calendar: calendar)
         lastWrittenCounters = nil
         lastWrittenStartedAt = nil
+        lastWrittenFollowers = nil
+        lastWrittenFollowerOverflow = 0
+    }
+
+    /// A new day, a new owner or a consent re-mint: every count starts over,
+    /// the followers' with the counters'.
+    private func resetCountsForNewDaily() {
+        core.resetForNewDay()
+        followers.resetDaily()
     }
 
     // MARK: Activation
@@ -223,6 +266,10 @@ final class ResidentObservationCenter {
     /// edges EventStore's own flushes already use.
     func activate() {
         Self.shared = self
+        followers.isForeground = isAppActive()
+        if installsFollowerProbe {
+            FollowerTiming.recorder = followers
+        }
         coordinator.registerResident(
             id: Self.residentID,
             store: store,
@@ -254,6 +301,9 @@ final class ResidentObservationCenter {
                      UIApplication.willTerminateNotification] {
             lifecycleObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
+                    // Foreground-only daily follower stats: what runs from
+                    // here until `didBecomeActive` is background work.
+                    self?.followers.isForeground = false
                     self?.handleLifecycleEdge()
                 }
             })
@@ -265,6 +315,7 @@ final class ResidentObservationCenter {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.lifecycleEdgeFlushed = false
+                self?.followers.isForeground = true
             }
         })
 
@@ -288,6 +339,9 @@ final class ResidentObservationCenter {
         }
         lifecycleObservers = []
         manualRunWatch = nil
+        if FollowerTiming.recorder === followers {
+            FollowerTiming.recorder = nil
+        }
         if Self.shared === self {
             Self.shared = nil
         }
@@ -345,6 +399,13 @@ final class ResidentObservationCenter {
             openedAt: now(),
             triggerCommitEndMedia: commitEndMedia
         )
+        // perf batch 2a: the followers' window span is the auto-window's
+        // own, open to close (extensions included). Armed only when the
+        // probe is installed — an uninstalled recorder measures nothing, and
+        // a window must not claim a follower probe that never ran.
+        if installsFollowerProbe {
+            followers.armWindow()
+        }
         let probe = makeFrameProbe()
         probe.onTick = { [weak self] timestamp in
             // The probe fills the ROLLING LOG's frame columns — including
@@ -352,6 +413,8 @@ final class ResidentObservationCenter {
             // the log because Tier 1 recorded it before the window
             // existed (R-F1: windows never need to see their trigger).
             self?.core.noteFrame(at: timestamp)
+            // The same tick is the followers' frame boundary.
+            self?.followers.noteFrameTick(atNs: FollowerClock.nanoseconds(fromMediaSeconds: timestamp))
         }
         probe.start()
         frameProbe = probe
@@ -378,9 +441,22 @@ final class ResidentObservationCenter {
         windowCloseWorkItem = nil
         let probeResult = frameProbe?.stopAndSummarize()
         frameProbe = nil
+        let followerResult = followers.disarmWindow()
 
         let closedAtMedia = mediaNow()
         let context = stamp()
+        var windowMetrics = ResidentWindowAggregates.metrics(
+            window: closing,
+            records: core.gestureLog.records,
+            closedAtMedia: closedAtMedia,
+            probe: probeResult,
+            closedByResign: closedByResign
+        )
+        // The follower keys sit BESIDE the window probe's, under their own
+        // prefix; none of the probe's keys changes.
+        if let followerResult {
+            windowMetrics.merge(followerResult.metrics()) { probeValue, _ in probeValue }
+        }
         var run = SpikeRun(
             id: UUID(),
             spikeID: FixObservationRegistry.effortPathFixID,
@@ -396,13 +472,7 @@ final class ResidentObservationCenter {
             timeZoneIdentifier: context.timeZoneIdentifier,
             localeIdentifier: context.localeIdentifier,
             buildConfiguration: context.buildConfiguration,
-            metrics: ResidentWindowAggregates.metrics(
-                window: closing,
-                records: core.gestureLog.records,
-                closedAtMedia: closedAtMedia,
-                probe: probeResult,
-                closedByResign: closedByResign
-            ),
+            metrics: windowMetrics,
             note: nil,
             outcome: outcome,
             abortReason: reason
@@ -417,6 +487,9 @@ final class ResidentObservationCenter {
         run.dayTZOffsetMin = dailyDay.tzOffsetMin
         run.kind = .window
         SpikeRunStore.finishRun(run, owner: .explicit(dailyClaim.ownerUID), location: location)
+        if let followerResult {
+            DiagnosticTrail.record("FixWatch", followerResult.trailLine(windowID: run.id))
+        }
     }
 
     // MARK: Flushes
@@ -470,7 +543,7 @@ final class ResidentObservationCenter {
         // Re-base for the new day: fresh counters, fresh id, fresh cached
         // bound (the ONLY places calendar math runs are init and here —
         // flush edges, never the signal path).
-        core.resetForNewDay()
+        resetCountsForNewDaily()
         let bounds = ResidentDayBounds.compute(for: currentNow, calendar: calendar)
         dayBounds = bounds
         dayEndSinceReference = bounds.dayEnd.timeIntervalSinceReferenceDate
@@ -503,7 +576,7 @@ final class ResidentObservationCenter {
         if dailyHasUnwrittenCounts {
             appendDailyRecord(endedAt: now(), claim: dailyClaim)
         }
-        core.resetForNewDay()
+        resetCountsForNewDaily()
         mintDailyRun(at: now(), bounds: dayBounds)
         writeDailyRecord()
     }
@@ -526,8 +599,13 @@ final class ResidentObservationCenter {
     private var dailyHasUnwrittenCounts: Bool {
         if let lastWrittenCounters {
             return lastWrittenCounters != core.counters || lastWrittenStartedAt != dailyRunStartedAt
+                || !followersMatchLastWrite
         }
-        return core.counters != ResidentCounterSet()
+        return core.counters != ResidentCounterSet() || !followers.dailyIsEmpty
+    }
+
+    private var followersMatchLastWrite: Bool {
+        followers.dailyEquals(lastWrittenFollowers) && followers.dailyOverflow == lastWrittenFollowerOverflow
     }
 
     private func writeDailyRecord(endedAt: Date? = nil) {
@@ -544,7 +622,7 @@ final class ResidentObservationCenter {
             if dailyHasUnwrittenCounts {
                 appendDailyRecord(endedAt: endedAt ?? now(), claim: dailyClaim)
             }
-            core.resetForNewDay()
+            resetCountsForNewDaily()
             mintDailyRun(at: now(), bounds: dayBounds)
             return
         }
@@ -553,7 +631,8 @@ final class ResidentObservationCenter {
         // nothing was counted since the last flush.
         if endedAt == nil,
            lastWrittenCounters == core.counters,
-           lastWrittenStartedAt == dailyRunStartedAt {
+           lastWrittenStartedAt == dailyRunStartedAt,
+           followersMatchLastWrite {
             return
         }
         appendDailyRecord(endedAt: endedAt ?? now(), claim: claim)
@@ -561,6 +640,10 @@ final class ResidentObservationCenter {
 
     private func appendDailyRecord(endedAt: Date, claim: TelemetryClaimKey) {
         let context = stamp()
+        let followerDay = followers.dailySnapshot()
+        let followerOverflow = followers.dailyOverflow
+        // The follower keys sit beside the counters under their own prefix.
+        let metrics = core.counters.metrics.merging(followerDay.dailyMetrics(overflow: followerOverflow)) { counter, _ in counter }
         var run = SpikeRun(
             id: dailyRunID,
             spikeID: FixObservationRegistry.residentDailySpikeID,
@@ -576,7 +659,7 @@ final class ResidentObservationCenter {
             timeZoneIdentifier: context.timeZoneIdentifier,
             localeIdentifier: context.localeIdentifier,
             buildConfiguration: claim.buildConfiguration,
-            metrics: core.counters.metrics,
+            metrics: metrics,
             note: nil,
             outcome: .completed,
             abortReason: nil
@@ -589,6 +672,8 @@ final class ResidentObservationCenter {
         if SpikeRunStore.finishRun(run, owner: .explicit(claim.ownerUID), location: location) {
             lastWrittenCounters = core.counters
             lastWrittenStartedAt = dailyRunStartedAt
+            lastWrittenFollowers = followerDay
+            lastWrittenFollowerOverflow = followerOverflow
         }
     }
 }

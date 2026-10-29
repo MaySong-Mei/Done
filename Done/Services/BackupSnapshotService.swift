@@ -325,60 +325,83 @@ final class BackupSnapshotService: ObservableObject {
             // field the digest must ignore (same trap, same answer as
             // `rowHashIgnoredKeys`): it is stamped fresh at write time, so
             // hashing it would leave a guard that never fires yet looks alive.
-            let components = try encodeSnapshotComponents(
-                eventStore: eventStore,
-                eventTypeStore: eventTypeStore,
-                skillStore: skillStore,
-                preferenceStore: preferenceStore
-            )
-            let digest = Self.componentsDigest(components)
+            //
+            // Follower probe (perf batch 2a): the whole dirty decision is one
+            // `snapshotDigest` run; a write that follows is one
+            // `snapshotWrite` run. An evaluation with no write is a skip.
+            let check: SnapshotDirtyCheck = try FollowerTiming.measure(.snapshotDigest) {
+                let components = try encodeSnapshotComponents(
+                    eventStore: eventStore,
+                    eventTypeStore: eventTypeStore,
+                    skillStore: skillStore,
+                    preferenceStore: preferenceStore
+                )
+                let digest = Self.componentsDigest(components)
 
-            if digest == lastWrittenComponentsDigest {
+                if digest == lastWrittenComponentsDigest {
+                    return .unchanged
+                }
+
+                // First evaluation this launch: the in-memory digest knows
+                // nothing yet, but the disk file does. Seed by comparing against
+                // the snapshot itself — parsed, `createdAt` stripped, canonically
+                // re-serialized — so a relaunch over an unchanged store writes
+                // nothing. Costlier than the steady-state check above (it pays
+                // the jsonObject passes once), but it runs at most once per
+                // launch, and never on the launch path itself: the earliest
+                // trigger is a backgrounding or a 30s-quiet edit.
+                var assembled: [String: Any]?
+                if lastWrittenComponentsDigest == nil {
+                    let payload = try assemblePayload(from: components)
+                    assembled = payload
+                    if let onDisk = canonicalDigestOfDiskSnapshot(),
+                       onDisk == Self.canonicalDigest(ofPayload: payload) {
+                        lastWrittenComponentsDigest = digest
+                        return .diskAlreadyCurrent
+                    }
+                }
+                return .dirty(components: components, digest: digest, assembled: assembled)
+            }
+            let components: SnapshotComponents
+            let digest: Data
+            let assembled: [String: Any]?
+            switch check {
+            case .unchanged:
                 logger.info("Snapshot skipped — content unchanged (reason: \(reason, privacy: .public))")
                 return
-            }
-
-            // First evaluation this launch: the in-memory digest knows
-            // nothing yet, but the disk file does. Seed by comparing against
-            // the snapshot itself — parsed, `createdAt` stripped, canonically
-            // re-serialized — so a relaunch over an unchanged store writes
-            // nothing. Costlier than the steady-state check above (it pays
-            // the jsonObject passes once), but it runs at most once per
-            // launch, and never on the launch path itself: the earliest
-            // trigger is a backgrounding or a 30s-quiet edit.
-            var assembled: [String: Any]?
-            if lastWrittenComponentsDigest == nil {
-                let payload = try assemblePayload(from: components)
-                assembled = payload
-                if let onDisk = canonicalDigestOfDiskSnapshot(),
-                   onDisk == Self.canonicalDigest(ofPayload: payload) {
-                    lastWrittenComponentsDigest = digest
-                    logger.info("Snapshot skipped — disk already current (reason: \(reason, privacy: .public))")
-                    return
-                }
+            case .diskAlreadyCurrent:
+                logger.info("Snapshot skipped — disk already current (reason: \(reason, privacy: .public))")
+                return
+            case .dirty(let dirtyComponents, let dirtyDigest, let dirtyAssembled):
+                components = dirtyComponents
+                digest = dirtyDigest
+                assembled = dirtyAssembled
             }
 
             if surfaceInUI {
                 statusReporter?.snapshotDidStart()
                 reportedStart = true
             }
-            var dict: [String: Any]
-            if let assembled {
-                dict = assembled
-            } else {
-                dict = try assemblePayload(from: components)
+            let byteCount: Int = try FollowerTiming.measure(.snapshotWrite) {
+                var dict: [String: Any]
+                if let assembled {
+                    dict = assembled
+                } else {
+                    dict = try assemblePayload(from: components)
+                }
+                dict["createdAt"] = ISO8601DateFormatter.iso8601WithFraction.string(from: Date())
+                let data = try JSONSerialization.data(
+                    withJSONObject: dict,
+                    options: [.prettyPrinted, .sortedKeys]
+                )
+                try writeAtomically(data)
+                // Only after the write LANDS: a failed write must leave the
+                // digest stale so the next trigger retries instead of skipping.
+                lastWrittenComponentsDigest = digest
+                return data.count
             }
-            dict["createdAt"] = ISO8601DateFormatter.iso8601WithFraction.string(from: Date())
-            let data = try JSONSerialization.data(
-                withJSONObject: dict,
-                options: [.prettyPrinted, .sortedKeys]
-            )
-            try writeAtomically(data)
-            // Only after the write LANDS: a failed write must leave the
-            // digest stale so the next trigger retries instead of skipping.
-            lastWrittenComponentsDigest = digest
-            logger.info("Snapshot written (\(data.count, privacy: .public) bytes, reason: \(reason, privacy: .public))")
-            if surfaceInUI { statusReporter?.snapshotDidSucceed(byteCount: data.count) }
+            logger.info("Snapshot written (\(byteCount, privacy: .public) bytes, reason: \(reason, privacy: .public))")
+            if surfaceInUI { statusReporter?.snapshotDidSucceed(byteCount: byteCount) }
         } catch {
             logger.error("Snapshot write failed (reason: \(reason, privacy: .public)): \(error.localizedDescription, privacy: .public)")
             // Always surface errors, even on the debounced path — a silent
@@ -404,6 +427,13 @@ final class BackupSnapshotService: ObservableObject {
     /// A new bucket must land in BOTH `collections`/fields here AND
     /// `assemblePayload` — the digest walks this struct, so a bucket that
     /// skips it would never dirty the snapshot.
+    /// What the dirty check decided, carried out of the measured span.
+    private enum SnapshotDirtyCheck {
+        case unchanged
+        case diskAlreadyCurrent
+        case dirty(components: SnapshotComponents, digest: Data, assembled: [String: Any]?)
+    }
+
     private struct SnapshotComponents {
         /// `(payload key, encoder bytes)` in a FIXED order — the digest walks
         /// this order, so the order is part of the digest's meaning.
