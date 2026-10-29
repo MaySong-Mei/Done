@@ -285,7 +285,7 @@ struct ResidentCounterSet: Equatable {
 /// cached bound, and the Calendar it needs is a PARAMETER — the model
 /// file's no-`Calendar.current` scan keeps calendar math off the hot
 /// path structurally.
-struct ResidentDayBounds: Equatable {
+nonisolated struct ResidentDayBounds: Equatable {
     let dayStart: Date
     let dayEnd: Date
 
@@ -633,10 +633,12 @@ struct FixObservationEntry: Identifiable, Equatable {
 }
 
 enum FixObservationRegistry {
-    static let residentDailySpikeID = "resident-daily"
-    static let residentDailyScenarioID = "daily-rollup"
-    static let windowScenarioID = "auto-window"
-    static let effortPathFixID = "fix-effort-path"
+    // Read by `TelemetryRecordKind.inferred`, which is nonisolated with the
+    // rest of the types a record line decodes into.
+    nonisolated static let residentDailySpikeID = "resident-daily"
+    nonisolated static let residentDailyScenarioID = "daily-rollup"
+    nonisolated static let windowScenarioID = "auto-window"
+    nonisolated static let effortPathFixID = "fix-effort-path"
     static let meTabGateFixID = "fix-me-tab-gate"
     static let touchDeliveryFixID = "fix-touch-delivery"
 

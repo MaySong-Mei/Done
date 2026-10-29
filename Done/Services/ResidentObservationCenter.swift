@@ -134,6 +134,24 @@ final class ResidentObservationCenter {
     /// foreground kill) still flushes: the token is only set by an edge.
     private var lifecycleEdgeFlushed = false
 
+    /// The launch seed reads at most this much of the daily file's end, and
+    /// decodes at most `seedMaxDecodes` of its lines (red-team R1). Under the
+    /// center's own writes today's record is the file's last line. Past
+    /// either bound the seed misses and a fresh same-day id is minted — a
+    /// state the claim rules already produce (see init).
+    static let seedTailBytes = 32 * 1024
+    static let seedMaxDecodes = 8
+
+    /// What the launch seed found in the tail (tests and the verification).
+    let launchSeed: SpikeRunFileScan.TailRecord
+    /// Where this launch's verification read stands; see `verifyLaunchSeed`.
+    private(set) var seedVerification: SeedVerification = .notRequested
+    /// Bumped by every erase this center is told about. The verification
+    /// read compares it on delivery, so a read from before an erase says
+    /// nothing after it.
+    private var eraseGeneration = 0
+    private let seedTrail: (String) -> Void
+
     init(
         coordinator: SpikeSessionCoordinator,
         store: EventStore?,
@@ -146,7 +164,9 @@ final class ResidentObservationCenter {
         stamp: @escaping () -> SpikeRunContext.Stamp = SpikeRunContext.stamp,
         followerClock: @escaping () -> UInt64 = FollowerClock.now,
         installsFollowerProbe: Bool = !EventStorageLocation.isRunningUnderXCTest,
-        isAppActive: @escaping @MainActor () -> Bool = { UIApplication.shared.applicationState == .active }
+        isAppActive: @escaping @MainActor () -> Bool = { UIApplication.shared.applicationState == .active },
+        verifiesSeed: Bool = !EventStorageLocation.isRunningUnderXCTest,
+        seedTrail: @escaping (String) -> Void = { DiagnosticTrail.record("FixWatch", $0) }
     ) {
         self.coordinator = coordinator
         self.store = store
@@ -159,6 +179,7 @@ final class ResidentObservationCenter {
         self.stamp = stamp
         self.installsFollowerProbe = installsFollowerProbe
         self.isAppActive = isAppActive
+        self.seedTrail = seedTrail
         let followers = FollowerTimingRecorder(now: followerClock, isForeground: false)
         self.followers = followers
 
@@ -185,9 +206,22 @@ final class ResidentObservationCenter {
         // mints a NEW same-day run id; both records survive collapse
         // (distinct ids) and every daily-fed criterion SUMS across
         // same-day records of its partition.
+        //
+        // The read is the file's TAIL, not the file (red-team R1): the
+        // whole-file decode ran on the main thread at every launch and grew
+        // with the file. A record past the tail's bounds is a miss, and a
+        // miss mints a fresh same-day id — the same summed state a claim
+        // change produces. Whether the tail agreed with the whole file is
+        // checked once per launch off the main thread (`verifyLaunchSeed`).
         let claim = Self.currentClaim(stamp: stamp(), ownerUID: ownerUID())
         var seededCore = ResidentTierOneCore()
-        if let todays = Self.latestDailyRecord(location: location, within: bounds, claim: claim) {
+        let seedStart = DispatchTime.now().uptimeNanoseconds
+        let seed = SpikeRunFileScan.newestMatch(
+            in: SpikeRunStore.fileURL(spikeID: FixObservationRegistry.residentDailySpikeID, location: location),
+            maxBytes: Self.seedTailBytes, maxDecodes: Self.seedMaxDecodes
+        ) { bounds.contains($0.startedAt) && TelemetryClaimKey(run: $0) == claim }
+        let seedMs = Double(DispatchTime.now().uptimeNanoseconds - seedStart) / 1e6
+        if case .found(let todays, _) = seed {
             seededCore.counters = ResidentCounterSet(metrics: todays.metrics)
             // The follower stats come back with the counters, for the same
             // reason (latest-record-wins would erase the morning's).
@@ -211,6 +245,10 @@ final class ResidentObservationCenter {
         }
         dailyClaim = claim
         core = seededCore
+        launchSeed = seed
+        if verifiesSeed {
+            verifyLaunchSeed(seed, seedMs: seedMs, bounds: bounds, claim: claim)
+        }
     }
 
     private static func currentClaim(stamp: SpikeRunContext.Stamp, ownerUID: String?) -> TelemetryClaimKey {
@@ -226,15 +264,131 @@ final class ResidentObservationCenter {
     /// gh#273 §4.2) — a record written by another configuration, build, OS
     /// or account (or by a pre-stamp build, whose `buildConfiguration` is
     /// nil) is never adopted, because re-appending its id would relabel it
-    /// with this process's stamp.
-    private static func latestDailyRecord(
-        location: SpikeRunStorageLocation,
-        within bounds: ResidentDayBounds,
-        claim: TelemetryClaimKey
+    /// with this process's stamp. The whole-file answer the launch seed used
+    /// to compute on the main thread; now the reference its tail read is
+    /// checked against, off it.
+    nonisolated static func referenceDailyRecord(
+        in collapsed: [SpikeRun], within bounds: ResidentDayBounds, claim: TelemetryClaimKey, retention: Int
     ) -> SpikeRun? {
-        SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.residentDailySpikeID, location: location)
+        SpikeRunLog.applyRetention(collapsed, cap: retention)
             .filter { bounds.contains($0.startedAt) && TelemetryClaimKey(run: $0) == claim }
             .max { $0.startedAt < $1.startedAt }
+    }
+
+    // MARK: Launch-seed verification (red-team M2)
+
+    nonisolated struct SeedVerificationReport: Equatable, Sendable {
+        enum Result: String, Equatable, Sendable {
+            /// The tail found the whole file's answer (a record, or none).
+            case agree
+            /// The tail found nothing; the whole file had today's record.
+            case miss
+            /// The tail adopted a different id than the whole file would.
+            case differ
+        }
+
+        let result: Result
+        /// `hit`, or why the tail missed (`SpikeRunFileScan.TailMiss`).
+        let seed: String
+        let seedDecodes: Int
+        /// The seed's own time on the main thread.
+        let seedMs: Double
+        /// Distinct ids with today's start, any claim — the ids-per-day count
+        /// the daily file's retention has to hold.
+        let idsToday: Int
+        let fileBytes: Int
+        /// This read's time, off the main thread.
+        let readMs: Double
+
+        var trailLine: String {
+            String(format: "resident.seed.verify result=%@ seed=%@ decodes=%d seedMs=%.2f idsToday=%d fileBytes=%d readMs=%.1f",
+                   result.rawValue, seed, seedDecodes, seedMs, idsToday, fileBytes, readMs)
+        }
+    }
+
+    enum SeedVerification: Equatable {
+        case notRequested
+        case pending
+        case logged(SeedVerificationReport)
+        /// Read before an erase, or under an owner who is no longer signed
+        /// in: nothing from the read is reported.
+        case dropped(reason: String)
+    }
+
+    private static let seedVerificationQueue = DispatchQueue(label: "ResidentObservationCenter.seedVerification", qos: .utility)
+
+    /// Once per launch, off the main thread: the whole-file read the seed no
+    /// longer runs, compared with what the tail found, as one trail line —
+    /// so "the tail is enough" is measured on the device instead of assumed.
+    /// The read delivers nothing to the center or the UI and writes nothing
+    /// but that line. It carries the erase epoch, this center's erase
+    /// generation and the owner it read for; delivery (on the main thread,
+    /// where the erase runs, with no suspension between check and write)
+    /// drops a result from before an erase or for another owner.
+    private func verifyLaunchSeed(_ seed: SpikeRunFileScan.TailRecord, seedMs: Double,
+                                  bounds: ResidentDayBounds, claim: TelemetryClaimKey) {
+        let url = SpikeRunStore.fileURL(spikeID: FixObservationRegistry.residentDailySpikeID, location: location)
+        let retention = SpikeRunStore.maxRunsPerSpike
+        let eraseToken = LocalDataEraseEpoch.capture()
+        let generation = eraseGeneration
+        seedVerification = .pending
+        Self.seedVerificationQueue.async { [weak self] in
+            let report = Self.compareSeed(seed, seedMs: seedMs, url: url, bounds: bounds, claim: claim, retention: retention)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self?.deliverSeedVerification(report, eraseToken: eraseToken, generation: generation,
+                                                  owner: claim.ownerUID)
+                }
+            }
+        }
+    }
+
+    nonisolated static func compareSeed(
+        _ seed: SpikeRunFileScan.TailRecord, seedMs: Double, url: URL,
+        bounds: ResidentDayBounds, claim: TelemetryClaimKey, retention: Int
+    ) -> SeedVerificationReport {
+        let start = DispatchTime.now().uptimeNanoseconds
+        let data = (try? Data(contentsOf: url)) ?? Data()
+        let collapsed = SpikeRunLog.collapse(SpikeRunFileScan.records(in: data))
+        let reference = referenceDailyRecord(in: collapsed, within: bounds, claim: claim, retention: retention)
+        let idsToday = Set(collapsed.filter { bounds.contains($0.startedAt) }.map(\.id)).count
+        let readMs = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e6
+
+        let seedID: UUID?
+        let seedLabel: String
+        let seedDecodes: Int
+        switch seed {
+        case .found(let run, let decodes):
+            (seedID, seedLabel, seedDecodes) = (run.id, "hit", decodes)
+        case .miss(let reason, let decodes):
+            (seedID, seedLabel, seedDecodes) = (nil, reason.rawValue, decodes)
+        }
+        let result: SeedVerificationReport.Result
+        if seedID == reference?.id {
+            result = .agree
+        } else {
+            result = seedID == nil ? .miss : .differ
+        }
+        return SeedVerificationReport(result: result, seed: seedLabel, seedDecodes: seedDecodes, seedMs: seedMs,
+                                      idsToday: idsToday, fileBytes: data.count, readMs: readMs)
+    }
+
+    private func deliverSeedVerification(_ report: SeedVerificationReport, eraseToken: Int, generation: Int, owner: String?) {
+        let dropReason: String?
+        if LocalDataEraseEpoch.isStale(eraseToken) || generation != eraseGeneration {
+            dropReason = "erase"
+        } else if ownerUID() != owner {
+            dropReason = "owner"
+        } else {
+            dropReason = nil
+        }
+        if let dropReason {
+            seedVerification = .dropped(reason: dropReason)
+            seedTrail("resident.seed.verify result=dropped reason=\(dropReason)")
+            return
+        }
+        seedVerification = .logged(report)
+        seedTrail(report.trailLine)
     }
 
     /// A fresh same-day (or new-day) id under the current claim, with the
@@ -541,15 +695,21 @@ final class ResidentObservationCenter {
         // civil day stays unambiguous.
         writeDailyRecord(endedAt: dayBounds.dayEnd)
         // Re-base for the new day: fresh counters, fresh id, fresh cached
-        // bound (the ONLY places calendar math runs are init and here —
-        // flush edges, never the signal path).
+        // bound.
         resetCountsForNewDaily()
-        let bounds = ResidentDayBounds.compute(for: currentNow, calendar: calendar)
-        dayBounds = bounds
-        dayEndSinceReference = bounds.dayEnd.timeIntervalSinceReferenceDate
-        mintDailyRun(at: currentNow, bounds: bounds)
+        mintDailyRun(at: currentNow, bounds: rebaseDay(at: currentNow))
         // gh#273 §7.1 edge 2: yesterday's line is final; send it.
         onUploadTrigger?(.dayRollover)
+    }
+
+    /// Recomputes the cached day bound for the day holding `date`. The ONLY
+    /// places calendar math runs are init and here — reached from the
+    /// rollover and the erase, never from the signal path.
+    private func rebaseDay(at date: Date) -> ResidentDayBounds {
+        let bounds = ResidentDayBounds.compute(for: date, calendar: calendar)
+        dayBounds = bounds
+        dayEndSinceReference = bounds.dayEnd.timeIntervalSinceReferenceDate
+        return bounds
     }
 
     /// gh#273 review P2-3 — consent is a claim change in time. The day's
@@ -579,6 +739,36 @@ final class ResidentObservationCenter {
         resetCountsForNewDaily()
         mintDailyRun(at: now(), bounds: dayBounds)
         writeDailyRecord()
+    }
+
+    // MARK: Erase
+
+    /// "Erase all local data": everything this center holds in memory is the
+    /// erased owner's day — the counters, the followers, the gesture log, the
+    /// daily id and the claim it was minted under, and an auto-window that may
+    /// be open right now. `SpikeRunStore.wipe()` took the files; without this
+    /// the next flush wrote the whole pre-erase day back under the old owner
+    /// (a claim change closes the old id under its OWN claim), and the open
+    /// window's close wrote the pre-erase gestures. Told, not reached around,
+    /// like `TelemetryUploader.forgetAfterErase`.
+    ///
+    /// Writes NOTHING: the window is torn down without a record, and the day
+    /// starts over under a fresh id minted for the claim that holds now — so
+    /// the eraser calls this after signing out and after the wipe. The day
+    /// bound is recomputed here rather than by the rollover path, which would
+    /// first close the old id with a write.
+    func forgetAfterErase() {
+        eraseGeneration += 1
+        windowCloseWorkItem?.cancel()
+        windowCloseWorkItem = nil
+        window = nil
+        _ = frameProbe?.stopAndSummarize()
+        frameProbe = nil
+        _ = followers.disarmWindow()
+
+        resetCountsForNewDaily()
+        let currentNow = now()
+        mintDailyRun(at: currentNow, bounds: rebaseDay(at: currentNow))
     }
 
     /// "Upload now"'s read barrier (device fix, build 17): writes today's
@@ -638,7 +828,32 @@ final class ResidentObservationCenter {
         appendDailyRecord(endedAt: endedAt ?? now(), claim: claim)
     }
 
+    /// The settings row's view of today (red-team S2): the day line a flush
+    /// would write now — without writing it or telling the uploader — or nil
+    /// when the last line on disk already says everything counted. The row
+    /// folds this over the file the way collapse folds the next line, so it
+    /// never reads a stale day and never needs the flush it used to run on
+    /// every appear.
+    func unwrittenDailyRecord() -> SpikeRun? {
+        guard dailyHasUnwrittenCounts else { return nil }
+        return makeDailyRecord(endedAt: now(), claim: dailyClaim).run
+    }
+
     private func appendDailyRecord(endedAt: Date, claim: TelemetryClaimKey) {
+        let (run, followerDay, followerOverflow) = makeDailyRecord(endedAt: endedAt, claim: claim)
+        // The claim's owner, explicitly — a nil (signed-out) claim closes
+        // out as nil even while the provider knows the next account (P1-1).
+        if SpikeRunStore.finishRun(run, owner: .explicit(claim.ownerUID), location: location) {
+            lastWrittenCounters = core.counters
+            lastWrittenStartedAt = dailyRunStartedAt
+            lastWrittenFollowers = followerDay
+            lastWrittenFollowerOverflow = followerOverflow
+        }
+    }
+
+    private func makeDailyRecord(
+        endedAt: Date, claim: TelemetryClaimKey
+    ) -> (run: SpikeRun, followerDay: FollowerStatTable, followerOverflow: Int) {
         let context = stamp()
         let followerDay = followers.dailySnapshot()
         let followerOverflow = followers.dailyOverflow
@@ -667,13 +882,7 @@ final class ResidentObservationCenter {
         run.dayKey = dailyDay.dayKey
         run.dayTZOffsetMin = dailyDay.tzOffsetMin
         run.kind = .dailyRollup
-        // The claim's owner, explicitly — a nil (signed-out) claim closes
-        // out as nil even while the provider knows the next account (P1-1).
-        if SpikeRunStore.finishRun(run, owner: .explicit(claim.ownerUID), location: location) {
-            lastWrittenCounters = core.counters
-            lastWrittenStartedAt = dailyRunStartedAt
-            lastWrittenFollowers = followerDay
-            lastWrittenFollowerOverflow = followerOverflow
-        }
+        run.ownerUID = claim.ownerUID
+        return (run, followerDay, followerOverflow)
     }
 }

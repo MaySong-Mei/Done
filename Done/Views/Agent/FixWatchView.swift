@@ -384,19 +384,30 @@ struct FixWatchView: View {
 /// firing can only be seen by navigating to the page it lives on is easy
 /// to miss, which defeats it. The settings ROW shows an indicator whenever
 /// any entry has a firing alarm or is past its review date. That indicator
-/// reads THIS device's records only (`loadVerdicts`); the deck, once a cloud
-/// read succeeds, shows this account's records merged across devices
+/// reads THIS device's records only (`loadRowVerdicts`); the deck, once a
+/// cloud read succeeds, shows this account's records merged across devices
 /// (`loadObservatory`). The two can therefore disagree — ruled acceptable,
 /// behaviour unchanged (§16 decision ③). Nothing here holds new state:
 /// every call is a passive re-read.
 enum FixWatchAttention {
-    /// Flush-then-load read barrier, exactly the deck's own: the live
-    /// resident (if any) flushes today-so-far first, so the evaluator
-    /// never reads a stale day.
+    /// The settings row's read: this device's records, with the live
+    /// resident's unwritten day (if any) folded over them the way collapse
+    /// folds a next line — so the evaluator never reads a stale day — and
+    /// NO flush. The row runs on every appear of the Settings page, pop-backs
+    /// from each of its sub-pages included; when it borrowed the deck's
+    /// flush-then-load barrier, every one of those appends wrote a daily line
+    /// and fired a `.deckOpen` upload (red-team S2). The deck keeps its own
+    /// barrier (`loadLocalRecords`).
     @MainActor
-    static func loadVerdicts(currentSegment: FixWatchSegment) -> [FixVerdict] {
-        let local = loadLocalRecords()
-        return evaluate(dailies: local.dailies, windows: local.windows, currentSegment: currentSegment)
+    static func loadRowVerdicts(
+        currentSegment: FixWatchSegment, location: SpikeRunStorageLocation = .production
+    ) -> [FixVerdict] {
+        var dailies = SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.residentDailySpikeID, location: location)
+        if let unwritten = ResidentObservationCenter.shared?.unwrittenDailyRecord() {
+            dailies = SpikeRunLog.collapse(dailies + [unwritten])
+        }
+        let windows = SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.effortPathFixID, location: location)
+        return evaluate(dailies: dailies, windows: windows, currentSegment: currentSegment)
     }
 
     /// The local half of the deck's read: flush today so far, then this
@@ -422,7 +433,7 @@ enum FixWatchAttention {
     /// How far back the deck reads, with a cloud or without one (review
     /// P1-3; QA: one phone read 29 online and 115 offline): recent weeks,
     /// not the account's lifetime. The settings row's indicator does not
-    /// use it — it reads this device's whole pool (`loadVerdicts`).
+    /// use it — it reads this device's whole pool (`loadRowVerdicts`).
     static let observatoryWindowDays = 60
 
     /// The first day inside the window: today minus `observatoryWindowDays`,
@@ -498,10 +509,12 @@ enum FixWatchAttention {
     }
 
     /// The settings row's indicator: this device's records only — the deck
-    /// may read otherwise once it has merged the cloud (§16 decision ③).
+    /// may read otherwise once it has merged the cloud (§16 decision ③). A
+    /// read: it writes nothing and triggers no upload.
     @MainActor
-    static func needsAttention(now: Date = Date()) -> Bool {
-        needsAttention(verdicts: loadVerdicts(currentSegment: .thisDevice()), entries: FixObservationRegistry.all, now: now)
+    static func needsAttention(now: Date = Date(), location: SpikeRunStorageLocation = .production) -> Bool {
+        needsAttention(verdicts: loadRowVerdicts(currentSegment: .thisDevice(), location: location),
+                       entries: FixObservationRegistry.all, now: now)
     }
 
     /// Pure half, pinned by fixture: any firing alarm, or any entry past

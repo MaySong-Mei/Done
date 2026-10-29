@@ -89,7 +89,7 @@ enum SpikeRunStore {
     /// back through 128KB of fresh appends before the next rewrite.
     static let compactTargetBytes = compactAtBytes / 2
 
-    private static func fileURL(spikeID: String, location: SpikeRunStorageLocation) -> URL {
+    static func fileURL(spikeID: String, location: SpikeRunStorageLocation) -> URL {
         location.directory.appendingPathComponent("\(spikeID).jsonl")
     }
 
@@ -319,19 +319,16 @@ enum SpikeRunStore {
 
     // MARK: Reading
 
+    /// Whole-file decodes this process has run (`loadRuns`, which is
+    /// main-actor). Tests pin the paths that must not run one; nothing in the
+    /// app reads it.
+    private(set) static var wholeFileReads = 0
+
     static func loadRuns(spikeID: String, location: SpikeRunStorageLocation = .production, applyRetention: Bool = true) -> [SpikeRun] {
+        wholeFileReads += 1
         let url = fileURL(spikeID: spikeID, location: location)
         guard let data = try? Data(contentsOf: url) else { return [] }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let text = String(decoding: data, as: UTF8.self)
-        let records: [SpikeRun] = text.split(separator: "\n", omittingEmptySubsequences: true).compactMap { line in
-            // Never traps on a bad line (partial write from a kill mid-append,
-            // or a future/older schema): skip it, do not crash the reader.
-            guard let lineData = line.data(using: .utf8) else { return nil }
-            return try? decoder.decode(SpikeRun.self, from: lineData)
-        }
-        let collapsed = SpikeRunLog.collapse(records)
+        let collapsed = SpikeRunLog.collapse(SpikeRunFileScan.records(in: data))
         return applyRetention ? SpikeRunLog.applyRetention(collapsed, cap: maxRunsPerSpike) : collapsed
     }
 
@@ -342,8 +339,8 @@ enum SpikeRunStore {
     // MARK: Writing internals
 
     /// Highest `revision` this process has appended per (directory, run
-    /// id). The first append of an id in a process reads the file once to
-    /// find what is already there; every later append for that id is a
+    /// id). The first append of an id in a process looks the id up on disk
+    /// once (`latestRevisionOnDisk`); every later append for that id is a
     /// cache hit. That keeps the per-flush cost at "one append + one stat"
     /// (R-F3) while making `revision` strictly monotonic across relaunches:
     /// the upload cursor and the server guard order by it (design §7.2),
@@ -360,14 +357,32 @@ enum SpikeRunStore {
         if let cached = revisionCache[key] {
             current = cached
         } else {
-            // Collapse keeps the LATEST line per id, and revisions only ever
-            // go up in append order, so the latest line's revision is the max.
-            current = loadRuns(spikeID: spikeID, location: location, applyRetention: false)
-                .first { $0.id == id }?.revision ?? 0
+            current = latestRevisionOnDisk(of: id, spikeID: spikeID, location: location)
         }
         let next = current + 1
         revisionCache[key] = next
         return next
+    }
+
+    /// The revision on `id`'s latest line on disk. Collapse keeps the LATEST
+    /// line per id, and revisions only ever go up in append order, so that
+    /// line's revision is the max. Found by searching the file's bytes for
+    /// the id rather than decoding every line (red-team R3): a fresh id —
+    /// every window close, every newly minted day — decodes nothing, and the
+    /// day's own id decodes the line it is on. Whatever the scan cannot
+    /// decide, the full read decides, exactly as before.
+    private static func latestRevisionOnDisk(of id: UUID, spikeID: String, location: SpikeRunStorageLocation) -> Int {
+        var decodedLines = 0
+        switch SpikeRunFileScan.latestLine(of: id, in: fileURL(spikeID: spikeID, location: location),
+                                           decodedLines: &decodedLines) {
+        case .found(let run):
+            return run.revision ?? 0
+        case .absent:
+            return 0
+        case .undetermined:
+            return loadRuns(spikeID: spikeID, location: location, applyRetention: false)
+                .first { $0.id == id }?.revision ?? 0
+        }
     }
 
     /// The account signed in right now, for records whose writer did not
@@ -413,15 +428,28 @@ enum SpikeRunStore {
         if !fm.fileExists(atPath: url.path) {
             guard fm.createFile(atPath: url.path, contents: nil) else { return false }
         }
-        guard let handle = try? FileHandle(forWritingTo: url) else { return false }
+        guard let handle = try? FileHandle(forUpdating: url) else { return false }
         defer { try? handle.close() }
         do {
-            _ = try handle.seekToEnd()
+            let end = try handle.seekToEnd()
+            if end > 0 && !Self.endsWithNewline(handle.fileDescriptor, size: end) {
+                // A torn last line (a kill mid-append) would otherwise glue
+                // onto this one and both would be lost to every reader. A
+                // newline of our own first closes it off; when the last byte
+                // cannot be read, the newline is written anyway — a blank
+                // line is skipped by every reader, old builds included.
+                data.insert(0x0A, at: data.startIndex)
+            }
             try handle.write(contentsOf: data)
             return true
         } catch {
             return false
         }
+    }
+
+    private static func endsWithNewline(_ fd: Int32, size: UInt64) -> Bool {
+        var last: UInt8 = 0
+        return pread(fd, &last, 1, off_t(size - 1)) == 1 && last == 0x0A
     }
 
     /// Fix Watch R-F3: the byte-size STAT comes first and gates everything
@@ -485,6 +513,252 @@ enum SpikeRunStore {
         } catch {
             try? FileManager.default.removeItem(at: tempURL)
         }
+    }
+}
+
+// MARK: - Reading a few lines, not the file
+
+/// Reads of one spike file that decode only the lines they need, for the
+/// main-thread paths whose cost must not grow with the file. Byte-level:
+/// lines are split on the `\n` byte, which is the store's own framing.
+/// `pread` throughout, never `mmap` — a file truncated in place under a
+/// mapping faults the reader.
+nonisolated enum SpikeRunFileScan {
+    /// Every record in a file's bytes, in append order — the one decode
+    /// `loadRuns` runs, here so a read off the main thread runs the same one.
+    /// Never traps on a bad line (partial write from a kill mid-append, or a
+    /// future/older schema): skips it.
+    static func records(in data: Data) -> [SpikeRun] {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let text = String(decoding: data, as: UTF8.self)
+        return text.split(separator: "\n", omittingEmptySubsequences: true).compactMap { line in
+            guard let lineData = line.data(using: .utf8) else { return nil }
+            return try? decoder.decode(SpikeRun.self, from: lineData)
+        }
+    }
+
+    /// How much of the file one search step reads.
+    static let searchChunkBytes = 64 * 1024
+    /// How much one step of finding a line's ends reads.
+    private static let lineChunkBytes = 4 * 1024
+
+    enum Latest: Equatable {
+        /// The latest line whose top-level id is the one asked for — the
+        /// record `loadRuns`'s collapse keeps for it.
+        case found(SpikeRun)
+        /// No line can decode to that id: its text is nowhere in the file.
+        case absent
+        /// The scan could not decide (a read failed, or a line holding the
+        /// id's text does not decode); the caller asks the full read.
+        case undetermined
+    }
+
+    /// The id's latest line, found by searching backwards from the end of
+    /// the file for the id's 36 characters and decoding ONLY lines that hold
+    /// them, newest first.
+    ///
+    /// Why the first verified line is the answer: every line that decodes to
+    /// this id holds its text (a UUID's characters are never escaped by any
+    /// writer, and the match ignores letter case, which `JSONDecoder` also
+    /// ignores — production writes upper case, fixtures and copied-in files
+    /// may not), so no later line of this id can have been passed over.
+    ///
+    /// A candidate that decodes to ANOTHER id (the text in a note, an
+    /// install id) is rejected and the search resumes before the START of its
+    /// line, not before the hit: any other hit inside that line is the same
+    /// line, so a note repeating the id costs one decode, not one per copy.
+    /// A candidate that does not decode at all is the full read's call —
+    /// `loadRuns` skips it, but this scan does not try to be `loadRuns`.
+    ///
+    /// `decodedLines` counts the decodes this call ran.
+    static func latestLine(of id: UUID, in url: URL, decodedLines: inout Int) -> Latest {
+        let fd = open(url.path, O_RDONLY | O_CLOEXEC)
+        guard fd >= 0 else { return errno == ENOENT ? .absent : .undetermined }
+        defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0 else { return .undetermined }
+        let size = Int(info.st_size)
+        let needle = Array(id.uuidString.lowercased().utf8)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        var end = size
+        while true {
+            let hit: Int
+            switch lastOccurrence(of: needle, before: end, fd: fd) {
+            case .readFailed: return .undetermined
+            case .none: return .absent
+            case .at(let offset): hit = offset
+            }
+            guard let start = lineStart(before: hit, fd: fd),
+                  let stop = lineEnd(from: hit + needle.count, size: size, fd: fd),
+                  let line = readBytes(fd, start..<stop) else { return .undetermined }
+            decodedLines += 1
+            guard let run = try? decoder.decode(SpikeRun.self, from: line) else { return .undetermined }
+            if run.id == id { return .found(run) }
+            end = start
+        }
+    }
+
+    // MARK: The newest match in the tail
+
+    enum TailRecord: Equatable {
+        /// The newest line in the window that matched, and the decodes spent.
+        case found(SpikeRun, decodedLines: Int)
+        case miss(TailMiss, decodedLines: Int)
+    }
+
+    enum TailMiss: String, Equatable {
+        /// No file: nothing was ever written, or an erase took it.
+        case noFile = "no_file"
+        /// The window held the whole file and nothing in it matched — the
+        /// full read would find nothing either.
+        case wholeFile = "whole_file"
+        /// The window ran out before the start of the file.
+        case window
+        /// The decode budget ran out first.
+        case cap
+        case readFailed = "read_failed"
+    }
+
+    /// The newest line among the file's last `maxBytes` whose id's newest
+    /// line `matches` — what collapse-then-filter answers over the whole
+    /// file, as long as that line is within the window and the budget.
+    /// Lines are read newest first and at most `maxDecodes` are decoded; a
+    /// line whose id was already seen nearer the end is an OLDER line of an
+    /// id whose newest line did not match, and is skipped, as collapse would.
+    /// The window's first line counts only when it starts inside the window.
+    static func newestMatch(
+        in url: URL, maxBytes: Int, maxDecodes: Int, where matches: (SpikeRun) -> Bool
+    ) -> TailRecord {
+        let fd = open(url.path, O_RDONLY | O_CLOEXEC)
+        guard fd >= 0 else { return .miss(errno == ENOENT ? .noFile : .readFailed, decodedLines: 0) }
+        defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0 else { return .miss(.readFailed, decodedLines: 0) }
+        let size = Int(info.st_size)
+        let start = max(0, size - maxBytes)
+        // One byte before the window says whether its first line is whole.
+        guard var bytes = readBytes(fd, max(0, start - 1)..<size) else { return .miss(.readFailed, decodedLines: 0) }
+        if start > 0 {
+            guard let firstNewline = bytes.firstIndex(of: 0x0A) else { return .miss(.window, decodedLines: 0) }
+            bytes = bytes[(firstNewline + 1)...]
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        var decodedLines = 0
+        var seen = Set<UUID>()
+        for line in bytes.split(separator: 0x0A, omittingEmptySubsequences: true).reversed() {
+            guard decodedLines < maxDecodes else { return .miss(.cap, decodedLines: decodedLines) }
+            decodedLines += 1
+            guard let run = try? decoder.decode(SpikeRun.self, from: Data(line)) else { continue }
+            guard seen.insert(run.id).inserted else { continue }
+            if matches(run) { return .found(run, decodedLines: decodedLines) }
+        }
+        return .miss(start == 0 ? .wholeFile : .window, decodedLines: decodedLines)
+    }
+
+    // MARK: Search
+
+    private enum Occurrence {
+        case at(Int)
+        case none
+        case readFailed
+    }
+
+    /// The start of the last occurrence of `needle` (a lower-case UUID
+    /// string) lying wholly inside `[0, end)`, in any letter case. Reads
+    /// backwards a chunk at a time; consecutive chunks overlap by one byte
+    /// less than the needle, so an occurrence across a chunk edge is seen
+    /// exactly once. Candidates are found by `memchr` for the needle's first
+    /// `-`, which no letter case changes.
+    private static func lastOccurrence(of needle: [UInt8], before end: Int, fd: Int32) -> Occurrence {
+        let length = needle.count
+        guard let anchor = needle.firstIndex(of: UInt8(ascii: "-")) else { return .none }
+        var high = end
+        while high >= length {
+            let low = max(0, high - searchChunkBytes)
+            guard let chunk = readBytes(fd, low..<high) else { return .readFailed }
+            var last: Int?
+            chunk.withUnsafeBytes { raw in
+                guard let base = raw.baseAddress, raw.count >= length else { return }
+                let bytes = raw.bindMemory(to: UInt8.self)
+                // An anchor at `q` starts a candidate at `q - anchor`, which
+                // must fit wholly in the chunk.
+                let lastAnchor = raw.count - length + anchor
+                var q = anchor
+                while q <= lastAnchor {
+                    guard let found = memchr(base + q, Int32(UInt8(ascii: "-")), lastAnchor - q + 1) else { break }
+                    let at = base.distance(to: UnsafeRawPointer(found))
+                    if matches(needle, in: bytes, at: at - anchor) { last = at - anchor }
+                    q = at + 1
+                }
+            }
+            if let last { return .at(low + last) }
+            if low == 0 { return .none }
+            high = low + length - 1
+        }
+        return .none
+    }
+
+    /// Byte compare that folds `A`–`F` to lower case — the only letters a
+    /// UUID string holds.
+    private static func matches(_ needle: [UInt8], in bytes: UnsafeBufferPointer<UInt8>, at start: Int) -> Bool {
+        for index in 0..<needle.count {
+            var byte = bytes[start + index]
+            if byte >= UInt8(ascii: "A") && byte <= UInt8(ascii: "F") { byte |= 0x20 }
+            if byte != needle[index] { return false }
+        }
+        return true
+    }
+
+    // MARK: Lines
+
+    /// One past the nearest `\n` before `offset`, or the file's start.
+    private static func lineStart(before offset: Int, fd: Int32) -> Int? {
+        var high = offset
+        while high > 0 {
+            let low = max(0, high - lineChunkBytes)
+            guard let chunk = readBytes(fd, low..<high) else { return nil }
+            if let newline = chunk.lastIndex(of: 0x0A) { return low + newline + 1 }
+            high = low
+        }
+        return 0
+    }
+
+    /// The nearest `\n` at or after `offset`, or the file's end — an
+    /// unterminated last line is a line, as it is to `loadRuns`.
+    private static func lineEnd(from offset: Int, size: Int, fd: Int32) -> Int? {
+        var low = offset
+        while low < size {
+            let high = min(size, low + lineChunkBytes)
+            guard let chunk = readBytes(fd, low..<high) else { return nil }
+            if let newline = chunk.firstIndex(of: 0x0A) { return low + newline }
+            low = high
+        }
+        return size
+    }
+
+    /// Exactly the bytes in `range`, or nil — a short read means the file
+    /// changed under the scan, which it does not try to reason about.
+    private static func readBytes(_ fd: Int32, _ range: Range<Int>) -> Data? {
+        var data = Data(count: range.count)
+        let complete = data.withUnsafeMutableBytes { buffer -> Bool in
+            guard let base = buffer.baseAddress else { return range.isEmpty }
+            var offset = 0
+            while offset < buffer.count {
+                let n = pread(fd, base + offset, buffer.count - offset, off_t(range.lowerBound + offset))
+                if n < 0 {
+                    if errno == EINTR { continue }
+                    return false
+                }
+                if n == 0 { return false }
+                offset += n
+            }
+            return true
+        }
+        return complete ? data : nil
     }
 }
 
