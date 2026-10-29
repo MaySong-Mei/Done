@@ -385,6 +385,7 @@
 		RERT10013000000000000401 /* ResidentEraseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RERT00013000000000000401 /* ResidentEraseTests.swift */; };
 		QAOS10013000000000000501 /* ObsReadQAScanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QAOS00013000000000000501 /* ObsReadQAScanTests.swift */; };
 		QAOE10013000000000000502 /* ObsReadQAEraseRowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QAOE00013000000000000502 /* ObsReadQAEraseRowTests.swift */; };
+		SPEW10013000000000000601 /* SpikeEraseWritebackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPEW00013000000000000601 /* SpikeEraseWritebackTests.swift */; };
 		QAOF10013000000000000503 /* ObsReadQAFormatCompatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QAOF00013000000000000503 /* ObsReadQAFormatCompatTests.swift */; };
 		QAOM10013000000000000504 /* ObsReadQAMainThreadCostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QAOM00013000000000000504 /* ObsReadQAMainThreadCostTests.swift */; };
 		APTF10013000000000000301 /* AgentPreferencesTokenFreeSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = APTF00013000000000000301 /* AgentPreferencesTokenFreeSyncTests.swift */; };
@@ -860,6 +861,7 @@
 		RERT00013000000000000401 /* ResidentEraseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResidentEraseTests.swift; sourceTree = "<group>"; };
 		QAOS00013000000000000501 /* ObsReadQAScanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObsReadQAScanTests.swift; sourceTree = "<group>"; };
 		QAOE00013000000000000502 /* ObsReadQAEraseRowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObsReadQAEraseRowTests.swift; sourceTree = "<group>"; };
+		SPEW00013000000000000601 /* SpikeEraseWritebackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeEraseWritebackTests.swift; sourceTree = "<group>"; };
 		QAOF00013000000000000503 /* ObsReadQAFormatCompatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObsReadQAFormatCompatTests.swift; sourceTree = "<group>"; };
 		QAOM00013000000000000504 /* ObsReadQAMainThreadCostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObsReadQAMainThreadCostTests.swift; sourceTree = "<group>"; };
 		APTF00013000000000000301 /* AgentPreferencesTokenFreeSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentPreferencesTokenFreeSyncTests.swift; sourceTree = "<group>"; };
@@ -1107,6 +1109,7 @@
 				RERT00013000000000000401 /* ResidentEraseTests.swift */,
 				QAOS00013000000000000501 /* ObsReadQAScanTests.swift */,
 				QAOE00013000000000000502 /* ObsReadQAEraseRowTests.swift */,
+				SPEW00013000000000000601 /* SpikeEraseWritebackTests.swift */,
 				QAOF00013000000000000503 /* ObsReadQAFormatCompatTests.swift */,
 				QAOM00013000000000000504 /* ObsReadQAMainThreadCostTests.swift */,
 				APTF00013000000000000301 /* AgentPreferencesTokenFreeSyncTests.swift */,
@@ -1889,6 +1892,7 @@
 				RERT10013000000000000401 /* ResidentEraseTests.swift in Sources */,
 				QAOS10013000000000000501 /* ObsReadQAScanTests.swift in Sources */,
 				QAOE10013000000000000502 /* ObsReadQAEraseRowTests.swift in Sources */,
+				SPEW10013000000000000601 /* SpikeEraseWritebackTests.swift in Sources */,
 				QAOF10013000000000000503 /* ObsReadQAFormatCompatTests.swift in Sources */,
 				QAOM10013000000000000504 /* ObsReadQAMainThreadCostTests.swift in Sources */,
 				APTF10013000000000000301 /* AgentPreferencesTokenFreeSyncTests.swift in Sources */,
