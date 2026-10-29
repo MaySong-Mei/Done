@@ -370,6 +370,8 @@
 		SSTT10012FE8000000000262 /* SyncSingletonTombstoneTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSTT00012FE8000000000262 /* SyncSingletonTombstoneTests.swift */; };
 		CSHT10012FE8000000000262 /* ConflictShelfTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSHT00012FE8000000000262 /* ConflictShelfTests.swift */; };
 		SRBT10012FE8000000000261 /* SyncRestoreBaselineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRBT00012FE8000000000261 /* SyncRestoreBaselineTests.swift */; };
+		FPIT10013000000000000001 /* FollowerProbeIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FPIT00013000000000000001 /* FollowerProbeIntegrationTests.swift */; };
+		FTMT10013000000000000001 /* FollowerTimingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FTMT00013000000000000001 /* FollowerTimingTests.swift */; };
 		TIOF10013000000000000001 /* TokenInferenceOffTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TIOF00013000000000000001 /* TokenInferenceOffTests.swift */; };
 		QPB110013000000000000001 /* PerfBatch1QATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QPB100013000000000000001 /* PerfBatch1QATests.swift */; };
 		SOCT10013000000000000305 /* SettingsOrphanCleanupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SOCT00013000000000000305 /* SettingsOrphanCleanupTests.swift */; };
@@ -833,6 +835,8 @@
 		SSTT00012FE8000000000262 /* SyncSingletonTombstoneTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSingletonTombstoneTests.swift; sourceTree = "<group>"; };
 		CSHT00012FE8000000000262 /* ConflictShelfTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConflictShelfTests.swift; sourceTree = "<group>"; };
 		SRBT00012FE8000000000261 /* SyncRestoreBaselineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRestoreBaselineTests.swift; sourceTree = "<group>"; };
+		FPIT00013000000000000001 /* FollowerProbeIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowerProbeIntegrationTests.swift; sourceTree = "<group>"; };
+		FTMT00013000000000000001 /* FollowerTimingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowerTimingTests.swift; sourceTree = "<group>"; };
 		TIOF00013000000000000001 /* TokenInferenceOffTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TokenInferenceOffTests.swift; sourceTree = "<group>"; };
 		QPB100013000000000000001 /* PerfBatch1QATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerfBatch1QATests.swift; sourceTree = "<group>"; };
 		SOCT00013000000000000305 /* SettingsOrphanCleanupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsOrphanCleanupTests.swift; sourceTree = "<group>"; };
@@ -1070,6 +1074,8 @@
 				ACEN00012FE8000000000262 /* AgentConversationEncodingTests.swift */,
 				SCGT00012FE8000000000261 /* SyncCursorGenerationTests.swift */,
 				SRBT00012FE8000000000261 /* SyncRestoreBaselineTests.swift */,
+				FPIT00013000000000000001 /* FollowerProbeIntegrationTests.swift */,
+				FTMT00013000000000000001 /* FollowerTimingTests.swift */,
 				TIOF00013000000000000001 /* TokenInferenceOffTests.swift */,
 				QPB100013000000000000001 /* PerfBatch1QATests.swift */,
 				SOCT00013000000000000305 /* SettingsOrphanCleanupTests.swift */,
@@ -1840,6 +1846,8 @@
 				ACEN10012FE8000000000262 /* AgentConversationEncodingTests.swift in Sources */,
 				SCGT10012FE8000000000261 /* SyncCursorGenerationTests.swift in Sources */,
 				SRBT10012FE8000000000261 /* SyncRestoreBaselineTests.swift in Sources */,
+				FPIT10013000000000000001 /* FollowerProbeIntegrationTests.swift in Sources */,
+				FTMT10013000000000000001 /* FollowerTimingTests.swift in Sources */,
 				TIOF10013000000000000001 /* TokenInferenceOffTests.swift in Sources */,
 				QPB110013000000000000001 /* PerfBatch1QATests.swift in Sources */,
 				SOCT10013000000000000305 /* SettingsOrphanCleanupTests.swift in Sources */,
