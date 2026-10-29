@@ -47,6 +47,9 @@ final class SyncFlushLiveArrayQATests: XCTestCase {
 
     override func setUp() async throws {
         try await super.setUp()
+        // The trail is process-wide and rotates at 192 KiB, dropping the
+        // older file: the line counts below start from an empty trail.
+        DiagnosticTrail.clear()
         suite = "SyncFlushLiveArrayQATests-\(UUID().uuidString)"
         let location = TestStorage.reset(suite)
         defaults = UserDefaults(suiteName: suite)!
@@ -95,6 +98,7 @@ final class SyncFlushLiveArrayQATests: XCTestCase {
         try? FileManager.default.removeItem(at: shelfDirectory)
         try? FileManager.default.removeItem(at: prefsDirectory)
         TestStorage.tearDown(suite)
+        DiagnosticTrail.clear()
         try await super.tearDown()
     }
 
@@ -634,39 +638,88 @@ final class SyncFlushLiveArrayQATests: XCTestCase {
         XCTContext.runActivity(named: line) { _ in }
     }
 
-    // MARK: - 8. An erase in the gap
+    // MARK: - 8. A remote delete in the gap
 
-    /// The live read is new exposure: a flush task queued before an erase
-    /// and run after it reads EMPTY stores, where the delivered array used
-    /// to carry the pre-erase rows. Against the old baseline with the gate
-    /// open that is a tombstone for every row in the cloud. What closes it is
-    /// that `resetAllLocalData(keepingSession: false)` signs out in the same
-    /// main-actor turn as it clears the stores, and the `$session` sink ends
-    /// the engine's session synchronously (`userId` empty, gate shut). This
-    /// pins that: the erase's sync-visible steps, in its order, in the gap.
-    func testQA11_AnEraseLandingInTheGapTombstonesNothing() async throws {
-        let a = makeEvent("a"), b = makeEvent("b"), t = makeTodo("t")
-        try await flushCalendar([a, b])
-        try await flushTodos([t])
+    /// The other device deletes a row this device holds; the pull applies
+    /// the tombstone (store and baseline) between the debounce delivering
+    /// and the flush task. The delivered array still carries the row, the
+    /// live one does not. Nothing may be written for it: a flush that
+    /// pushed it again would POST a row the cloud has just buried.
+    func testQA13_ARemoteDeleteAppliedInTheGapIsNotWrittenBack() async throws {
+        let doomed = makeEvent("doomed-elsewhere")
+        try await flushCalendar([doomed])
+        server.tombstoneDirectly(table: "events", key: doomed.id.uuidString)
+        let page = try await fetchPage()
         let mine = makeEvent("mine")
         store.addCalendarEvent(mine)
-        let writesBefore = server.requests.filter { [.patch, .insert, .tombstone, .upsert, .delete].contains($0.verb) }.count
+        let requestsBefore = server.requests.count
 
-        scheduler.advance(by: debounce)                                  // flush task queued with [a, b, mine]
-        defaults.set(false, forKey: AppSettingsKeys.syncUploadsEnabled)  // LocalDataEraser order: uploads off,
-        store.clearAllLocalData()                                        // the stores,
-        auth.signOut()                                                   // then the sign-out
-        XCTAssertTrue(store.rawCalendarEvents.isEmpty && store.events.isEmpty, "fixture: the stores are empty")
-        XCTAssertEqual(service.userId, "", "fixture: the sign-out ended the engine's session in the same turn")
+        scheduler.advance(by: debounce)          // flush task queued with [doomed, mine]
+        apply(page)
+        XCTAssertFalse(store.rawCalendarEvents.contains { $0.id == doomed.id }, "fixture: the pull removed the row")
+        XCTAssertEqual(server.requests.count, requestsBefore, "fixture: the flush task had not run when the page landed")
+        try await syncEventually("mine pushed") { self.seq("calendar_events", mine.id.uuidString) != nil }
+        try await settle()
 
-        try await settle()
-        scheduler.advance(by: debounce)                                  // the erase's own publications
-        try await settle()
-        let writes = server.requests.filter { [.patch, .insert, .tombstone, .upsert, .delete].contains($0.verb) }
-        XCTAssertEqual(writes.count, writesBefore, "a flush after the erase wrote: \(writes.dropFirst(writesBefore).map { "\($0.verb) \($0.keys)" })")
-        for e in [a, b, t] {
-            XCTAssertFalse(server.isTombstoned(table: "events", key: e.id.uuidString), "\(e.title) tombstoned by the erase")
+        let laterWrites = server.requests.dropFirst(requestsBefore)
+            .filter { [.patch, .insert, .tombstone, .upsert, .delete].contains($0.verb) }
+        XCTAssertFalse(laterWrites.contains { $0.keys.map { $0.lowercased() }.contains(doomed.id.uuidString.lowercased()) },
+                       "the flush wrote the remotely deleted row back: \(laterWrites.map { "\($0.verb) \($0.keys)" })")
+        XCTAssertTrue(server.isTombstoned(table: "events", key: doomed.id.uuidString))
+        XCTAssertFalse(store.rawCalendarEvents.contains { $0.id == doomed.id })
+        XCTAssertEqual(liveLines("calendar_events"), liveLines("calendar_events").filter { $0.hasSuffix("delivered=2 live=1") })
+        XCTAssertEqual(liveLines("calendar_events").count, 1, "the flush found the row gone from the store")
+    }
+
+    /// The pre-015 shape of the same thing, and where re-sending is worst:
+    /// another device physically deleted a row, the user chose "cloud
+    /// overwrites local", and the restore dropped it (and the pending local
+    /// row) in the gap. The fallback's merge upsert of a row the baseline
+    /// no longer holds re-creates it in the cloud.
+    func testQA14_PreMigrationAnOverwriteRestoreInTheGapDoesNotResurrectWhatItDropped() async throws {
+        server.pre015 = true
+        await puller.pullToHead()
+        XCTAssertTrue(service.outboundFallback, "fixture: the engine took the fallback")
+        let kept = makeEvent("kept"), gone = makeEvent("deleted-elsewhere")
+        store.addCalendarEvent(kept)
+        store.addCalendarEvent(gone)
+        scheduler.advance(by: debounce)
+        try await syncEventually("both upserted") {
+            [kept, gone].allSatisfy { self.server.row(table: "events", key: $0.id.uuidString) != nil }
         }
+        try await settle()
+        XCTAssertTrue(server.physicallyDelete(table: "events", key: gone.id.uuidString), "fixture: the other device's delete")
+
+        let mine = makeEvent("mine-pending")
+        store.addCalendarEvent(mine)
+        let snapshot = try await service.fetchRestoreSnapshot()
+        XCTAssertFalse(snapshot.calendarEvents.contains { $0.id == gone.id }, "fixture: the cloud no longer has it")
+        let requestsBefore = server.requests.count
+
+        scheduler.advance(by: debounce)          // flush task queued with [kept, gone, mine]
+        _ = store.applyRestore(snapshot, strategy: .cloudOverwritesLocal, resolution: .keepLocal)
+        service.markRestoreCompleted(eventStore: store, eventTypeStore: types, skillStore: skills, snapshot: snapshot)
+        XCTAssertEqual(store.rawCalendarEvents.map(\.id), [kept.id], "fixture: the overwrite left only the cloud's row")
+
+        try await syncEventually("the flush ran") {
+            !self.liveLines("calendar_events").isEmpty || self.server.requests.count > requestsBefore
+        }
+        try await settle()
+        let laterWrites = server.requests.dropFirst(requestsBefore)
+            .filter { [.patch, .insert, .tombstone, .upsert, .delete].contains($0.verb) }
+        XCTAssertNil(server.row(table: "events", key: gone.id.uuidString),
+                     "the flush re-created in the cloud a row another device deleted and the restore dropped")
+        XCTAssertNil(server.row(table: "events", key: mine.id.uuidString),
+                     "the flush uploaded a row the user chose to overwrite")
+        // `kept` may go out once more with the same content: on a pre-015
+        // server the fallback hashes the row with the 015 columns withheld,
+        // and the restore's baseline replay hashes the full row (pre-existing,
+        // harmless). Nothing may name the two rows the restore dropped.
+        let dropped = Set([gone.id, mine.id].map { $0.uuidString.lowercased() })
+        XCTAssertFalse(laterWrites.contains { !dropped.isDisjoint(with: $0.keys.map { $0.lowercased() }) },
+                       "\(laterWrites.map { "\($0.verb) \($0.keys)" })")
+        XCTAssertEqual(liveLines("calendar_events").last.map { $0.hasSuffix("delivered=3 live=1") }, true,
+                       liveLines("calendar_events").last ?? "no line")
     }
 
     // MARK: - 9. Observed while building QA2c/QA3 (pre-existing, not this fix)
@@ -699,5 +752,209 @@ final class SyncFlushLiveArrayQATests: XCTestCase {
         try await settle()
         XCTAssertNotNil(server.row(table: "events", key: offline.id.uuidString),
                         "a row that was only ever local reads clean after a merge restore and is never uploaded")
+    }
+}
+
+
+// MARK: - The real eraser in the gap
+
+/// `LocalDataEraser.resetAllLocalData`, the real one, landing between the
+/// debounce delivering and the flush task. The eraser writes the master
+/// switch and its sweep into `UserDefaults.standard`, and in the app the
+/// engine reads the same object, so here the engine is built on `.standard`
+/// too (the stores keep their own suite). The app domain is saved before
+/// each test and put back after it.
+///
+/// The live read is what makes this matter: a flush task queued before the
+/// erase and run after it reads EMPTY stores, where the delivered array
+/// carried every row. Two things refuse it: the switch the eraser turns off
+/// first, read by `flushGate` at flush time (09d9fa4), and — for
+/// `keepingSession: false` only — the sign-out that ends the session in
+/// the same turn. `keepingSession: true` (the body `switchToCurrentAccount`
+/// runs) has no sign-out, so there the switch is all that holds.
+@MainActor
+final class SyncFlushRealEraserQATests: XCTestCase {
+
+    private static let t0 = Date(timeIntervalSince1970: 1_780_000_000)
+    private let uid = "33333333-4444-4555-8666-777777777777"
+    private let bundleID = Bundle.main.bundleIdentifier ?? "wordless.shiqiliuyifanmei.app"
+
+    private var savedStandard: [String: Any]?
+    private var suite = ""
+    private var defaults: UserDefaults!
+    private var server: SyncFakeServer!
+    private var scheduler: SyncManualScheduler!
+    private var store: EventStore!
+    private var types: EventTypeTemplateStore!
+    private var skills: SkillInsightStore!
+    private var prefs: AgentPreferenceStore!
+    private var auth: AuthService!
+    private var service: SupabaseSyncService!
+    private var puller: SyncPuller!
+    private var eraser: LocalDataEraser!
+    private var shelfDirectory: URL!
+    private var prefsDirectory: URL!
+
+    override func setUp() async throws {
+        try await super.setUp()
+        DiagnosticTrail.clear()
+        savedStandard = UserDefaults.standard.persistentDomain(forName: bundleID)
+        // Another owner's sync keys in the app domain would block this uid.
+        for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix(SyncBaselineStore.keyPrefix) {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+        suite = "SyncFlushRealEraserQATests-\(UUID().uuidString)"
+        let location = TestStorage.reset(suite)
+        defaults = UserDefaults(suiteName: suite)!
+        server = SyncFakeServer(userId: uid)
+        scheduler = SyncManualScheduler(start: Self.t0)
+        store = EventStore(defaults: defaults, storage: location, seedsSampleDataIfEmpty: false)
+        types = EventTypeTemplateStore(defaults: defaults)
+        skills = SkillInsightStore(defaults: defaults)
+        prefsDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SyncFlushRealEraserQATests-prefs-\(UUID().uuidString)", isDirectory: true)
+        shelfDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SyncFlushRealEraserQATests-shelf-\(UUID().uuidString)", isDirectory: true)
+        prefs = AgentPreferenceStore(directoryURL: prefsDirectory)
+
+        service = SupabaseSyncService(gateway: server.connection(), userId: uid, defaults: .standard,
+                                      scheduler: scheduler, environment: .local)
+        service.attachStores(eventStore: store, eventTypeStore: types, skillStore: skills, preferenceStore: prefs)
+        puller = service.installInbound(shelf: ConflictShelf(directory: shelfDirectory))
+        puller.observesForeground = false
+        puller.headFlag = SyncHeadFlag()
+
+        let expiresAt = Date().addingTimeInterval(3600).timeIntervalSince1970
+        let session = #"{"access_token":"at-1","refresh_token":"r-1","user_id":"\#(uid)","email":"erase@example.com","expires_at":\#(expiresAt)}"#
+        auth = AuthService(url: "https://stub.invalid", projectAPIKey: "test-publishable-key", defaults: defaults,
+                           sessionStore: InMemorySessionStore(),
+                           transport: { request in
+                               XCTFail("no auth request may go out; got \(request.url?.absoluteString ?? "?")")
+                               throw URLError(.notConnectedToInternet)
+                           },
+                           launchEnvironment: ["SYNC_DEBUG_SESSION": session], syncEnvironment: .local)
+        XCTAssertTrue(auth.isSignedIn, "fixture: the injected session signed in")
+        UserDefaults.standard.set(false, forKey: AppSettingsKeys.syncUploadsEnabled)
+        service.attach(authService: auth, eventStore: store, eventTypeStore: types, skillStore: skills, preferenceStore: prefs)
+        UserDefaults.standard.set(true, forKey: AppSettingsKeys.syncUploadsEnabled)
+        XCTAssertTrue(service.canUpload, "fixture: the sinks may flush")
+        XCTAssertTrue(service.ownerState.allowsSync, "fixture: this uid owns the data")
+
+        eraser = LocalDataEraser(store: store, skillStore: skills,
+                                 agentRuntime: AgentRuntime(eventTypeTemplateStore: types, preferenceStore: prefs),
+                                 authService: auth, calendarState: CalendarViewState(defaults: defaults),
+                                 syncService: service, imageBackupCoordinator: ImageBackupCoordinator(defaults: defaults),
+                                 backupSnapshotService: BackupSnapshotService())
+
+        puller.beginSession(autoPull: false)
+        await puller.pullToHead()
+        XCTAssertTrue(service.inboundAtHead, "fixture: the session reached head")
+    }
+
+    override func tearDown() async throws {
+        puller?.endSession()
+        UserDefaults.standard.setPersistentDomain(savedStandard ?? [:], forName: bundleID)
+        try? FileManager.default.removeItem(at: shelfDirectory)
+        try? FileManager.default.removeItem(at: prefsDirectory)
+        TestStorage.tearDown(suite)
+        DiagnosticTrail.clear()
+        try await super.tearDown()
+    }
+
+    private func makeEvent(_ title: String) -> Event {
+        Event(title: title, timeRanges: [.init(start: Self.t0, end: Self.t0.addingTimeInterval(1800))], createdAt: Self.t0)
+    }
+
+    private func makeTodo(_ title: String) -> Event {
+        Event(title: title, timeRanges: [.init(start: Self.t0, end: Self.t0.addingTimeInterval(3600))],
+              createdAt: Self.t0, kind: .todo)
+    }
+
+    private func writes() -> [SyncFakeServer.Request] {
+        server.requests.filter { [.patch, .insert, .tombstone, .upsert, .delete].contains($0.verb) }
+    }
+
+    private func liveLines(_ table: String) -> [String] {
+        DiagnosticTrail.combinedText().split(separator: "\n").map(String.init)
+            .filter { $0.contains("sync.flush.live table=\(table) ") }
+    }
+
+    private func settle() async throws {
+        for _ in 0..<20 { await Task.yield() }
+        try await Task.sleep(for: .milliseconds(50))
+    }
+
+    private struct Erased {
+        let onServer: [Event]
+        let writesBefore: Int
+        let calendarBaselineBefore: [String: SyncBaselineEntry]
+    }
+
+    /// Two calendar rows and a todo in the cloud and the baseline; one more
+    /// calendar row pending in the debounce; the debounce fires (the flush
+    /// task is queued with three rows) and the real erase runs in the same
+    /// turn. Returns once the queued flush has read the emptied store — its
+    /// `delivered=3 live=0` line is the witness that it ran.
+    private func eraseLandsInTheGap(keepingSession: Bool) async throws -> Erased {
+        let a = makeEvent("a"), b = makeEvent("b"), t = makeTodo("t")
+        store.addCalendarEvent(a)
+        store.addCalendarEvent(b)
+        store.add(t)
+        scheduler.advance(by: SupabaseSyncConfig.debounceSeconds)
+        try await syncEventually("a, b and t pushed") {
+            [a, b, t].allSatisfy { self.server.row(table: "events", key: $0.id.uuidString) != nil }
+                && self.service.baseline.entry(table: "calendar_events", id: a.id.uuidString)?.seq != nil
+                && self.service.baseline.entry(table: "calendar_events", id: b.id.uuidString)?.seq != nil
+                && self.service.baseline.entry(table: "events", id: t.id.uuidString)?.seq != nil
+        }
+        try await settle()
+        let erased = Erased(onServer: [a, b, t], writesBefore: writes().count,
+                            calendarBaselineBefore: service.baseline.entries(table: "calendar_events"))
+
+        store.addCalendarEvent(makeEvent("mine"))
+        scheduler.advance(by: SupabaseSyncConfig.debounceSeconds)     // the flush task is queued
+        eraser.resetAllLocalData(keepingSession: keepingSession)      // the real erase, same turn
+        XCTAssertTrue(store.rawCalendarEvents.isEmpty && store.events.isEmpty, "fixture: the erase emptied the stores")
+        XCTAssertEqual(writes().count, erased.writesBefore, "fixture: the flush task had not run when the erase did")
+
+        try await syncEventually("the queued flush read the emptied store") { !self.liveLines("calendar_events").isEmpty }
+        try await settle()
+        XCTAssertEqual(liveLines("calendar_events"), liveLines("calendar_events").filter { $0.hasSuffix("delivered=3 live=0") },
+                       "the queued flush ran once, on the emptied store")
+        XCTAssertEqual(liveLines("calendar_events").count, 1)
+        // The erase's own publications: their deliveries meet the switch off.
+        scheduler.advance(by: SupabaseSyncConfig.settingsDebounceSeconds)
+        try await settle()
+        return erased
+    }
+
+    private func assertNothingLeftTheDevice(_ erased: Erased, file: StaticString = #filePath, line: UInt = #line) {
+        let after = writes().dropFirst(erased.writesBefore)
+        XCTAssertTrue(after.isEmpty, "a flush after the erase wrote: \(after.map { "\($0.verb) \($0.keys)" })",
+                      file: file, line: line)
+        for e in erased.onServer {
+            XCTAssertNotNil(server.row(table: "events", key: e.id.uuidString), "\(e.title) left the cloud", file: file, line: line)
+            XCTAssertFalse(server.isTombstoned(table: "events", key: e.id.uuidString), "\(e.title) tombstoned by the erase",
+                           file: file, line: line)
+        }
+    }
+
+    func testQA11a_TheRealResetAllInTheGapLeavesTheCloudAlone() async throws {
+        let erased = try await eraseLandsInTheGap(keepingSession: false)
+        assertNothingLeftTheDevice(erased)
+    }
+
+    /// No sign-out here: the session, the owner and I1 all still let the
+    /// queued flush through, so the switch the eraser turned off is the only
+    /// thing between the emptied stores and a tombstone for every row.
+    func testQA11b_TheRealEraseKeepingTheSessionInTheGapLeavesTheCloudAlone() async throws {
+        let erased = try await eraseLandsInTheGap(keepingSession: true)
+        XCTAssertEqual(service.userId, uid, "fixture: the session was kept")
+        XCTAssertTrue(service.ownerState.allowsSync && service.inboundAtHead, "fixture: only the switch can refuse")
+        assertNothingLeftTheDevice(erased)
+        XCTAssertEqual(service.baseline.entries(table: "calendar_events"), erased.calendarBaselineBefore,
+                       "the refused flush marked rows as sent")
+        XCTAssertFalse(service.needsFlush.contains("calendar_events"),
+                       "a flush the switch holds owes nothing: turning it on runs a full sync")
     }
 }
