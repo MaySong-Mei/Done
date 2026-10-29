@@ -366,6 +366,72 @@ private struct SeededReadPathRandom: RandomNumberGenerator {
     }
 }
 
+// MARK: - I2: the healing newline
+
+/// A kill mid-append leaves an unterminated last line. The next append used
+/// to land directly after it: the two became one undecodable line and BOTH
+/// records were lost to every reader. The store now closes the torn line off
+/// with a newline of its own before appending.
+@MainActor
+final class SpikeRunHealingAppendTests: XCTestCase {
+    private let spikeID = "healing-append"
+    private var location: SpikeRunStorageLocation!
+
+    override func setUp() {
+        super.setUp()
+        location = .ephemeral(id: UUID())
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: location.directory)
+        location = nil
+        super.tearDown()
+    }
+
+    private var url: URL { SpikeRunFixtureBytes.fileURL(spikeID: spikeID, location: location) }
+
+    private func record(_ id: UUID = UUID(), revision: Int? = nil) -> SpikeRun {
+        SpikeRunFixtureBytes.run(id: id, spikeID: spikeID, revision: revision)
+    }
+
+    func testAnAppendAfterATornLastLineIsNotGluedToIt() throws {
+        let kept = record(revision: 1)
+        var torn = SpikeRunFixtureBytes.line(record(revision: 1))
+        torn.removeLast(9)
+        let prefix = SpikeRunFixtureBytes.line(kept) + torn
+        SpikeRunFixtureBytes.write(prefix, spikeID: spikeID, location: location)
+
+        let next = record()
+        XCTAssertTrue(SpikeRunStore.finishRun(next, owner: .explicit(nil), location: location))
+
+        let ids = SpikeRunStore.loadRuns(spikeID: spikeID, location: location).map(\.id)
+        XCTAssertEqual(ids, [kept.id, next.id], "the append after a torn line is its own line")
+        let bytes = try Data(contentsOf: url)
+        XCTAssertEqual(bytes.prefix(prefix.count + 1), prefix + Data([0x0A]), "the torn line is closed off, not rewritten")
+    }
+
+    /// The healing is only for a torn tail: after a whole line the append adds
+    /// exactly its own bytes, so the file stays what older builds wrote.
+    func testAnAppendAfterAWholeLineAddsNoBlankLine() throws {
+        let first = record(revision: 1)
+        let prefix = SpikeRunFixtureBytes.line(first)
+        SpikeRunFixtureBytes.write(prefix, spikeID: spikeID, location: location)
+
+        XCTAssertTrue(SpikeRunStore.finishRun(record(), owner: .explicit(nil), location: location))
+
+        let bytes = try Data(contentsOf: url)
+        XCTAssertEqual(bytes.prefix(prefix.count), prefix)
+        XCTAssertNotEqual(bytes[prefix.count], 0x0A, "no blank line after a complete one")
+        XCTAssertEqual(bytes.last, 0x0A)
+        XCTAssertEqual(bytes.split(separator: 0x0A, omittingEmptySubsequences: false).count, 3, "two lines and the final empty tail")
+    }
+
+    func testTheFirstAppendToANewFileWritesNoLeadingNewline() throws {
+        XCTAssertTrue(SpikeRunStore.finishRun(record(), owner: .explicit(nil), location: location))
+        XCTAssertNotEqual(try Data(contentsOf: url).first, 0x0A)
+    }
+}
+
 // MARK: - Main-thread cost (report-only)
 
 /// Times the old whole-file path against the new one at the sizes that

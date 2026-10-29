@@ -437,15 +437,28 @@ enum SpikeRunStore {
         if !fm.fileExists(atPath: url.path) {
             guard fm.createFile(atPath: url.path, contents: nil) else { return false }
         }
-        guard let handle = try? FileHandle(forWritingTo: url) else { return false }
+        guard let handle = try? FileHandle(forUpdating: url) else { return false }
         defer { try? handle.close() }
         do {
-            _ = try handle.seekToEnd()
+            let end = try handle.seekToEnd()
+            if end > 0 && !Self.endsWithNewline(handle.fileDescriptor, size: end) {
+                // A torn last line (a kill mid-append) would otherwise glue
+                // onto this one and both would be lost to every reader. A
+                // newline of our own first closes it off; when the last byte
+                // cannot be read, the newline is written anyway — a blank
+                // line is skipped by every reader, old builds included.
+                data.insert(0x0A, at: data.startIndex)
+            }
             try handle.write(contentsOf: data)
             return true
         } catch {
             return false
         }
+    }
+
+    private static func endsWithNewline(_ fd: Int32, size: UInt64) -> Bool {
+        var last: UInt8 = 0
+        return pread(fd, &last, 1, off_t(size - 1)) == 1 && last == 0x0A
     }
 
     /// Fix Watch R-F3: the byte-size STAT comes first and gates everything
