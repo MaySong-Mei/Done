@@ -212,7 +212,7 @@ enum SpikeRegistry {
 
 // MARK: - Run
 
-enum SpikeRunOutcome: String, Codable, Equatable {
+nonisolated enum SpikeRunOutcome: String, Codable, Equatable {
     case completed
     case aborted
     case interrupted
@@ -232,13 +232,13 @@ enum SpikeRunOutcome: String, Codable, Equatable {
 /// made the tag silently flip on any metric that happens to land on a
 /// whole number (an entirely plausible frame-time percentile). Counts and
 /// measurements are both just "a number" for this harness's purposes.
-enum SpikeMetricValue: Equatable {
+nonisolated enum SpikeMetricValue: Equatable {
     case number(Double)
     case string(String)
     case bool(Bool)
 }
 
-extension SpikeMetricValue: Codable {
+nonisolated extension SpikeMetricValue: Codable {
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         if let value = try? container.decode(Bool.self) {
@@ -265,7 +265,12 @@ extension SpikeMetricValue: Codable {
 /// written by a past process) interrupted and awaiting reconciliation.
 /// See `SpikeRunLog` for how two on-disk records (open, then close) for
 /// the same `id` collapse into one current `SpikeRun`.
-struct SpikeRun: Codable, Identifiable, Equatable {
+///
+/// `nonisolated`, with every type a line decodes into and the pure log
+/// algebra below: the resident's launch-seed verification reads and decodes
+/// a whole file off the main thread (`ResidentObservationCenter`), and a
+/// main-actor `Codable` conformance cannot be used there.
+nonisolated struct SpikeRun: Codable, Identifiable, Equatable {
     let id: UUID
     let spikeID: String
     let scenarioID: String
@@ -343,7 +348,7 @@ struct SpikeRun: Codable, Identifiable, Equatable {
 /// (oldest first, exactly the order `SpikeRunStore` reads them off disk
 /// in). Kept separate from any file I/O so every rule here is testable
 /// against a plain array fixture.
-enum SpikeRunLog {
+nonisolated enum SpikeRunLog {
     /// A run may appear as two on-disk records (write-ahead open, then a
     /// closing record) or be re-appended later (a note added after
     /// close). The LATEST record for a given id, in append order, is that

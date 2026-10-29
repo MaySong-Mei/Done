@@ -328,16 +328,7 @@ enum SpikeRunStore {
         wholeFileReads += 1
         let url = fileURL(spikeID: spikeID, location: location)
         guard let data = try? Data(contentsOf: url) else { return [] }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let text = String(decoding: data, as: UTF8.self)
-        let records: [SpikeRun] = text.split(separator: "\n", omittingEmptySubsequences: true).compactMap { line in
-            // Never traps on a bad line (partial write from a kill mid-append,
-            // or a future/older schema): skip it, do not crash the reader.
-            guard let lineData = line.data(using: .utf8) else { return nil }
-            return try? decoder.decode(SpikeRun.self, from: lineData)
-        }
-        let collapsed = SpikeRunLog.collapse(records)
+        let collapsed = SpikeRunLog.collapse(SpikeRunFileScan.records(in: data))
         return applyRetention ? SpikeRunLog.applyRetention(collapsed, cap: maxRunsPerSpike) : collapsed
     }
 
@@ -532,7 +523,21 @@ enum SpikeRunStore {
 /// lines are split on the `\n` byte, which is the store's own framing.
 /// `pread` throughout, never `mmap` — a file truncated in place under a
 /// mapping faults the reader.
-enum SpikeRunFileScan {
+nonisolated enum SpikeRunFileScan {
+    /// Every record in a file's bytes, in append order — the one decode
+    /// `loadRuns` runs, here so a read off the main thread runs the same one.
+    /// Never traps on a bad line (partial write from a kill mid-append, or a
+    /// future/older schema): skips it.
+    static func records(in data: Data) -> [SpikeRun] {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let text = String(decoding: data, as: UTF8.self)
+        return text.split(separator: "\n", omittingEmptySubsequences: true).compactMap { line in
+            guard let lineData = line.data(using: .utf8) else { return nil }
+            return try? decoder.decode(SpikeRun.self, from: lineData)
+        }
+    }
+
     /// How much of the file one search step reads.
     static let searchChunkBytes = 64 * 1024
     /// How much one step of finding a line's ends reads.

@@ -23,7 +23,7 @@ import Foundation
 
 // MARK: - Record kind (wire contract §2 `kind`)
 
-enum TelemetryRecordKind: String, Codable, Equatable, CaseIterable {
+nonisolated enum TelemetryRecordKind: String, Codable, Equatable, CaseIterable {
     case dailyRollup = "daily_rollup"
     case window
     case manualRun = "manual_run"
@@ -62,7 +62,7 @@ enum TelemetryRecordKind: String, Codable, Equatable, CaseIterable {
 /// existed whose text is none of the five literals that existed then. The
 /// text is kept LOCALLY (the record is still readable on the device) and
 /// has no `wireValue`, so the uploader's context never contains it.
-enum SpikeAbortReason: Equatable {
+nonisolated enum SpikeAbortReason: Equatable {
     case processEnded
     case manualRunTookOver
     case residentDeactivated
@@ -119,7 +119,7 @@ enum SpikeAbortReason: Equatable {
     }
 }
 
-extension SpikeAbortReason: Codable {
+nonisolated extension SpikeAbortReason: Codable {
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         self.init(storedText: try container.decode(String.self))
@@ -140,7 +140,7 @@ extension SpikeAbortReason: Codable {
 /// counts under the old build; a second account on the same phone gets its
 /// own record; a signed-out stretch (owner nil) never merges into an
 /// account's record.
-struct TelemetryClaimKey: Equatable {
+nonisolated struct TelemetryClaimKey: Equatable {
     let buildConfiguration: String?
     let appBuild: String
     let osVersion: String
