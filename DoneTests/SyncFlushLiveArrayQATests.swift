@@ -848,11 +848,16 @@ final class SyncFlushLiveArrayQATests: XCTestCase {
 ///
 /// The live read is what makes this matter: a flush task queued before the
 /// erase and run after it reads EMPTY stores, where the delivered array
-/// carried every row. Two things refuse it: the switch the eraser turns off
-/// first, read by `flushGate` at flush time (09d9fa4), and — for
-/// `keepingSession: false` only — the sign-out that ends the session in
-/// the same turn. `keepingSession: true` (the body `switchToCurrentAccount`
-/// runs) has no sign-out, so there the switch is all that holds.
+/// carried every row. The eraser turns the master switch off first and
+/// `flushGate` reads it at flush time (09d9fa4); `keepingSession: false`
+/// also signs out in the same turn.
+///
+/// The eraser reaches files outside the stores it is handed. The backup
+/// snapshot is the one this fixture owns (the eraser takes the service from
+/// its caller), so it is pointed at a temporary file; the reports and the
+/// LLM usage ledger resolve to test-host folders under XCTest on their own.
+/// Without that, these tests delete the simulator app's real
+/// `Documents/backup-snapshot.json`.
 @MainActor
 final class SyncFlushRealEraserQATests: XCTestCase {
 
@@ -873,6 +878,7 @@ final class SyncFlushRealEraserQATests: XCTestCase {
     private var service: SupabaseSyncService!
     private var puller: SyncPuller!
     private var eraser: LocalDataEraser!
+    private var snapshotDirectory: URL!
     private var shelfDirectory: URL!
     private var prefsDirectory: URL!
 
@@ -925,7 +931,7 @@ final class SyncFlushRealEraserQATests: XCTestCase {
                                  agentRuntime: AgentRuntime(eventTypeTemplateStore: types, preferenceStore: prefs),
                                  authService: auth, calendarState: CalendarViewState(defaults: defaults),
                                  syncService: service, imageBackupCoordinator: ImageBackupCoordinator(defaults: defaults),
-                                 backupSnapshotService: BackupSnapshotService())
+                                 backupSnapshotService: redirectedSnapshotService())
 
         puller.beginSession(autoPull: false)
         await puller.pullToHead()
@@ -937,9 +943,25 @@ final class SyncFlushRealEraserQATests: XCTestCase {
         UserDefaults.standard.setPersistentDomain(savedStandard ?? [:], forName: bundleID)
         try? FileManager.default.removeItem(at: shelfDirectory)
         try? FileManager.default.removeItem(at: prefsDirectory)
+        if let snapshotDirectory { try? FileManager.default.removeItem(at: snapshotDirectory) }
         TestStorage.tearDown(suite)
         DiagnosticTrail.clear()
         try await super.tearDown()
+    }
+
+    /// The erase's backup snapshot, kept out of the host app's `Documents/`.
+    /// A file is planted where it now points, so the erase's own delete of it
+    /// (asserted in `eraseLandsInTheGap`) says the eraser used this path.
+    private var snapshotFile: URL { snapshotDirectory.appendingPathComponent("backup-snapshot.json") }
+
+    private func redirectedSnapshotService() -> BackupSnapshotService {
+        snapshotDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SyncFlushRealEraserQATests-snapshot-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: snapshotDirectory, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: snapshotFile.path, contents: Data("planted".utf8))
+        let service = BackupSnapshotService()
+        service.snapshotFileURLOverride = snapshotFile
+        return service
     }
 
     private func makeEvent(_ title: String) -> Event {
@@ -996,6 +1018,8 @@ final class SyncFlushRealEraserQATests: XCTestCase {
         scheduler.advance(by: SupabaseSyncConfig.debounceSeconds)     // the flush task is queued
         eraser.resetAllLocalData(keepingSession: keepingSession)      // the real erase, same turn
         XCTAssertTrue(store.rawCalendarEvents.isEmpty && store.events.isEmpty, "fixture: the erase emptied the stores")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: snapshotFile.path),
+                       "fixture: the erase deleted the redirected snapshot, so it used the redirect")
         XCTAssertEqual(writes().count, erased.writesBefore, "fixture: the flush task had not run when the erase did")
 
         try await syncEventually("the queued flush read the emptied store") { !self.liveLines("calendar_events").isEmpty }
@@ -1025,9 +1049,17 @@ final class SyncFlushRealEraserQATests: XCTestCase {
         assertNothingLeftTheDevice(erased)
     }
 
-    /// No sign-out here: the session, the owner and I1 all still let the
-    /// queued flush through, so the switch the eraser turned off is the only
-    /// thing between the emptied stores and a tombstone for every row.
+    /// The eraser's body with the session kept and the switch left as the
+    /// eraser leaves it — off. With no sign-out, the session, the owner and
+    /// I1 all still let the queued flush through, so here the switch is the
+    /// only thing between the emptied stores and a tombstone for every row.
+    ///
+    /// This is NOT the app's account-switch flow. In the app,
+    /// `keepingSession: true` runs only inside `switchToCurrentAccount`,
+    /// which turns the switch back on in the same turn and then ends and
+    /// begins the session: the queued flush meets a baseline reloaded empty
+    /// (the erase wiped the persisted hashes) and the inbound-at-head gate
+    /// the new puller session closes. That flow is not tested here.
     func testQA11b_TheRealEraseKeepingTheSessionInTheGapLeavesTheCloudAlone() async throws {
         let erased = try await eraseLandsInTheGap(keepingSession: true)
         XCTAssertEqual(service.userId, uid, "fixture: the session was kept")
