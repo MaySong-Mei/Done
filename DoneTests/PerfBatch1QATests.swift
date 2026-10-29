@@ -581,6 +581,10 @@ final class PerfBatch1QATests: XCTestCase {
         let suite = "PerfBatch1QA-c3-\(UUID().uuidString)"
         suites.append(suite)
         let defaults = UserDefaults(suiteName: suite)!
+        // The registration domain is process-wide: put it back as it was, or
+        // every later test that seeds googleUserEmail sees it survive.
+        let registered = defaults.volatileDomain(forName: UserDefaults.registrationDomain)
+        defer { defaults.setVolatileDomain(registered, forName: UserDefaults.registrationDomain) }
         defaults.register(defaults: ["googleUserEmail": "registered@example.invalid"])
         defaults.set("persisted", forKey: "googleAccessToken")
         let outcome = SettingsOrphanCleanup.run(defaults: defaults, preferencesDirectory: nil, bundleIdentifier: nil)
