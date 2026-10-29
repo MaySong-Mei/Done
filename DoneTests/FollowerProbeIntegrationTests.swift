@@ -32,9 +32,12 @@ final class FollowerProbeCenterTests: XCTestCase {
     private var centers: [ResidentObservationCenter] = []
     private var followerClock: FollowerManualClock!
     private var displaced: FollowerTimingRecorder?
+    /// Every frame probe a window attached, so a test can tick it by hand.
+    private var probes: [SpikeFrameProbe] = []
 
     override func setUp() {
         super.setUp()
+        probes = []
         location = .ephemeral(id: UUID())
         coordinator = SpikeSessionCoordinator()
         followerClock = FollowerManualClock()
@@ -58,7 +61,11 @@ final class FollowerProbeCenterTests: XCTestCase {
         let made = ResidentObservationCenter(
             coordinator: coordinator, store: nil, location: location, calendar: .current,
             now: { clock.now }, mediaNow: { media },
-            makeFrameProbe: { SpikeFrameProbe() },
+            makeFrameProbe: { [unowned self] in
+                let probe = SpikeFrameProbe()
+                self.probes.append(probe)
+                return probe
+            },
             followerClock: { followerClock.ns },
             installsFollowerProbe: installs,
             isAppActive: { true }
@@ -219,13 +226,15 @@ final class FollowerProbeCenterTests: XCTestCase {
         let center = makeCenter(clock: clock)
         center.activate()
         emitTap()
-        // The frame probe the window attached; its ticks are driven by hand
-        // in media seconds, on the same clock as the spans.
+        // The frame probe the window attached, ticked by hand through its
+        // own callback, in media seconds — the clock the spans run on.
+        let probe = try XCTUnwrap(probes.last, "fixture: the window attached a probe")
+        let tick = try XCTUnwrap(probe.onTick, "fixture: the center listens to the probe")
         followerClock.set(ms: 1_000)
-        center.followers.noteFrameTick(atNs: FollowerClock.nanoseconds(fromMediaSeconds: 1.000))
+        tick(1.000)
         run(.syncCalendarHash, ms: 120)          // 1000…1120
-        center.followers.noteFrameTick(atNs: FollowerClock.nanoseconds(fromMediaSeconds: 1.132))
-        center.followers.noteFrameTick(atNs: FollowerClock.nanoseconds(fromMediaSeconds: 1.140))
+        tick(1.132)
+        tick(1.140)
         center.closeWindow()
 
         let window = try XCTUnwrap(windows().first)
@@ -572,6 +581,55 @@ final class FollowerStoreFollowerTests: XCTestCase {
         let before = recorder.dailySnapshot()[.widgetSnapshot].count
         store.flushWidgetSnapshotSync()
         XCTAssertEqual(recorder.dailySnapshot()[.widgetSnapshot].count, before + 1)
+    }
+
+    private final class WatchTransport: WristSessionTransport {
+        var isReadyForSnapshot = true
+        var pushes = 0
+        func push(context: [String: Any]) throws { pushes += 1 }
+    }
+
+    /// One run per push while a watch can take one; none when it cannot.
+    func testTheWatchPushIsOneRunWhenAWatchCanTakeIt() {
+        store.addCalendarEvent(event("Gym"))
+        let transport = WatchTransport()
+        let bridge = WristBridge(ledger: WristAppliedLedger(defaults: defaults), defaults: defaults, transport: transport)
+        bridge.attach(store: store, templates: types)
+        XCTAssertEqual(recorder.dailySnapshot()[.wristSnapshot].count, 1, "the attach push")
+        XCTAssertEqual(transport.pushes, 1, "positive control: it pushed")
+        bridge.pushSnapshot()
+        XCTAssertEqual(recorder.dailySnapshot()[.wristSnapshot].count, 2, "an unchanged push is still a run")
+        transport.isReadyForSnapshot = false
+        bridge.pushSnapshot()
+        XCTAssertEqual(recorder.dailySnapshot()[.wristSnapshot].count, 2, "no watch to take it: no run")
+    }
+
+    /// Each scan's walk over the events and logs is one run.
+    func testTheImageScanWalkIsOneRunPerScan() async throws {
+        defaults.set(true, forKey: AppSettingsKeys.syncUploadsEnabled)
+        let authName = suiteName + ".auth"
+        let authSuite = try XCTUnwrap(UserDefaults(suiteName: authName))
+        defer { authSuite.removePersistentDomain(forName: authName) }
+        let session = AuthSession(accessToken: "t", refreshToken: "r", expiresAt: .distantFuture,
+                                  user: AuthUser(id: "follower-user", email: nil, createdAt: nil))
+        authSuite.set(try JSONEncoder().encode(session), forKey: "supabaseAuthSession")
+        let auth = AuthService(defaults: authSuite, sessionStore: InMemorySessionStore())
+        let assets = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("FollowerAssets-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: assets) }
+        let coordinator = ImageBackupCoordinator(defaults: defaults,
+                                                 assetStore: AgenticIntakeAssetStore(baseDirectoryURL: assets),
+                                                 storageServiceFactory: { _ in ImageBackupCoordinatorTests.MockStorage() })
+        store.addCalendarEvent(event("Photo walk"))
+        coordinator.attach(eventStore: store, authService: auth)
+        let deadline = Date().addingTimeInterval(5)
+        while coordinator.completedScanCount < 1, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(coordinator.completedScanCount, 1, "fixture: the attach scan ran")
+        XCTAssertEqual(recorder.dailySnapshot()[.imageScan].count, 1)
+        await coordinator.scanAndUpload(reason: "follower-test")
+        XCTAssertEqual(recorder.dailySnapshot()[.imageScan].count, 2)
+        withExtendedLifetime(auth) {}
     }
 }
 
