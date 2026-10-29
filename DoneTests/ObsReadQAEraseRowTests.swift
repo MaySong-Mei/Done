@@ -395,6 +395,36 @@ final class ObsReadQAEraseTests: XCTestCase {
         }
     }
 
+    /// Each way an erase can reach the check, alone: the center told (an
+    /// erase the epoch did not see), the epoch bumped (one the center was not
+    /// told of), and the owner gone. Any one of them drops the result.
+    func testEachDropReasonAloneDropsTheSeedCheck() {
+        LocalDataEraseEpoch.withIsolatedEpoch {
+            todaysLineUnderA(hidden: 2)
+            let byCenter = makeCenter(verifies: true)
+            byCenter.forgetAfterErase()
+            waitForVerification(byCenter)
+            XCTAssertEqual(byCenter.seedVerification, .dropped(reason: "erase"), "the center's forget alone")
+            byCenter.deactivate()
+
+            trail = []
+            todaysLineUnderA(hidden: 2)
+            let byEpoch = makeCenter(verifies: true)
+            LocalDataEraseEpoch.bump()
+            waitForVerification(byEpoch)
+            XCTAssertEqual(byEpoch.seedVerification, .dropped(reason: "erase"), "the epoch alone")
+            byEpoch.deactivate()
+
+            trail = []
+            todaysLineUnderA(hidden: 2)
+            let byOwner = makeCenter(verifies: true)
+            owner.value = "owner-b"
+            waitForVerification(byOwner)
+            XCTAssertEqual(byOwner.seedVerification, .dropped(reason: "owner"), "the owner alone")
+            XCTAssertEqual(trail, ["resident.seed.verify result=dropped reason=owner"])
+        }
+    }
+
     /// The read finished before the erase; only its delivery comes after.
     func testEraseAfterTheSeedChecksReadButBeforeItsDeliveryDropsIt() {
         LocalDataEraseEpoch.withIsolatedEpoch {
@@ -584,6 +614,22 @@ final class ObsReadQASettingsRowTests: XCTestCase {
         return FixWatchAttention.needsAttention(verdicts: verdicts, entries: FixObservationRegistry.all, now: rowNow)
     }
 
+    /// The 3111ef1 row's verdicts, read right after its flush (no new flush).
+    private func oldVerdicts() -> [FixVerdict] {
+        FixWatchAttention.evaluate(
+            dailies: SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.residentDailySpikeID, location: location),
+            windows: SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.effortPathFixID, location: location),
+            currentSegment: .thisDevice())
+    }
+
+    private func alarmFacts(_ verdicts: [FixVerdict]) -> [String] {
+        verdicts.map { verdict in
+            let gate = verdict.entryID == FixObservationRegistry.meTabGateFixID
+                ? verdict.readouts.map { "\($0.id)=\($0.measured)" }.joined(separator: ",") : ""
+            return "\(verdict.entryID) alarm=\(verdict.alarm) \(gate)"
+        }
+    }
+
     // MARK: Against the 3111ef1 row, on random histories
 
     func testTheRowLightsExactlyWhenThe3111ef1RowLit() throws {
@@ -622,8 +668,16 @@ final class ObsReadQASettingsRowTests: XCTestCase {
                     }
                 default:
                     if center!.unwrittenDailyRecord() != nil { unwrittenAtCheck += 1 }
+                    let verdictsNow = FixWatchAttention.loadRowVerdicts(currentSegment: .thisDevice(), location: location)
                     let now = newRow()
                     let then = oldRow()
+                    // What the dot stands on: each entry's alarm and the
+                    // tripwire's own counts. (Day and non-release counts may
+                    // differ: the 3111ef1 flush wrote a zero-count line for a
+                    // freshly minted id; the row does not fold one. The dot
+                    // never reads them.)
+                    XCTAssertEqual(alarmFacts(verdictsNow), alarmFacts(oldVerdicts()),
+                                   "history \(history) step \(step): the alarms and the tripwire's counts")
                     XCTAssertEqual(now, then, "history \(history) step \(step): the row \(now ? "lit" : "stayed dark") where the 3111ef1 row \(then ? "lit" : "stayed dark")")
                     if now { lit += 1 } else { dark += 1 }
                 }
@@ -801,6 +855,16 @@ final class ObsReadQAHealingTests: XCTestCase {
             try FileManager.default.removeItem(at: url)
         }
         XCTAssertGreaterThan(glued, tornLine.count / 2, "control: without the heal the next record is lost")
+
+        // A file whose last line is whole gets no newline of the store's: the
+        // append is exactly one line, no blank line before it.
+        let whole = ObsReadQABytes.line(first)
+        try whole.write(to: url)
+        let next = TelemetryFixtures.run(id: UUID(), startedAt: TelemetryFixtures.t0.addingTimeInterval(180), revision: nil)
+        XCTAssertTrue(SpikeRunStore.finishRun(next, owner: .explicit(TelemetryFixtures.uid), location: location))
+        let after = try Data(contentsOf: url)
+        XCTAssertNotEqual(after[whole.count], 0x0A, "no blank line after a whole last line")
+        XCTAssertEqual(after.split(separator: 0x0A, omittingEmptySubsequences: false).count, 3, "two lines and the final newline")
     }
 
     /// The upload a heal makes possible, and nothing else: the same rows as a
