@@ -397,8 +397,18 @@ enum SpikeRunStore {
     /// `revision` for this id (always overwritten), this install's id, and
     /// the owner as `OwnerStamp` says — the provider's for a writer that
     /// left it open, the writer's own value (nil included) when explicit.
+    ///
+    /// First, it refuses a record born before an erase (`SpikeRun.eraseEpoch`):
+    /// a run armed before "erase all local data" and closed after it would
+    /// otherwise come back as revision 1 under whoever is signed in by then.
+    /// Before anything else runs, so a refused record mints no install id,
+    /// creates no directory and moves no revision.
     @discardableResult
     private static func appendLine(_ run: SpikeRun, spikeID: String, owner: OwnerStamp, location: SpikeRunStorageLocation) -> Bool {
+        guard !LocalDataEraseEpoch.isStale(run.eraseEpoch) else {
+            DiagnosticTrail.record("SpikeRun", "append.stale_after_erase spike=\(spikeID) open=\(run.isOpen)")
+            return false
+        }
         var stamped = run
         stamped.revision = nextRevision(for: run.id, spikeID: spikeID, location: location)
         if stamped.installID == nil {

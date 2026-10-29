@@ -34,6 +34,10 @@
 //      its precondition (`MeAvatarStore.delete()` is what makes its
 //      `hasImage` guard pass); `syncAvatarIfNeeded` re-creates the
 //      per-account `lastSyncedAvatarVersion.<id>` key.
+//    • `SpikeRunStore` — a manual spike run armed before the erase and
+//      closed after it. Here the token rides on the record itself
+//      (`SpikeRun.eraseEpoch`) and the store's one append path checks it,
+//      so every writer of that store is gated, not only the two runners.
 //
 //  ⚠️ Nothing makes the next one fail on arrival. This is the write-side
 //  twin of the gap `resetAllLocalData` admits for the purge list: a writer

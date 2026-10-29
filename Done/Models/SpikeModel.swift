@@ -339,7 +339,48 @@ nonisolated struct SpikeRun: Codable, Identifiable, Equatable {
     var revision: Int? = nil
     var kind: TelemetryRecordKind? = nil
 
+    /// The erase epoch this value was born in (`LocalDataEraseEpoch`), taken
+    /// when it is built or decoded and carried by every copy. A run armed
+    /// before "erase all local data" and closed after it is the erased
+    /// owner's, and `SpikeRunStore` refuses any record whose epoch is older
+    /// than the current one. Memory only: never written, never compared.
+    @SpikeRunBirthEpoch var eraseEpoch: Int = LocalDataEraseEpoch.capture()
+
     var isOpen: Bool { endedAt == nil }
+}
+
+/// `SpikeRun.eraseEpoch`'s storage. Equal to every other, so two copies of
+/// one run compare equal whichever epoch each was read in; and absent from
+/// the line: the two container overloads below are what the synthesized
+/// `Codable` of `SpikeRun` calls, so a line is byte-for-byte what it was
+/// before the field existed, and decoding stamps the epoch current at the
+/// read. Its own `Codable` conformance exists only for that synthesis to
+/// type-check.
+@propertyWrapper
+nonisolated struct SpikeRunBirthEpoch: Codable, Equatable {
+    var wrappedValue: Int
+
+    init(wrappedValue: Int) {
+        self.wrappedValue = wrappedValue
+    }
+
+    init(from decoder: Decoder) throws {
+        wrappedValue = LocalDataEraseEpoch.capture()
+    }
+
+    func encode(to encoder: Encoder) throws {}
+
+    static func == (lhs: SpikeRunBirthEpoch, rhs: SpikeRunBirthEpoch) -> Bool { true }
+}
+
+nonisolated extension KeyedDecodingContainer {
+    func decode(_ type: SpikeRunBirthEpoch.Type, forKey key: Key) throws -> SpikeRunBirthEpoch {
+        SpikeRunBirthEpoch(wrappedValue: LocalDataEraseEpoch.capture())
+    }
+}
+
+nonisolated extension KeyedEncodingContainer {
+    mutating func encode(_ value: SpikeRunBirthEpoch, forKey key: Key) throws {}
 }
 
 // MARK: - Run log algebra (pure)
