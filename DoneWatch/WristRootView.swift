@@ -3,10 +3,8 @@
 //  DoneWatch
 //
 //  Three pages, swiped left and right: Today (the day's timeline, the
-//  default page, with the running session's bar at its foot), Stats (time
-//  by category over a period) and Settings. The minute schedule
-//  re-resolves every page at event boundaries; the running counter ticks
-//  on its own through `Text(_:style: .timer)`.
+//  default page), Stats (time by category over a period) and Settings.
+//  The minute schedule re-resolves every page at event boundaries.
 //
 
 import Combine
@@ -19,8 +17,6 @@ struct WristRootView: View {
     @AppStorage(WristLocalSettings.zoomKey) private var zoomRaw = WristLocalSettings.Zoom.standard.rawValue
     /// Empty until a period is picked on the watch: the phone's applies.
     @AppStorage(WristLocalSettings.statsPeriodKey) private var periodRaw = ""
-    /// Where the running bar's top is on the screen.
-    @State private var barTop: CGFloat?
     private let housekeeping = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -58,24 +54,6 @@ struct WristRootView: View {
                 .tag(WristPage.settings)
             }
             .tabViewStyle(.page)
-            // Over the pages, not inside Today: in a paged TabView's page
-            // the bar's ticking counter re-renders the page every frame for
-            // as long as a session runs, the same trap as
-            // `containerBackground(for: .navigation)`.
-            .overlay(alignment: .bottom) {
-                ZStack {
-                    if page == .today, let running {
-                        WristRunningBar(
-                            occurrence: running.occurrence, pending: running.pending, strings: strings,
-                            onExtend: { client.extend(running.occurrence) },
-                            onFinish: { client.finish(running.occurrence) }
-                        )
-                        .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .global).minY }) { _, y in barTop = y }
-                        .transition(.opacity)
-                    }
-                }
-                .animation(.easeOut(duration: 0.15), value: page == .today)
-            }
         }
         .onReceive(housekeeping) { now in
             client.tick(now: now)
@@ -87,14 +65,6 @@ struct WristRootView: View {
             return (occurrence, pending)
         }
         return nil
-    }
-
-    /// Room the running bar takes at the foot of Today, in the day's
-    /// full-screen coordinates.
-    private func barInset(_ running: Bool) -> CGFloat {
-        guard running else { return 0 }
-        guard let barTop else { return WristRunningBar.height }
-        return max(0, WKInterfaceDevice.current().screenBounds.height - barTop)
     }
 
     @ViewBuilder
@@ -110,7 +80,6 @@ struct WristRootView: View {
                 titleHints: snapshot.titleHints,
                 localCreates: client.localCreates, motions: snapshot.motions,
                 hourHeight: CGFloat(WristLocalSettings.Zoom(stored: zoomRaw).hourHeight),
-                bottomInset: barInset(running != nil),
                 takesRangeEdits: snapshot.takesRangeEdits,
                 pendingEventIDs: pendingIDs,
                 onCreate: { type, name, start, end in
@@ -180,9 +149,6 @@ struct WristTodayView: View {
     var motions: WristMotionSettings = .off
     /// Points per hour (`WristLocalSettings.Zoom`).
     var hourHeight: CGFloat = CGFloat(WristLocalSettings.Zoom.standard.hourHeight)
-    /// What the running bar covers at the foot of the page: the day scrolls
-    /// clear of it, and drawing scrolls at its top edge.
-    var bottomInset: CGFloat = 0
     /// The phone applies range edits (`WristSnapshot.takesRangeEdits`), and
     /// the events with a command it has not answered yet.
     var takesRangeEdits: Bool = false
@@ -387,10 +353,8 @@ struct WristTodayView: View {
                                 .offset(x: gutter - 6, y: nowY - 1.75)
                         }
                     }
-                    // Midnight can still scroll clear of the clock row, and
-                    // the night clear of the running bar.
+                    // Midnight can still scroll clear of the clock row.
                     .padding(.top, top)
-                    .padding(.bottom, bottomInset)
                 }
                 .scrollPosition($position)
                 .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { _, y in
@@ -731,9 +695,8 @@ struct WristTodayView: View {
         // The top edge is under the clock row's glass.
         if fingerY < top + edgeZone {
             depth = -(top + edgeZone - fingerY) / edgeZone
-        } else if fingerY > viewportHeight - bottomInset - edgeZone {
-            // The bottom edge is the running bar's top, when it is up.
-            depth = (fingerY - (viewportHeight - bottomInset - edgeZone)) / edgeZone
+        } else if fingerY > viewportHeight - edgeZone {
+            depth = (fingerY - (viewportHeight - edgeZone)) / edgeZone
         } else {
             return
         }
@@ -1504,75 +1467,6 @@ struct WristEmptyView: View {
         }
         .padding()
         .toolbar(.hidden, for: .navigationBar)
-    }
-}
-
-/// The running session at the foot of the today page (laid over the
-/// pages by `WristRootView`): its name, the
-/// counter, +15 and Finish (the double tap). A session the phone cannot
-/// end from here (a repeating event, a phone timer) shows no buttons.
-struct WristRunningBar: View {
-    static let height: CGFloat = 46
-
-    let occurrence: WristOccurrence
-    let pending: Bool
-    let strings: WristStrings
-    let onExtend: () -> Void
-    let onFinish: () -> Void
-
-    private var color: Color { WristColor.color(occurrence.colorHex) }
-
-    var body: some View {
-        HStack(spacing: 4) {
-            VStack(alignment: .leading, spacing: 0) {
-                Text(occurrence.title)
-                    .font(.system(size: 12, weight: .semibold))
-                    .lineLimit(1)
-                Group {
-                    if pending {
-                        Text("\(Text(occurrence.start, style: .timer)) · \(strings.sending)")
-                    } else if occurrence.quickActionsEnabled {
-                        Text(occurrence.start, style: .timer)
-                    } else {
-                        Text("\(Text(occurrence.start, style: .timer)) · \(strings.editOnPhoneShort)")
-                    }
-                }
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(.white.opacity(0.75))
-                .lineLimit(1)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            if occurrence.quickActionsEnabled {
-                Button(action: onExtend) {
-                    Text(strings.extend)
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .frame(width: 38, height: 30)
-                        .background(Color.white.opacity(0.18), in: Capsule())
-                }
-                .buttonStyle(.plain)
-                Button(action: onFinish) {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 14, weight: .bold))
-                        .frame(width: 38, height: 30)
-                        .background(color.opacity(0.85), in: Capsule())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(strings.finish)
-                .handGestureShortcut(.primaryAction)
-            }
-        }
-        .padding(.leading, 10)
-        .padding(.trailing, 6)
-        .frame(height: Self.height)
-        // Plain fills, no material: the bar sits over a scroll view, and a
-        // blur there would be redrawn whenever the day moves.
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(color.opacity(0.35))
-                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.black))
-        )
-        .padding(.horizontal, 4)
     }
 }
 
