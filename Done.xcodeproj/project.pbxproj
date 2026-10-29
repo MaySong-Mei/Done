@@ -381,6 +381,10 @@
 		SRRP10013000000000000403 /* SpikeRunReadPathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRRP00013000000000000403 /* SpikeRunReadPathTests.swift */; };
 		FWRR10013000000000000402 /* FixWatchRowReadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FWRR00013000000000000402 /* FixWatchRowReadTests.swift */; };
 		RERT10013000000000000401 /* ResidentEraseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RERT00013000000000000401 /* ResidentEraseTests.swift */; };
+		QAOS10013000000000000501 /* ObsReadQAScanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QAOS00013000000000000501 /* ObsReadQAScanTests.swift */; };
+		QAOE10013000000000000502 /* ObsReadQAEraseRowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QAOE00013000000000000502 /* ObsReadQAEraseRowTests.swift */; };
+		QAOF10013000000000000503 /* ObsReadQAFormatCompatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QAOF00013000000000000503 /* ObsReadQAFormatCompatTests.swift */; };
+		QAOM10013000000000000504 /* ObsReadQAMainThreadCostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QAOM00013000000000000504 /* ObsReadQAMainThreadCostTests.swift */; };
 		APTF10013000000000000301 /* AgentPreferencesTokenFreeSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = APTF00013000000000000301 /* AgentPreferencesTokenFreeSyncTests.swift */; };
 		SCGT10012FE8000000000261 /* SyncCursorGenerationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SCGT00012FE8000000000261 /* SyncCursorGenerationTests.swift */; };
 		SSCN10012FE8000000000261 /* SyncSettingsCanonicalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSCN00012FE8000000000261 /* SyncSettingsCanonicalTests.swift */; };
@@ -850,6 +854,10 @@
 		SRRP00013000000000000403 /* SpikeRunReadPathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeRunReadPathTests.swift; sourceTree = "<group>"; };
 		FWRR00013000000000000402 /* FixWatchRowReadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FixWatchRowReadTests.swift; sourceTree = "<group>"; };
 		RERT00013000000000000401 /* ResidentEraseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResidentEraseTests.swift; sourceTree = "<group>"; };
+		QAOS00013000000000000501 /* ObsReadQAScanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObsReadQAScanTests.swift; sourceTree = "<group>"; };
+		QAOE00013000000000000502 /* ObsReadQAEraseRowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObsReadQAEraseRowTests.swift; sourceTree = "<group>"; };
+		QAOF00013000000000000503 /* ObsReadQAFormatCompatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObsReadQAFormatCompatTests.swift; sourceTree = "<group>"; };
+		QAOM00013000000000000504 /* ObsReadQAMainThreadCostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObsReadQAMainThreadCostTests.swift; sourceTree = "<group>"; };
 		APTF00013000000000000301 /* AgentPreferencesTokenFreeSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentPreferencesTokenFreeSyncTests.swift; sourceTree = "<group>"; };
 		SCGT00012FE8000000000261 /* SyncCursorGenerationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCursorGenerationTests.swift; sourceTree = "<group>"; };
 		SSCN00012FE8000000000261 /* SyncSettingsCanonicalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSettingsCanonicalTests.swift; sourceTree = "<group>"; };
@@ -1093,6 +1101,10 @@
 				SRRP00013000000000000403 /* SpikeRunReadPathTests.swift */,
 				FWRR00013000000000000402 /* FixWatchRowReadTests.swift */,
 				RERT00013000000000000401 /* ResidentEraseTests.swift */,
+				QAOS00013000000000000501 /* ObsReadQAScanTests.swift */,
+				QAOE00013000000000000502 /* ObsReadQAEraseRowTests.swift */,
+				QAOF00013000000000000503 /* ObsReadQAFormatCompatTests.swift */,
+				QAOM00013000000000000504 /* ObsReadQAMainThreadCostTests.swift */,
 				APTF00013000000000000301 /* AgentPreferencesTokenFreeSyncTests.swift */,
 				SOGT00012FE8000000000261 /* SyncOwnerGuardTests.swift */,
 				SSWT00012FE8000000000271 /* SyncSeamlessSwitchTests.swift */,
@@ -1869,6 +1881,10 @@
 				SRRP10013000000000000403 /* SpikeRunReadPathTests.swift in Sources */,
 				FWRR10013000000000000402 /* FixWatchRowReadTests.swift in Sources */,
 				RERT10013000000000000401 /* ResidentEraseTests.swift in Sources */,
+				QAOS10013000000000000501 /* ObsReadQAScanTests.swift in Sources */,
+				QAOE10013000000000000502 /* ObsReadQAEraseRowTests.swift in Sources */,
+				QAOF10013000000000000503 /* ObsReadQAFormatCompatTests.swift in Sources */,
+				QAOM10013000000000000504 /* ObsReadQAMainThreadCostTests.swift in Sources */,
 				APTF10013000000000000301 /* AgentPreferencesTokenFreeSyncTests.swift in Sources */,
 				SOGT10012FE8000000000261 /* SyncOwnerGuardTests.swift in Sources */,
 				SSWT10012FE8000000000271 /* SyncSeamlessSwitchTests.swift in Sources */,
