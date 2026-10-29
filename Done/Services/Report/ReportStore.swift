@@ -91,7 +91,18 @@ struct Report: Codable, Identifiable, Hashable {
 final class ReportStore {
 
     private let fileManager: FileManager
-    private let directoryURL: URL
+    /// Not private, so a test can pin the directory the erase's `ReportStore()`
+    /// actually wipes.
+    let directoryURL: URL
+
+    /// Redirected under XCTest, same reasoning as `MeAvatarStore.fileName`:
+    /// `DoneTests` runs inside Done.app's container, `Documents` is not
+    /// redirected for it, and `wipe()` sits in `resetAllLocalData`. A test
+    /// driving the real erase would otherwise delete the user's reports,
+    /// `userNote` included.
+    static var defaultDirectoryName: String {
+        EventStorageLocation.isRunningUnderXCTest ? "Reports-test-host" : "Reports"
+    }
 
     /// - Parameter directoryURL: override the storage location (tests); defaults
     ///   to `Documents/Reports`.
@@ -101,7 +112,7 @@ final class ReportStore {
             self.directoryURL = directoryURL
         } else {
             let documents = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            self.directoryURL = documents.appendingPathComponent("Reports", isDirectory: true)
+            self.directoryURL = documents.appendingPathComponent(Self.defaultDirectoryName, isDirectory: true)
         }
     }
 
