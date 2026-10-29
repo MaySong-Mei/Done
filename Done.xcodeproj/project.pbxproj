@@ -363,6 +363,7 @@
 		DAST10012FE8000000000264 /* DominoAnchorSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAST00012FE8000000000264 /* DominoAnchorSyncTests.swift */; };
 		SHGT10012FE8000000000264 /* SyncHeadGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SHGT00012FE8000000000264 /* SyncHeadGateTests.swift */; };
 		SUHT10012FE8000000000264 /* SyncUndoHoldTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SUHT00012FE8000000000264 /* SyncUndoHoldTests.swift */; };
+		SFLA10012FE8000000000290 /* SyncFlushLiveArrayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SFLA00012FE8000000000290 /* SyncFlushLiveArrayTests.swift */; };
 		SAGT10012FE8000000000264 /* SyncAccountGoneTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SAGT00012FE8000000000264 /* SyncAccountGoneTests.swift */; };
 		SDRT10012FE8000000000262 /* SyncDecisionReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SDRT00012FE8000000000262 /* SyncDecisionReplayTests.swift */; };
 		SSMT10012FE8000000000262 /* SyncSettingsMergeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSMT00012FE8000000000262 /* SyncSettingsMergeTests.swift */; };
@@ -829,6 +830,7 @@
 		DAST00012FE8000000000264 /* DominoAnchorSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DominoAnchorSyncTests.swift; sourceTree = "<group>"; };
 		SHGT00012FE8000000000264 /* SyncHeadGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncHeadGateTests.swift; sourceTree = "<group>"; };
 		SUHT00012FE8000000000264 /* SyncUndoHoldTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncUndoHoldTests.swift; sourceTree = "<group>"; };
+		SFLA00012FE8000000000290 /* SyncFlushLiveArrayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncFlushLiveArrayTests.swift; sourceTree = "<group>"; };
 		SAGT00012FE8000000000264 /* SyncAccountGoneTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncAccountGoneTests.swift; sourceTree = "<group>"; };
 		SDRT00012FE8000000000262 /* SyncDecisionReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncDecisionReplayTests.swift; sourceTree = "<group>"; };
 		SSMT00012FE8000000000262 /* SyncSettingsMergeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSettingsMergeTests.swift; sourceTree = "<group>"; };
@@ -1090,6 +1092,7 @@
 				DAST00012FE8000000000264 /* DominoAnchorSyncTests.swift */,
 				SHGT00012FE8000000000264 /* SyncHeadGateTests.swift */,
 				SUHT00012FE8000000000264 /* SyncUndoHoldTests.swift */,
+				SFLA00012FE8000000000290 /* SyncFlushLiveArrayTests.swift */,
 				SAGT00012FE8000000000264 /* SyncAccountGoneTests.swift */,
 				SDRT00012FE8000000000262 /* SyncDecisionReplayTests.swift */,
 				SSMT00012FE8000000000262 /* SyncSettingsMergeTests.swift */,
@@ -1863,6 +1866,7 @@
 				DAST10012FE8000000000264 /* DominoAnchorSyncTests.swift in Sources */,
 				SHGT10012FE8000000000264 /* SyncHeadGateTests.swift in Sources */,
 				SUHT10012FE8000000000264 /* SyncUndoHoldTests.swift in Sources */,
+				SFLA10012FE8000000000290 /* SyncFlushLiveArrayTests.swift in Sources */,
 				SAGT10012FE8000000000264 /* SyncAccountGoneTests.swift in Sources */,
 				SDRT10012FE8000000000262 /* SyncDecisionReplayTests.swift in Sources */,
 				SSMT10012FE8000000000262 /* SyncSettingsMergeTests.swift in Sources */,
