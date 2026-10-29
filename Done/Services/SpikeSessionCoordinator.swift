@@ -135,6 +135,11 @@ final class SpikeSessionCoordinator: ObservableObject {
     static let defaultManualRunExpiry: TimeInterval = 30 * 60
     private var expiryTimers: [UUID: Timer] = [:]
 
+    /// The coordinator "erase all local data" tells (`LocalDataEraser`). Set
+    /// by every init and weak: the app makes exactly one, at its root; a
+    /// test's dies with the test.
+    private(set) static weak var shared: SpikeSessionCoordinator?
+
     init(manualRunExpiry: TimeInterval = SpikeSessionCoordinator.defaultManualRunExpiry) {
         self.manualRunExpiry = manualRunExpiry
         // Every stored property first — `self` is not usable for the
@@ -153,6 +158,7 @@ final class SpikeSessionCoordinator: ObservableObject {
                 .sink { [weak self] _ in self?.objectWillChange.send() }
                 .store(in: &runnerChangeForwarders)
         }
+        Self.shared = self
     }
 
     // MARK: Registration
@@ -310,6 +316,19 @@ final class SpikeSessionCoordinator: ObservableObject {
         for runID in order {
             stop(runID: runID)
         }
+    }
+
+    // MARK: Erase
+
+    /// "Erase all local data": every armed run began before the erase. The
+    /// owned runners drop theirs, and their last completed run, without a
+    /// write; anything else still armed is stopped through its own handler,
+    /// and the store refuses its closing record (`SpikeRun.eraseEpoch`).
+    /// Residents are not runs: they stay attached and are told separately.
+    func forgetAfterErase() {
+        runner195.forgetAfterErase()
+        runner201.forgetAfterErase()
+        stopAll()
     }
 
     // MARK: Seam management (the ONLY writers of the physical seams)

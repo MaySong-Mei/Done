@@ -145,6 +145,25 @@ final class Spike201Runner: ObservableObject {
         finish()
     }
 
+    /// "Erase all local data" (`SpikeSessionCoordinator.forgetAfterErase`).
+    /// An armed run began before the erase: it is torn down with no closing
+    /// record — probe stopped, seams detached, gestures dropped — and the
+    /// last completed run, the erased owner's, is forgotten with it. The
+    /// store would refuse the closing write anyway (`SpikeRun.eraseEpoch`);
+    /// this keeps the Developer page from showing a run that is never written.
+    func forgetAfterErase() {
+        if case .armed(let openRun) = state {
+            _ = frameProbe?.stopAndSummarize()
+            frameProbe = nil
+            coordinator?.unregister(runID: openRun.id)
+        }
+        log = Spike201GestureLog()
+        lagTracker = Spike201DeliveryLagTracker()
+        epochStamp = nil
+        lastCompletedRun = nil
+        state = .idle
+    }
+
     private func handle(_ signal: SpikeSignal) {
         switch signal {
         case .bodyPass(let id):

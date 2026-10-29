@@ -313,6 +313,13 @@ struct LocalDataEraser {
         // next id under the owner that holds from here on. Phone-only: the
         // Mac has no resident observer.
         ResidentObservationCenter.shared?.forgetAfterErase()
+        // Manual spike runs armed from the Developer page: each began before
+        // the erase, and its closing record would carry its pre-erase id and
+        // gestures. The store refuses that record whatever happens here
+        // (`SpikeRun.eraseEpoch`); this ends the run, so the page does not
+        // keep showing one that will never be written. Phone-only, like the
+        // runners.
+        SpikeSessionCoordinator.shared?.forgetAfterErase()
         #endif
         // Round 2. MetricKit payloads in `Diagnostics/MetricKit/` and the
         // legacy `Documents/Diagnostics` pile. `DiagnosticTrail.clear()`

@@ -276,6 +276,21 @@ final class Spike195Runner: ObservableObject {
         finish(outcome: .aborted, abortReason: .stoppedBeforeTarget)
     }
 
+    /// "Erase all local data": the armed run, and the last completed one,
+    /// are dropped without a write. See `Spike201Runner.forgetAfterErase`.
+    func forgetAfterErase() {
+        if case .armed(let openRun) = state {
+            _ = frameProbe?.stopAndSummarize()
+            frameProbe = nil
+            coordinator?.unregister(runID: openRun.id)
+        }
+        bodyPassesParent = 0
+        bodyPassesLeaf = 0
+        storeWrites = 0
+        lastCompletedRun = nil
+        state = .idle
+    }
+
     private func handle(_ signal: SpikeSignal) {
         switch signal {
         case .bodyPass(let id):
