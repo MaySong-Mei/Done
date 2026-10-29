@@ -373,6 +373,7 @@
 		FPIT10013000000000000001 /* FollowerProbeIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FPIT00013000000000000001 /* FollowerProbeIntegrationTests.swift */; };
 		FTMT10013000000000000001 /* FollowerTimingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FTMT00013000000000000001 /* FollowerTimingTests.swift */; };
 		TIOF10013000000000000001 /* TokenInferenceOffTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TIOF00013000000000000001 /* TokenInferenceOffTests.swift */; };
+		QAPB201130000000000000A1 /* PerfBatch2QATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QAPB200130000000000000A1 /* PerfBatch2QATests.swift */; };
 		QPB110013000000000000001 /* PerfBatch1QATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QPB100013000000000000001 /* PerfBatch1QATests.swift */; };
 		SOCT10013000000000000305 /* SettingsOrphanCleanupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SOCT00013000000000000305 /* SettingsOrphanCleanupTests.swift */; };
 		CSFP10013000000000000303 /* ConflictShelfSkipTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSFP00013000000000000303 /* ConflictShelfSkipTests.swift */; };
@@ -838,6 +839,7 @@
 		FPIT00013000000000000001 /* FollowerProbeIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowerProbeIntegrationTests.swift; sourceTree = "<group>"; };
 		FTMT00013000000000000001 /* FollowerTimingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowerTimingTests.swift; sourceTree = "<group>"; };
 		TIOF00013000000000000001 /* TokenInferenceOffTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TokenInferenceOffTests.swift; sourceTree = "<group>"; };
+		QAPB200130000000000000A1 /* PerfBatch2QATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerfBatch2QATests.swift; sourceTree = "<group>"; };
 		QPB100013000000000000001 /* PerfBatch1QATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerfBatch1QATests.swift; sourceTree = "<group>"; };
 		SOCT00013000000000000305 /* SettingsOrphanCleanupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsOrphanCleanupTests.swift; sourceTree = "<group>"; };
 		CSFP00013000000000000303 /* ConflictShelfSkipTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConflictShelfSkipTests.swift; sourceTree = "<group>"; };
@@ -1077,6 +1079,7 @@
 				FPIT00013000000000000001 /* FollowerProbeIntegrationTests.swift */,
 				FTMT00013000000000000001 /* FollowerTimingTests.swift */,
 				TIOF00013000000000000001 /* TokenInferenceOffTests.swift */,
+				QAPB200130000000000000A1 /* PerfBatch2QATests.swift */,
 				QPB100013000000000000001 /* PerfBatch1QATests.swift */,
 				SOCT00013000000000000305 /* SettingsOrphanCleanupTests.swift */,
 				CSFP00013000000000000303 /* ConflictShelfSkipTests.swift */,
@@ -1849,6 +1852,7 @@
 				FPIT10013000000000000001 /* FollowerProbeIntegrationTests.swift in Sources */,
 				FTMT10013000000000000001 /* FollowerTimingTests.swift in Sources */,
 				TIOF10013000000000000001 /* TokenInferenceOffTests.swift in Sources */,
+				QAPB201130000000000000A1 /* PerfBatch2QATests.swift in Sources */,
 				QPB110013000000000000001 /* PerfBatch1QATests.swift in Sources */,
 				SOCT10013000000000000305 /* SettingsOrphanCleanupTests.swift in Sources */,
 				CSFP10013000000000000303 /* ConflictShelfSkipTests.swift in Sources */,
