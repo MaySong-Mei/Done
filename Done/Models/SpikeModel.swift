@@ -352,10 +352,10 @@ nonisolated struct SpikeRun: Codable, Identifiable, Equatable {
 /// `SpikeRun.eraseEpoch`'s storage. Equal to every other, so two copies of
 /// one run compare equal whichever epoch each was read in; and absent from
 /// the line: the two container overloads below are what the synthesized
-/// `Codable` of `SpikeRun` calls, so a line is byte-for-byte what it was
-/// before the field existed, and decoding stamps the epoch current at the
-/// read. Its own `Codable` conformance exists only for that synthesis to
-/// type-check.
+/// `Codable` of `SpikeRun` calls, so encoding writes nothing for it (a line
+/// names the fields it named before the field existed) and decoding stamps
+/// the epoch current at the read. Its own `Codable` conformance exists only
+/// for that synthesis to type-check.
 @propertyWrapper
 nonisolated struct SpikeRunBirthEpoch: Codable, Equatable {
     var wrappedValue: Int
