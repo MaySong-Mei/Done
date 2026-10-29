@@ -45,6 +45,9 @@ final class SyncFlushLiveArrayTests: XCTestCase {
 
     override func setUp() async throws {
         try await super.setUp()
+        // The trail is process-wide and rotation drops the older file, so
+        // counts of `sync.flush.live` lines start from an empty trail.
+        DiagnosticTrail.clear()
         suite = "SyncFlushLiveArrayTests-\(UUID().uuidString)"
         let location = TestStorage.reset(suite)
         defaults = UserDefaults(suiteName: suite)!
@@ -97,6 +100,7 @@ final class SyncFlushLiveArrayTests: XCTestCase {
         try? FileManager.default.removeItem(at: shelfDirectory)
         try? FileManager.default.removeItem(at: prefsDirectory)
         TestStorage.tearDown(suite)
+        DiagnosticTrail.clear()
         try await super.tearDown()
     }
 
