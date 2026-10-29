@@ -753,8 +753,89 @@ final class SyncFlushLiveArrayQATests: XCTestCase {
         XCTAssertNotNil(server.row(table: "events", key: offline.id.uuidString),
                         "a row that was only ever local reads clean after a merge restore and is never uploaded")
     }
-}
 
+    // MARK: - 10. The switch: refused while off, sent once it is back on
+
+    /// 09d9fa4 does not flag a flush the switch refuses, on the premise that
+    /// turning the switch back on runs a full sync. A refusal needs the
+    /// debounce to deliver with `isFullSyncDone` true (the sinks drop a
+    /// delivery while a full sync runs), so no full sync is in flight when
+    /// the switch comes back on and `userDidEnableUploads` starts one.
+    func testQA15a_AFlushTheSwitchRefusedIsSentByTheFullSyncWhenItComesBackOn() async throws {
+        let edit = makeEvent("edited-then-switch-off")
+        store.addCalendarEvent(edit)
+        let writesBefore = server.requests.filter { [.patch, .insert, .tombstone, .upsert, .delete].contains($0.verb) }.count
+        scheduler.advance(by: debounce)                                  // the sink delivers with the switch on
+        defaults.set(false, forKey: AppSettingsKeys.syncUploadsEnabled)  // the toggle, in the gap
+        service.userDidDisableUploads()
+        try await settle()
+        XCTAssertEqual(server.requests.filter { [.patch, .insert, .tombstone, .upsert, .delete].contains($0.verb) }.count,
+                       writesBefore, "a flush went out with the switch off")
+        XCTAssertNil(service.baseline.entry(table: "calendar_events", id: edit.id.uuidString), "the refused flush marked the row")
+
+        defaults.set(true, forKey: AppSettingsKeys.syncUploadsEnabled)
+        service.userDidEnableUploads()
+        try await syncEventually("the full sync sent the edit") { self.seq("calendar_events", edit.id.uuidString) != nil }
+        XCTAssertNotNil(server.row(table: "events", key: edit.id.uuidString))
+    }
+
+    /// Pre-existing (3111ef1 as well): the toggle off and on while a full
+    /// sync is running. `userDidDisableUploads` ends the puller's session;
+    /// `userDidEnableUploads` returns before starting it again because a
+    /// full sync is in flight, so nothing pulls (no doorbell, no poll) until
+    /// the next launch or sign-in.
+    func testQA15b_PreExisting_ThePullerRunsAgainWhenTheSwitchComesBackOnDuringAFullSync() async throws {
+        XCTExpectFailure("pre-existing: userDidEnableUploads returns before restarting the puller while a full sync is in flight",
+                         strict: true)
+        try await parkAFullSyncOnSkills()
+        XCTAssertTrue(puller.active, "fixture: the puller runs")
+        defaults.set(false, forKey: AppSettingsKeys.syncUploadsEnabled)
+        service.userDidDisableUploads()
+        defaults.set(true, forKey: AppSettingsKeys.syncUploadsEnabled)
+        service.userDidEnableUploads()
+        server.holdWhen = nil
+        server.releaseAll()
+        try await fullSyncFinishes()
+        XCTAssertTrue(puller.active, "the switch is on and nothing pulls")
+    }
+
+    /// Pre-existing (3111ef1 as well): the sinks drop a delivery while a
+    /// full sync runs (`isFullSyncDone` false), and flag nothing. An edit to
+    /// a table the full sync has already passed waits for the next edit of
+    /// that table or the next launch.
+    func testQA15c_PreExisting_AnEditToATableTheRunningFullSyncPassedIsSent() async throws {
+        XCTExpectFailure("pre-existing: a sink delivery during a full sync is dropped unflagged", strict: true)
+        try await parkAFullSyncOnSkills()
+        let edit = makeEvent("edited-during-the-full-sync")
+        store.addCalendarEvent(edit)
+        scheduler.advance(by: debounce)
+        server.holdWhen = nil
+        server.releaseAll()
+        try await fullSyncFinishes()
+        XCTAssertNotNil(server.row(table: "events", key: edit.id.uuidString),
+                        "an edit made while the full sync was past its table never left the device")
+    }
+
+    /// A full sync started by the toggle, parked on its skill_insights POST
+    /// (the calendar table is already behind it).
+    private func parkAFullSyncOnSkills() async throws {
+        skills.add(SkillInsight(skillName: "focus", points: 1, date: Self.t0, eventTitle: "s", reasoning: "r"))
+        server.holdWhen = { verb, table in verb == .insert && table == "skill_insights" }
+        service.userDidEnableUploads()
+        try await syncEventually("the full sync is parked on skills") { self.server.heldCount == 1 }
+    }
+
+    /// The parked skills POST answered; the three singleton pushes after it
+    /// are in-process main-actor calls, a few turns.
+    private func fullSyncFinishes() async throws {
+        try await syncEventually("the parked skill row landed") {
+            self.server.requests(.insert, table: "skill_insights").count == 1
+                && self.service.baseline.entries(table: "skill_insights").values.allSatisfy { $0.seq != nil }
+        }
+        try await settle()
+        try await settle()
+    }
+}
 
 // MARK: - The real eraser in the gap
 
