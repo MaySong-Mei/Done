@@ -432,6 +432,350 @@ final class SpikeRunHealingAppendTests: XCTestCase {
     }
 }
 
+// MARK: - R1: the launch seed reads the tail
+
+/// The center adopts today's record at launch from the file's TAIL — at most
+/// `seedTailBytes`, at most `seedMaxDecodes` lines — instead of decoding the
+/// whole file on the main thread. A record the tail cannot see is a miss,
+/// and a miss mints a fresh same-day id, a state the claim rules already
+/// produce and the evaluator sums.
+@MainActor
+final class ResidentLaunchSeedTests: XCTestCase {
+    private final class Box<T> {
+        var value: T
+        init(_ value: T) { self.value = value }
+    }
+
+    private var location: SpikeRunStorageLocation!
+    private var coordinator: SpikeSessionCoordinator!
+    private var centers: [ResidentObservationCenter] = []
+    private var trail: [String] = []
+    private let owner = Box<String?>("owner-a")
+    /// Noon today on the device calendar, in whole seconds (a line's dates
+    /// are ISO-8601 to the second): today's bounds, whatever the hour.
+    private let noon = Date(timeIntervalSinceReferenceDate: Calendar.current.date(
+        bySettingHour: 12, minute: 0, second: 0, of: Date())!.timeIntervalSinceReferenceDate.rounded(.down))
+
+    override func setUp() {
+        super.setUp()
+        location = .ephemeral(id: UUID())
+        coordinator = SpikeSessionCoordinator()
+        trail = []
+        owner.value = "owner-a"
+    }
+
+    override func tearDown() {
+        for center in centers { center.deactivate() }
+        centers = []
+        SpikeProbe.onSignal = nil
+        try? FileManager.default.removeItem(at: location.directory)
+        coordinator = nil
+        location = nil
+        super.tearDown()
+    }
+
+    private func stamp(build: String = "10") -> SpikeRunContext.Stamp {
+        SpikeRunContext.Stamp(appVersion: "0.5.0", appBuild: build, appCommit: nil, deviceModel: "iPhone17,2",
+                              osVersion: "26.0", timeZoneIdentifier: "UTC", localeIdentifier: "en_US",
+                              buildConfiguration: "release")
+    }
+
+    private func makeCenter(verifies: Bool = false) -> ResidentObservationCenter {
+        let clock = noon
+        let owner = owner
+        let made = ResidentObservationCenter(
+            coordinator: coordinator, store: nil, location: location, calendar: .current,
+            now: { clock }, mediaNow: { 500 }, makeFrameProbe: { SpikeFrameProbe() },
+            ownerUID: { owner.value }, stamp: { [unowned self] in self.stamp() },
+            verifiesSeed: verifies,
+            seedTrail: { [unowned self] line in self.trail.append(line) }
+        )
+        centers.append(made)
+        return made
+    }
+
+    /// A day line as the center writes it, under a claim the test chooses.
+    private func daily(_ id: UUID = UUID(), startedAt: Date? = nil, build: String = "10", owner: String? = "owner-a",
+                       hidden: Int = 0, note: String? = nil) -> SpikeRun {
+        let start = startedAt ?? noon.addingTimeInterval(-3_600)
+        var counters = ResidentCounterSet()
+        counters.meComputedHidden = hidden
+        var run = SpikeRun(
+            id: id, spikeID: FixObservationRegistry.residentDailySpikeID,
+            scenarioID: FixObservationRegistry.residentDailyScenarioID, variantID: nil,
+            startedAt: start, endedAt: start.addingTimeInterval(60),
+            appVersion: "0.5.0", appBuild: build, appCommit: nil, deviceModel: "iPhone17,2", osVersion: "26.0",
+            timeZoneIdentifier: "UTC", localeIdentifier: "en_US", buildConfiguration: "release",
+            metrics: counters.metrics, note: note, outcome: .completed, abortReason: nil
+        )
+        run.ownerUID = owner
+        run.revision = 1
+        run.kind = .dailyRollup
+        return run
+    }
+
+    private func write(_ runs: [SpikeRun]) {
+        SpikeRunFixtureBytes.write(runs.reduce(Data()) { $0 + SpikeRunFixtureBytes.line($1) },
+                                   spikeID: FixObservationRegistry.residentDailySpikeID, location: location)
+    }
+
+    private var dailyURL: URL {
+        SpikeRunFixtureBytes.fileURL(spikeID: FixObservationRegistry.residentDailySpikeID, location: location)
+    }
+
+    private func dailies() -> [SpikeRun] {
+        SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.residentDailySpikeID, location: location)
+    }
+
+    private func olderDays(_ count: Int) -> [SpikeRun] {
+        (1...count).map { daily(startedAt: noon.addingTimeInterval(-86_400 * Double($0))) }.reversed()
+    }
+
+    private func todaysBounds() -> ResidentDayBounds { ResidentDayBounds.compute(for: noon, calendar: .current) }
+
+    private func claim(owner: String? = "owner-a") -> TelemetryClaimKey {
+        TelemetryClaimKey(buildConfiguration: "release", appBuild: "10", osVersion: "26.0", ownerUID: owner)
+    }
+
+    private func reference() -> SpikeRun? {
+        ResidentObservationCenter.referenceDailyRecord(
+            in: SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.residentDailySpikeID, location: location,
+                                       applyRetention: false),
+            within: todaysBounds(), claim: claim(), retention: SpikeRunStore.maxRunsPerSpike)
+    }
+
+    private func waitForVerification(_ center: ResidentObservationCenter, file: StaticString = #filePath, line: UInt = #line) {
+        let deadline = Date().addingTimeInterval(10)
+        while center.seedVerification == .pending && Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+        XCTAssertNotEqual(center.seedVerification, .pending, "the verification came back", file: file, line: line)
+    }
+
+    // MARK: The seed
+
+    func testTheSeedAdoptsTodaysLastLineFromOneDecodeWithoutAWholeFileRead() throws {
+        let today = daily(hidden: 3)
+        write(olderDays(30) + [today])
+
+        let before = SpikeRunStore.wholeFileReads
+        let center = makeCenter()
+        XCTAssertEqual(SpikeRunStore.wholeFileReads, before, "the launch seed read the whole file")
+        XCTAssertEqual(center.launchSeed, .found(today, decodedLines: 1))
+        XCTAssertEqual(reference()?.id, today.id, "the full read agrees")
+
+        center.activate()
+        SpikeProbe.emit(.invariant(FixWatchSignalID.meComputedHidden))
+        center.flushDaily()
+        let written = try XCTUnwrap(dailies().first { $0.id == today.id }, "the adopted id is re-appended")
+        XCTAssertEqual(written.metrics["meComputedHidden"], .number(4), "the morning's counts carried over")
+    }
+
+    /// Today's record behind more lines than the budget decodes: a miss, a
+    /// fresh same-day id, and the tripwire still sums across both records.
+    func testTodaysRecordBeyondTheDecodeBudgetIsAMissAndTheDaySums() throws {
+        let today = daily(hidden: 3)
+        let otherBuild = (0..<ResidentObservationCenter.seedMaxDecodes).map { _ in daily(build: "9") }
+        write([today] + otherBuild)
+
+        let center = makeCenter()
+        XCTAssertEqual(center.launchSeed, .miss(.cap, decodedLines: ResidentObservationCenter.seedMaxDecodes))
+        // Control: with no budget the same tail finds it — the miss is the
+        // budget's, not the filter's.
+        XCTAssertEqual(SpikeRunFileScan.newestMatch(in: dailyURL, maxBytes: ResidentObservationCenter.seedTailBytes,
+                                                    maxDecodes: .max) {
+            self.todaysBounds().contains($0.startedAt) && TelemetryClaimKey(run: $0) == self.claim()
+        }, .found(today, decodedLines: ResidentObservationCenter.seedMaxDecodes + 1))
+
+        center.activate()
+        SpikeProbe.emit(.invariant(FixWatchSignalID.meComputedHidden))
+        center.flushDaily()
+        let todays = dailies().filter { todaysBounds().contains($0.startedAt) && $0.appBuild == "10" }
+        XCTAssertEqual(todays.count, 2, "the missed record and the fresh one")
+        XCTAssertFalse(todays.contains { $0.id != today.id && $0.metrics["meComputedHidden"] == .number(4) },
+                       "the fresh id did not inherit the missed counts")
+        let gate = FixWatchVerdictEvaluator.evaluateMeTabGate(dailies: todays)
+        XCTAssertEqual(gate.readouts.first { $0.id == "hidden computes" }?.measured, "4", "the evaluator sums both")
+    }
+
+    func testTodaysRecordBeforeTheTailWindowIsAMiss() {
+        let today = daily()
+        let half = ResidentObservationCenter.seedTailBytes / 2
+        let wide = (0..<2).map { _ in daily(build: "9", note: String(repeating: "w", count: half)) }
+        write([today] + wide)
+
+        let center = makeCenter()
+        // The window starts inside the first wide line: that partial line is
+        // not a line, and only the second is decoded.
+        XCTAssertEqual(center.launchSeed, .miss(.window, decodedLines: 1))
+        XCTAssertEqual(SpikeRunFileScan.newestMatch(in: dailyURL, maxBytes: .max,
+                                                    maxDecodes: ResidentObservationCenter.seedMaxDecodes) {
+            self.todaysBounds().contains($0.startedAt) && TelemetryClaimKey(run: $0) == self.claim()
+        }, .found(today, decodedLines: wide.count + 1), "control: a window that reaches it finds it")
+    }
+
+    /// Only today, and only this claim, is ever adopted.
+    func testTheSeedAdoptsNoOtherDayAndNoOtherClaim() {
+        write([daily(startedAt: noon.addingTimeInterval(-86_400)),   // yesterday, same claim
+               daily(owner: "owner-b"), daily(owner: nil), daily(build: "9")])
+        let center = makeCenter()
+        XCTAssertEqual(center.launchSeed, .miss(.wholeFile, decodedLines: 4))
+        XCTAssertNil(reference())
+    }
+
+    /// Collapse keeps an id's NEWEST line. When that line does not match, an
+    /// older line of the same id that does is not today's record — the tail
+    /// skips it as the full read would.
+    func testAnOlderLineOfAnIDWhoseNewestLineDoesNotMatchIsNotAdopted() {
+        let id = UUID()
+        write([daily(id), daily(id, owner: "owner-b")])
+        let center = makeCenter()
+        XCTAssertEqual(center.launchSeed, .miss(.wholeFile, decodedLines: 2))
+        XCTAssertNil(reference(), "the full read agrees: the id's newest line is another owner's")
+    }
+
+    func testNoFileIsAMissAndAFreshID() {
+        let center = makeCenter()
+        XCTAssertEqual(center.launchSeed, .miss(.noFile, decodedLines: 0))
+    }
+
+    /// Histories shaped by the center's own writes — one live id at a time,
+    /// several lines per id, builds and owners changing, days rolling over —
+    /// read at launches along the way: the tail finds the full read's record
+    /// or misses; it never adopts a different one.
+    func testTheTailNeverDisagreesWithTheFullReadOnTheCentersOwnHistories() {
+        var rng = SeededSeedRandom(seed: 0x00C0_FFEE)
+        var tally = (agree: 0, miss: 0, found: 0)
+        for _ in 0..<40 {
+            var runs: [SpikeRun] = []
+            var day = noon.addingTimeInterval(-86_400 * 6)
+            var build = 10
+            var owner: String? = "owner-a"
+            while day <= noon {
+                for _ in 0..<Int.random(in: 1...4, using: &rng) {
+                    if Int.random(in: 0..<4, using: &rng) == 0 { build += 1 }
+                    if Int.random(in: 0..<5, using: &rng) == 0 { owner = owner == nil ? "owner-a" : nil }
+                    let id = UUID()
+                    let start = day.addingTimeInterval(Double(runs.count))
+                    for _ in 0..<Int.random(in: 1...6, using: &rng) {
+                        runs.append(daily(id, startedAt: start, build: String(build), owner: owner,
+                                          hidden: Int.random(in: 0...3, using: &rng)))
+                    }
+                }
+                day = day.addingTimeInterval(86_400)
+            }
+            write(runs)
+            // Sometimes the launch is a new build's first: nothing to adopt.
+            let launchBuild = Int.random(in: 0..<3, using: &rng) == 0 ? build + 1 : build
+            let launchClaim = TelemetryClaimKey(buildConfiguration: "release", appBuild: String(launchBuild),
+                                                osVersion: "26.0", ownerUID: owner)
+            let full = ResidentObservationCenter.referenceDailyRecord(
+                in: SpikeRunLog.collapse(runs), within: todaysBounds(), claim: launchClaim,
+                retention: SpikeRunStore.maxRunsPerSpike)
+            let tail = SpikeRunFileScan.newestMatch(in: dailyURL, maxBytes: ResidentObservationCenter.seedTailBytes,
+                                                    maxDecodes: ResidentObservationCenter.seedMaxDecodes) {
+                self.todaysBounds().contains($0.startedAt) && TelemetryClaimKey(run: $0) == launchClaim
+            }
+            switch tail {
+            case .found(let run, _):
+                tally.agree += 1
+                tally.found += 1
+                XCTAssertEqual(run, full, "the tail adopted the full read's record, newest line and all")
+            case .miss(let reason, _):
+                if full == nil { tally.agree += 1 } else { tally.miss += 1 }
+                if full != nil {
+                    XCTAssertTrue([.cap, .window].contains(reason), "a miss the full read disagrees with is a bound's")
+                }
+            }
+        }
+        XCTAssertGreaterThan(tally.agree, 0, "liveness")
+        XCTAssertGreaterThan(tally.found, 0, "liveness: some launches adopted")
+    }
+
+    // MARK: The verification read
+
+    func testTheVerificationLogsOneAgreeLineAndWritesNothing() throws {
+        write(olderDays(3) + [daily(hidden: 1)])
+        let before = try Data(contentsOf: dailyURL)
+        var triggers: [TelemetryTrigger] = []
+
+        let center = makeCenter(verifies: true)
+        center.onUploadTrigger = { triggers.append($0) }
+        XCTAssertEqual(center.seedVerification, .pending)
+        waitForVerification(center)
+
+        guard case .logged(let report) = center.seedVerification else {
+            return XCTFail("expected a logged report, got \(center.seedVerification)")
+        }
+        XCTAssertEqual(report.result, .agree)
+        XCTAssertEqual(report.seed, "hit")
+        XCTAssertEqual(report.idsToday, 1)
+        XCTAssertEqual(report.fileBytes, before.count)
+        XCTAssertEqual(trail, [report.trailLine])
+        XCTAssertTrue(report.trailLine.hasPrefix("resident.seed.verify result=agree seed=hit decodes=1 "))
+        XCTAssertEqual(try Data(contentsOf: dailyURL), before, "the read wrote nothing")
+        XCTAssertEqual(triggers, [], "the read triggered nothing")
+    }
+
+    func testTheVerificationReportsAMissTheTailCouldNotSee() {
+        write([daily(hidden: 3)] + (0..<ResidentObservationCenter.seedMaxDecodes).map { _ in daily(build: "9") })
+        let center = makeCenter(verifies: true)
+        waitForVerification(center)
+        guard case .logged(let report) = center.seedVerification else {
+            return XCTFail("expected a logged report, got \(center.seedVerification)")
+        }
+        XCTAssertEqual(report.result, .miss)
+        XCTAssertEqual(report.seed, "cap")
+        XCTAssertEqual(report.idsToday, 1 + ResidentObservationCenter.seedMaxDecodes)
+    }
+
+    /// Attack M1's lesson: a read that started before an erase reports
+    /// nothing after it, whichever way the erase is seen.
+    func testAVerificationReadFromBeforeTheCentersEraseIsDropped() {
+        write([daily(hidden: 3)])
+        let center = makeCenter(verifies: true)
+        center.forgetAfterErase()     // before the read can come back to the main thread
+        waitForVerification(center)
+        XCTAssertEqual(center.seedVerification, .dropped(reason: "erase"))
+        XCTAssertEqual(trail, ["resident.seed.verify result=dropped reason=erase"], "nothing from the read is reported")
+    }
+
+    func testAVerificationReadFromBeforeAnEraseEpochBumpIsDropped() {
+        write([daily(hidden: 3)])
+        LocalDataEraseEpoch.withIsolatedEpoch {
+            let center = makeCenter(verifies: true)
+            LocalDataEraseEpoch.bump()
+            waitForVerification(center)
+            XCTAssertEqual(center.seedVerification, .dropped(reason: "erase"))
+        }
+    }
+
+    func testAVerificationReadForAnOwnerWhoLeftIsDropped() {
+        write([daily(hidden: 3)])
+        let center = makeCenter(verifies: true)
+        owner.value = nil
+        waitForVerification(center)
+        XCTAssertEqual(center.seedVerification, .dropped(reason: "owner"))
+    }
+
+    func testTheVerificationIsOffUnderXCTestUnlessATestAsks() {
+        XCTAssertEqual(makeCenter().seedVerification, .notRequested)
+    }
+}
+
+/// A seeded generator, so a failing random history reproduces.
+private struct SeededSeedRandom: RandomNumberGenerator {
+    private var state: UInt64
+    init(seed: UInt64) { state = seed }
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
+    }
+}
+
 // MARK: - Main-thread cost (report-only)
 
 /// Times the old whole-file path against the new one at the sizes that
@@ -550,6 +894,48 @@ final class SpikeRunReadCostMeasurement: XCTestCase {
             XCTAssertEqual(newRevision, oldRevision, "liveness: both paths read the same line")
             lines.append(String(format: "%@ (%d B): full read %.2f ms | scan, id on the last line %.2f ms | scan, fresh id %.2f ms",
                                 label, bytes, old, present, fresh))
+        }
+        print(lines.joined(separator: "\n"))
+    }
+
+    /// The launch seed: the old whole-file read and filter against the tail
+    /// read, when today's record is the last line (the common launch) and
+    /// when nothing in the tail matches (a new build's first launch, which
+    /// spends the whole decode budget).
+    func testMeasureTheLaunchSeed() throws {
+        let spikeID = FixObservationRegistry.residentDailySpikeID
+        let url = SpikeRunFixtureBytes.fileURL(spikeID: spikeID, location: location)
+        var lines = ["launch seed (\(Self.configuration)), median of 7"]
+        for (label, bytes) in [("device resident-daily", 242_805), ("shared cap", SpikeRunStore.compactAtBytes),
+                               ("1 MiB", 1 << 20)] {
+            let lastID = Self.fill(location, spikeID: spikeID, bytes: bytes)
+            let last = try XCTUnwrap(SpikeRunStore.loadRuns(spikeID: spikeID, location: location).first { $0.id == lastID })
+            let bounds = ResidentDayBounds.compute(for: last.startedAt, calendar: .current)
+            let claim = TelemetryClaimKey(run: last)
+            var oldID: UUID?
+            let old = Self.medianMs {
+                oldID = SpikeRunStore.loadRuns(spikeID: spikeID, location: location)
+                    .filter { bounds.contains($0.startedAt) && TelemetryClaimKey(run: $0) == claim }
+                    .max { $0.startedAt < $1.startedAt }?.id
+            }
+            var tail: SpikeRunFileScan.TailRecord?
+            let hit = Self.medianMs {
+                tail = SpikeRunFileScan.newestMatch(in: url, maxBytes: ResidentObservationCenter.seedTailBytes,
+                                                    maxDecodes: ResidentObservationCenter.seedMaxDecodes) {
+                    bounds.contains($0.startedAt) && TelemetryClaimKey(run: $0) == claim
+                }
+            }
+            var missed: SpikeRunFileScan.TailRecord?
+            let miss = Self.medianMs {
+                missed = SpikeRunFileScan.newestMatch(in: url, maxBytes: ResidentObservationCenter.seedTailBytes,
+                                                      maxDecodes: ResidentObservationCenter.seedMaxDecodes) { _ in false }
+            }
+            XCTAssertEqual(oldID, lastID, "liveness: the old read found the last line")
+            guard case .found(let found, 1)? = tail else { return XCTFail("the tail found the last line in one decode") }
+            XCTAssertEqual(found.id, lastID)
+            guard case .miss(_, let spent)? = missed else { return XCTFail("nothing matches") }
+            lines.append(String(format: "%@ (%d B): full read + filter %.2f ms | tail, last line %.2f ms | tail, no match (%d decodes) %.2f ms",
+                                label, bytes, old, hit, spent, miss))
         }
         print(lines.joined(separator: "\n"))
     }

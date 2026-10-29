@@ -89,7 +89,7 @@ enum SpikeRunStore {
     /// back through 128KB of fresh appends before the next rewrite.
     static let compactTargetBytes = compactAtBytes / 2
 
-    private static func fileURL(spikeID: String, location: SpikeRunStorageLocation) -> URL {
+    static func fileURL(spikeID: String, location: SpikeRunStorageLocation) -> URL {
         location.directory.appendingPathComponent("\(spikeID).jsonl")
     }
 
@@ -599,6 +599,64 @@ nonisolated enum SpikeRunFileScan {
             if run.id == id { return .found(run) }
             end = start
         }
+    }
+
+    // MARK: The newest match in the tail
+
+    enum TailRecord: Equatable {
+        /// The newest line in the window that matched, and the decodes spent.
+        case found(SpikeRun, decodedLines: Int)
+        case miss(TailMiss, decodedLines: Int)
+    }
+
+    enum TailMiss: String, Equatable {
+        /// No file: nothing was ever written, or an erase took it.
+        case noFile = "no_file"
+        /// The window held the whole file and nothing in it matched — the
+        /// full read would find nothing either.
+        case wholeFile = "whole_file"
+        /// The window ran out before the start of the file.
+        case window
+        /// The decode budget ran out first.
+        case cap
+        case readFailed = "read_failed"
+    }
+
+    /// The newest line among the file's last `maxBytes` whose id's newest
+    /// line `matches` — what collapse-then-filter answers over the whole
+    /// file, as long as that line is within the window and the budget.
+    /// Lines are read newest first and at most `maxDecodes` are decoded; a
+    /// line whose id was already seen nearer the end is an OLDER line of an
+    /// id whose newest line did not match, and is skipped, as collapse would.
+    /// The window's first line counts only when it starts inside the window.
+    static func newestMatch(
+        in url: URL, maxBytes: Int, maxDecodes: Int, where matches: (SpikeRun) -> Bool
+    ) -> TailRecord {
+        let fd = open(url.path, O_RDONLY | O_CLOEXEC)
+        guard fd >= 0 else { return .miss(errno == ENOENT ? .noFile : .readFailed, decodedLines: 0) }
+        defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0 else { return .miss(.readFailed, decodedLines: 0) }
+        let size = Int(info.st_size)
+        let start = max(0, size - maxBytes)
+        // One byte before the window says whether its first line is whole.
+        guard var bytes = readBytes(fd, max(0, start - 1)..<size) else { return .miss(.readFailed, decodedLines: 0) }
+        if start > 0 {
+            guard let firstNewline = bytes.firstIndex(of: 0x0A) else { return .miss(.window, decodedLines: 0) }
+            bytes = bytes[(firstNewline + 1)...]
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        var decodedLines = 0
+        var seen = Set<UUID>()
+        for line in bytes.split(separator: 0x0A, omittingEmptySubsequences: true).reversed() {
+            guard decodedLines < maxDecodes else { return .miss(.cap, decodedLines: decodedLines) }
+            decodedLines += 1
+            guard let run = try? decoder.decode(SpikeRun.self, from: Data(line)) else { continue }
+            guard seen.insert(run.id).inserted else { continue }
+            if matches(run) { return .found(run, decodedLines: decodedLines) }
+        }
+        return .miss(start == 0 ? .wholeFile : .window, decodedLines: decodedLines)
     }
 
     // MARK: Search
