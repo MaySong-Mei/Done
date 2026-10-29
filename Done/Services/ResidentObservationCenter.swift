@@ -673,7 +673,32 @@ final class ResidentObservationCenter {
         appendDailyRecord(endedAt: endedAt ?? now(), claim: claim)
     }
 
+    /// The settings row's view of today (red-team S2): the day line a flush
+    /// would write now — without writing it or telling the uploader — or nil
+    /// when the last line on disk already says everything counted. The row
+    /// folds this over the file the way collapse folds the next line, so it
+    /// never reads a stale day and never needs the flush it used to run on
+    /// every appear.
+    func unwrittenDailyRecord() -> SpikeRun? {
+        guard dailyHasUnwrittenCounts else { return nil }
+        return makeDailyRecord(endedAt: now(), claim: dailyClaim).run
+    }
+
     private func appendDailyRecord(endedAt: Date, claim: TelemetryClaimKey) {
+        let (run, followerDay, followerOverflow) = makeDailyRecord(endedAt: endedAt, claim: claim)
+        // The claim's owner, explicitly — a nil (signed-out) claim closes
+        // out as nil even while the provider knows the next account (P1-1).
+        if SpikeRunStore.finishRun(run, owner: .explicit(claim.ownerUID), location: location) {
+            lastWrittenCounters = core.counters
+            lastWrittenStartedAt = dailyRunStartedAt
+            lastWrittenFollowers = followerDay
+            lastWrittenFollowerOverflow = followerOverflow
+        }
+    }
+
+    private func makeDailyRecord(
+        endedAt: Date, claim: TelemetryClaimKey
+    ) -> (run: SpikeRun, followerDay: FollowerStatTable, followerOverflow: Int) {
         let context = stamp()
         let followerDay = followers.dailySnapshot()
         let followerOverflow = followers.dailyOverflow
@@ -702,13 +727,7 @@ final class ResidentObservationCenter {
         run.dayKey = dailyDay.dayKey
         run.dayTZOffsetMin = dailyDay.tzOffsetMin
         run.kind = .dailyRollup
-        // The claim's owner, explicitly — a nil (signed-out) claim closes
-        // out as nil even while the provider knows the next account (P1-1).
-        if SpikeRunStore.finishRun(run, owner: .explicit(claim.ownerUID), location: location) {
-            lastWrittenCounters = core.counters
-            lastWrittenStartedAt = dailyRunStartedAt
-            lastWrittenFollowers = followerDay
-            lastWrittenFollowerOverflow = followerOverflow
-        }
+        run.ownerUID = claim.ownerUID
+        return (run, followerDay, followerOverflow)
     }
 }
