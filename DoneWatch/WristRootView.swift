@@ -116,7 +116,9 @@ struct WristRootView: View {
                 cardUp: $cardUp,
                 takesRangeEdits: snapshot.takesRangeEdits,
                 pendingEventIDs: pendingIDs,
-                onCreate: { type, title, start, end in client.create(type, title: title, start: start, end: end) },
+                onCreate: { type, name, start, end in
+                    client.create(type, title: name.title, awaitsName: name == .later, start: start, end: end)
+                },
                 onEditRange: { occurrence, start, end in client.editRange(occurrence, start: start, end: end) },
                 onExtend: { client.extend($0) },
                 onFinish: { client.finish($0) },
@@ -194,7 +196,7 @@ struct WristTodayView: View {
     var takesRangeEdits: Bool = false
     var pendingEventIDs: Set<UUID> = []
     /// Returns the created event's id.
-    var onCreate: (WristType, String?, Date, Date) -> UUID? = { _, _, _, _ in nil }
+    var onCreate: (WristType, WristDraftName, Date, Date) -> UUID? = { _, _, _, _ in nil }
     /// A block's range moved, resized or nudged here.
     var onEditRange: (WristOccurrence, Date, Date) -> Void = { _, _, _ in }
     var onExtend: (WristOccurrence) -> Void = { _ in }
@@ -529,10 +531,10 @@ struct WristTodayView: View {
                 WristDraftTypePicker(
                     types: types, titleHints: titleHints, occurrences: occurrences, range: range,
                     calendar: calendar, strings: strings
-                ) { type, title in
+                ) { type, name in
                     // The draft goes in the same update its block arrives,
                     // so the two never share the page.
-                    if let eventID = onCreate(type, title, range.start, range.end) {
+                    if let eventID = onCreate(type, name, range.start, range.end) {
                         landing = Landing(
                             eventID: eventID, span: WristTimeSpan(start: range.start, end: range.end),
                             slot: page.draftSlot ?? .full
@@ -1060,6 +1062,14 @@ struct WristTodayView: View {
                         lineWidth: selected ? 2 : block.isCurrent || block.occurrence.isInterrupt ? 1 : 0.75
                     )
             }
+            // Waiting for a name: the dashed outline the "name later" row
+            // drew, over the block's own.
+            .overlay {
+                if block.occurrence.awaitsName {
+                    RoundedRectangle(cornerRadius: embedded ? 3 : 4, style: .continuous)
+                        .strokeBorder(.white.opacity(0.85), style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+                }
+            }
             // The moat the phone cuts round an embedded interrupt: a ring of
             // the page's black between it and its parent.
             .background {
@@ -1072,10 +1082,28 @@ struct WristTodayView: View {
     }
 }
 
+/// What the naming settled on for a drawn block: a picked name, the type
+/// alone, or "name later" — the type alone, with the phone asking for a
+/// name (`WristCommand.Kind.start`'s `awaitsName`).
+enum WristDraftName: Hashable {
+    case named(String)
+    case typeOnly
+    case later
+
+    /// The title the start carries: nil names the event after its type.
+    var title: String? {
+        if case .named(let name) = self { return name }
+        return nil
+    }
+}
+
 /// Names a drawn block: the types as tiles, under the
 /// block's range. A type the phone knows names for opens a second step with
-/// the likeliest of them for this range and "just <type>"; one without
-/// creates at once. The sheet's close button discards the draft.
+/// the likeliest of them for this range, "just <type>" and "name later"; one
+/// without creates at once. "Name later" under the grid arms the next type
+/// tapped to be created waiting for a name, so it is there for every type —
+/// a tile tapped while armed skips the names step. The sheet's close button
+/// discards the draft.
 struct WristDraftTypePicker: View {
     let types: [WristType]
     var titleHints: [String: [WristTitleHint]] = [:]
@@ -1085,7 +1113,7 @@ struct WristDraftTypePicker: View {
     let range: WristDraftMapping.Range
     var calendar: Calendar = .current
     let strings: WristStrings
-    let onPick: (WristType, String?) -> Void
+    let onPick: (WristType, WristDraftName) -> Void
 
     /// The type being named and its names, ranked once when the step
     /// opens: a snapshot that lands meanwhile must not reorder the rows
@@ -1096,6 +1124,7 @@ struct WristDraftTypePicker: View {
     }
 
     @State private var naming: Naming?
+    @State private var namingLater = false
 
     private let columns = [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)]
 
@@ -1124,9 +1153,11 @@ struct WristDraftTypePicker: View {
 
 #if DEBUG
     /// `-wristDraftType <type title>` with `-wristDraft` opens the names
-    /// step for that type, for a check that cannot tap. Debug builds only.
+    /// step for that type, for a check that cannot tap;
+    /// `-wristDraftNameLater` arms "name later" on the grid. Debug builds only.
     private func seedDebugNaming() {
         let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("-wristDraftNameLater") { namingLater = true }
         guard naming == nil, let i = arguments.firstIndex(of: "-wristDraftType"), i + 1 < arguments.count,
               let type = types.first(where: { $0.title == arguments[i + 1] }) else { return }
         let names = names(for: type)
@@ -1150,16 +1181,26 @@ struct WristDraftTypePicker: View {
                     ForEach(types) { type in
                         Button {
                             let names = names(for: type)
-                            if names.isEmpty {
-                                onPick(type, nil)
+                            if namingLater {
+                                onPick(type, .later)
+                            } else if names.isEmpty {
+                                onPick(type, .typeOnly)
                             } else {
                                 naming = Naming(type: type, names: names)
                             }
                         } label: {
-                            WristTypeTile(type: type, minHeight: 40)
+                            WristTypeTile(type: type, minHeight: 40, awaitsName: namingLater)
                         }
                         .buttonStyle(.plain)
                     }
+                }
+                if !types.isEmpty {
+                    Button {
+                        namingLater.toggle()
+                    } label: {
+                        WristNameLaterRow(text: namingLater ? strings.nameLaterArmed : strings.nameLater, armed: namingLater)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
             .padding(.horizontal, 4)
@@ -1175,7 +1216,7 @@ struct WristDraftTitlePicker: View {
     let names: [String]
     let range: WristDraftMapping.Range
     let strings: WristStrings
-    let onPick: (String?) -> Void
+    let onPick: (WristDraftName) -> Void
 
     var body: some View {
         ScrollView {
@@ -1185,16 +1226,22 @@ struct WristDraftTitlePicker: View {
                     .monospacedDigit()
                 ForEach(names, id: \.self) { name in
                     Button {
-                        onPick(name)
+                        onPick(.named(name))
                     } label: {
                         row(name, fill: WristColor.fill(type.colorHex), border: WristColor.border(type.colorHex))
                     }
                     .buttonStyle(.plain)
                 }
                 Button {
-                    onPick(nil)
+                    onPick(.typeOnly)
                 } label: {
                     row(strings.justType(type.title), fill: Color(white: 0.16), border: .white.opacity(0.2))
+                }
+                .buttonStyle(.plain)
+                Button {
+                    onPick(.later)
+                } label: {
+                    WristNameLaterRow(text: strings.nameLater, armed: false)
                 }
                 .buttonStyle(.plain)
             }
@@ -1224,6 +1271,9 @@ struct WristDraftTitlePicker: View {
 struct WristTypeTile: View {
     let type: WristType
     var minHeight: CGFloat = 48
+    /// "Name later" is armed: the tile is drawn the way the block will be,
+    /// waiting for a name.
+    var awaitsName = false
 
     var body: some View {
         Text(type.title)
@@ -1240,9 +1290,42 @@ struct WristTypeTile: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(WristColor.border(type.colorHex), lineWidth: 1)
+                    .strokeBorder(
+                        awaitsName ? Color.white.opacity(0.9) : WristColor.border(type.colorHex),
+                        style: awaitsName ? WristNameLaterRow.dash : StrokeStyle(lineWidth: 1)
+                    )
             )
             .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+}
+
+/// "Name later": a dashed row — the outline a block waiting for a name
+/// gets, here and on the phone. Armed on the type grid it reads as the
+/// mode it puts the tiles in.
+struct WristNameLaterRow: View {
+    static let dash = StrokeStyle(lineWidth: 1.5, dash: [4, 3])
+
+    let text: String
+    let armed: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: armed ? "checkmark.circle.fill" : "pencil.line")
+                .font(.system(size: 13, weight: .semibold))
+            Text(text)
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .lineLimit(2)
+                .minimumScaleFactor(0.75)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+        .background(armed ? Color(white: 0.26) : Color(white: 0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(.white.opacity(armed ? 0.9 : 0.45), style: Self.dash)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 

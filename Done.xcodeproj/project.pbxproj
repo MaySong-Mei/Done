@@ -241,6 +241,7 @@
 		FA57000000000000000B0010 /* ResidentObservationCenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0010 /* ResidentObservationCenter.swift */; };
 		TELE10012FE8000000000001 /* TelemetryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = TELE00012FE8000000000001 /* TelemetryModel.swift */; };
 		TELE10012FE8000000000002 /* TelemetryUploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = TELE00012FE8000000000002 /* TelemetryUploader.swift */; };
+		AWNM10000000000000000001 /* AwaitingNameStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AWNM00000000000000000001 /* AwaitingNameStore.swift */; };
 		TELE10012FE8000000000008 /* TelemetryFakeTestFlight.swift in Sources */ = {isa = PBXBuildFile; fileRef = TELE00012FE8000000000008 /* TelemetryFakeTestFlight.swift */; };
 		TELE10012FE8000000000003 /* TelemetryModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TELE00012FE8000000000003 /* TelemetryModelTests.swift */; };
 		TELE10012FE8000000000004 /* TelemetryUploaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TELE00012FE8000000000004 /* TelemetryUploaderTests.swift */; };
@@ -390,6 +391,7 @@
 		WATCH000000000000000B015 /* WristStateReducerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F013 /* WristStateReducerTests.swift */; };
 		WATCH000000000000000B016 /* WristSnapshotBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F014 /* WristSnapshotBuilderTests.swift */; };
 		WATCH000000000000000B017 /* WristCommandApplierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F015 /* WristCommandApplierTests.swift */; };
+		AWNM10000000000000000002 /* AwaitingNameTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AWNM00000000000000000002 /* AwaitingNameTests.swift */; };
 		WATCH000000000000000EMB1 /* DoneWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000PRD1 /* DoneWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		WOVL00000000000000000B01 /* WristOverlap.swift in Sources */ = {isa = PBXBuildFile; fileRef = WOVL00000000000000000F01 /* WristOverlap.swift */; };
 		WOVL00000000000000000B02 /* WristOverlap.swift in Sources */ = {isa = PBXBuildFile; fileRef = WOVL00000000000000000F01 /* WristOverlap.swift */; };
@@ -681,6 +683,7 @@
 		FA57000000000000000A0010 /* ResidentObservationCenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResidentObservationCenter.swift; sourceTree = "<group>"; };
 		TELE00012FE8000000000001 /* TelemetryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryModel.swift; sourceTree = "<group>"; };
 		TELE00012FE8000000000002 /* TelemetryUploader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryUploader.swift; sourceTree = "<group>"; };
+		AWNM00000000000000000001 /* AwaitingNameStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AwaitingNameStore.swift; sourceTree = "<group>"; };
 		TELE00012FE8000000000008 /* TelemetryFakeTestFlight.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryFakeTestFlight.swift; sourceTree = "<group>"; };
 		TELE00012FE8000000000003 /* TelemetryModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryModelTests.swift; sourceTree = "<group>"; };
 		TELE00012FE8000000000004 /* TelemetryUploaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryUploaderTests.swift; sourceTree = "<group>"; };
@@ -822,6 +825,7 @@
 		WATCH000000000000000F013 /* WristStateReducerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristStateReducerTests.swift; sourceTree = "<group>"; };
 		WATCH000000000000000F014 /* WristSnapshotBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristSnapshotBuilderTests.swift; sourceTree = "<group>"; };
 		WATCH000000000000000F015 /* WristCommandApplierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristCommandApplierTests.swift; sourceTree = "<group>"; };
+		AWNM00000000000000000002 /* AwaitingNameTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AwaitingNameTests.swift; sourceTree = "<group>"; };
 		WATCH000000000000000F011 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		WATCH000000000000000PRD1 /* DoneWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DoneWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		WOVL00000000000000000F01 /* WristOverlap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristOverlap.swift; sourceTree = "<group>"; };
@@ -910,6 +914,7 @@
 				WATCH000000000000000F013 /* WristStateReducerTests.swift */,
 				WATCH000000000000000F014 /* WristSnapshotBuilderTests.swift */,
 				WATCH000000000000000F015 /* WristCommandApplierTests.swift */,
+				AWNM00000000000000000002 /* AwaitingNameTests.swift */,
 				CSTA00000000000000000010 /* CategoryStatsWidgetTests.swift */,
 				CGAU00000000000000000003 /* CategoryGaugeWidgetTests.swift */,
 				CSTA00000000000000000006 /* CategoryStatsSyncCostTests.swift */,
@@ -1090,6 +1095,7 @@
 				FA57000000000000000A0002 /* SpikeRunStore.swift */,
 				FA57000000000000000A0010 /* ResidentObservationCenter.swift */,
 				TELE00012FE8000000000002 /* TelemetryUploader.swift */,
+				AWNM00000000000000000001 /* AwaitingNameStore.swift */,
 				TELE00012FE8000000000008 /* TelemetryFakeTestFlight.swift */,
 				FA57000000000000000A0003 /* SpikeSessionCoordinator.swift */,
 				FA57000000000000000A0004 /* Spike195DetailPerf.swift */,
@@ -1709,6 +1715,7 @@
 				FA57000000000000000B0010 /* ResidentObservationCenter.swift in Sources */,
 				TELE10012FE8000000000001 /* TelemetryModel.swift in Sources */,
 				TELE10012FE8000000000002 /* TelemetryUploader.swift in Sources */,
+				AWNM10000000000000000001 /* AwaitingNameStore.swift in Sources */,
 				TELE10012FE8000000000008 /* TelemetryFakeTestFlight.swift in Sources */,
 				FA57000000000000000B0002 /* SpikeRunStore.swift in Sources */,
 				FA57000000000000000B0003 /* SpikeSessionCoordinator.swift in Sources */,
@@ -1749,6 +1756,7 @@
 				WATCH000000000000000B015 /* WristStateReducerTests.swift in Sources */,
 				WATCH000000000000000B016 /* WristSnapshotBuilderTests.swift in Sources */,
 				WATCH000000000000000B017 /* WristCommandApplierTests.swift in Sources */,
+				AWNM10000000000000000002 /* AwaitingNameTests.swift in Sources */,
 				SSCN10012FE8000000000261 /* SyncSettingsCanonicalTests.swift in Sources */,
 				ACEN10012FE8000000000262 /* AgentConversationEncodingTests.swift in Sources */,
 				SCGT10012FE8000000000261 /* SyncCursorGenerationTests.swift in Sources */,

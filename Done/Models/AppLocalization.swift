@@ -312,6 +312,8 @@ enum LKey {
     case absorption, absorbIntoEvent, absorbedInto, releaseLabel, releaseAbsorption
     case absorbIntoTitle, addAbsorption, addAbsorptionTitle
     case searchEventsPrompt, searchTodosPrompt, untitledEvent, untitledTodo
+    // "Name later" from the watch: the timeline badge and the detail prompt
+    case awaitingNameBadge, awaitingNameTitle, awaitingNameMessageFormat, awaitingNameSave, awaitingNameKeepFormat
     case absorbedTodos
     // Calendar range modes (View menu)
     case rangeDay, rangeThreeDay, rangeWeek, rangeMonth, rangeStream
@@ -768,6 +770,11 @@ enum LKey {
         case .searchEventsPrompt: return "Search events"
         case .searchTodosPrompt: return "Search todos"
         case .untitledEvent: return "Untitled event"
+        case .awaitingNameBadge: return "Name?"
+        case .awaitingNameTitle: return "Waiting for a name"
+        case .awaitingNameMessageFormat: return "Started on Apple Watch as “%@”."
+        case .awaitingNameSave: return "Save"
+        case .awaitingNameKeepFormat: return "Keep “%@”"
         case .untitledTodo: return "Untitled todo"
         case .absorbedTodos: return "Absorbed todos"
         case .rangeDay: return "Day"
@@ -1491,6 +1498,11 @@ enum LKey {
         case .searchEventsPrompt: return "搜索事件"
         case .searchTodosPrompt: return "搜索待办"
         case .untitledEvent: return "未命名事件"
+        case .awaitingNameBadge: return "待命名"
+        case .awaitingNameTitle: return "等待命名"
+        case .awaitingNameMessageFormat: return "在 Apple Watch 上以「%@」开始。"
+        case .awaitingNameSave: return "保存"
+        case .awaitingNameKeepFormat: return "就叫「%@」"
         case .untitledTodo: return "未命名待办"
         case .absorbedTodos: return "已归入的待办"
         case .rangeDay: return "单日"

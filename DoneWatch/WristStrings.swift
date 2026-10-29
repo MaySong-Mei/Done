@@ -25,6 +25,10 @@ struct WristStrings {
     var sending: String { isChinese ? "发送中…" : "Sending…" }
     /// The names step's last row: the block named after its type alone.
     func justType(_ type: String) -> String { isChinese ? "仅「\(type)」" : "Just \(type)" }
+    /// Creates the block under its type and has the phone ask for a name.
+    var nameLater: String { isChinese ? "稍后命名" : "Name later" }
+    /// The type grid's "name later" row once tapped: the next type is it.
+    var nameLaterArmed: String { isChinese ? "稍后命名 · 选类型" : "Name later · pick a type" }
 
     var editOnPhoneShort: String { isChinese ? "在 iPhone 上调整" : "Adjust on iPhone" }
     /// A hold on a block the phone does not let the watch move (a repeating

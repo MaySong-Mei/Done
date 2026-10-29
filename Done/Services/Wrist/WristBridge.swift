@@ -64,6 +64,7 @@ final class WristBridge: NSObject {
     private var subscriptions: [AnyCancellable] = []
     private var ledger: WristAppliedLedger
     private let defaults: UserDefaults
+    private let awaitingNames: AwaitingNameStore
     private(set) var lastSent: WristSnapshot?
     private(set) var pushCount = 0
     var now: () -> Date = Date.init
@@ -71,11 +72,13 @@ final class WristBridge: NSObject {
     init(
         ledger: WristAppliedLedger = WristAppliedLedger(),
         defaults: UserDefaults = .standard,
-        transport: WristSessionTransport? = nil
+        transport: WristSessionTransport? = nil,
+        awaitingNames: AwaitingNameStore = .shared
     ) {
         self.ledger = ledger
         self.defaults = defaults
         self.transport = transport
+        self.awaitingNames = awaitingNames
         super.init()
     }
 
@@ -112,6 +115,14 @@ final class WristBridge: NSObject {
             .debounce(for: .milliseconds(400), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in self?.pushSnapshot() }
             .store(in: &subscriptions)
+        // A block named later stops waiting on the wrist too; "keep the
+        // type" changes no event.
+        awaitingNames.$marks
+            .dropFirst()
+            .removeDuplicates()
+            .debounce(for: .milliseconds(400), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.pushSnapshot() }
+            .store(in: &subscriptions)
         // Settings → Apple Watch touches no calendar data, so nothing above
         // would carry a change of it to the wrist.
         defaults.publisher(for: \.watchStatsSettings)
@@ -127,6 +138,7 @@ final class WristBridge: NSObject {
         seedDebugTitlesIfAsked(store: store, templates: templates)
         seedDebugParallelDayIfAsked(store: store)
         seedDebugRepeatingIfAsked(store: store)
+        seedDebugNameLaterIfAsked(store: store, templates: templates)
 #endif
         pushSnapshot()
     }
@@ -192,6 +204,23 @@ final class WristBridge: NSObject {
         logger.notice("debug: seeded a repeating block")
     }
 
+    /// `-wristSeedNameLater`: a "name later" start of the catalog's first
+    /// type, today 10:00–11:00, through the applier as the watch's would
+    /// arrive — once (a fixed event id). Debug builds only.
+    private func seedDebugNameLaterIfAsked(store: EventStore, templates: EventTypeTemplateStore) {
+        guard ProcessInfo.processInfo.arguments.contains("-wristSeedNameLater"),
+              let type = templates.templates.first?.title else { return }
+        let today = Calendar.current.startOfDay(for: now())
+        let eventID = UUID(uuidString: "0A0A0A0A-0000-4000-8000-00000000A11E")!
+        let command = WristCommand(id: UUID(), issuedAt: now(), kind: .start(
+            eventID: eventID, typeTitle: type,
+            start: today.addingTimeInterval(10 * 3600), end: today.addingTimeInterval(11 * 3600),
+            awaitsName: true
+        ))
+        let receipt = WristCommandApplier.apply(command, to: store, defaults: defaults, awaitingNames: awaitingNames)
+        logger.notice("debug: name-later seed \(receipt.outcome.rawValue, privacy: .public)")
+    }
+
     private func seedDebugTitlesIfAsked(store: EventStore, templates: EventTypeTemplateStore) {
         guard ProcessInfo.processInfo.arguments.contains("-wristSeedTitles"),
               let type = templates.templates.first?.title else { return }
@@ -238,6 +267,7 @@ final class WristBridge: NSObject {
                 delete: EventDeletionMotionFlag.isEnabled ? EventDeletionMotionFlag.variant : nil,
                 resize: EventResizeTweenFlag.isEnabled ? EventResizeTweenFlag.variant : nil
             ),
+            awaitingNameTitles: awaitingNames.titles,
             colorHex: { EventTypeTemplateStore.colorHex(for: $0) }
         )
         guard let (snapshot, data) = Self.fitting(full, latestStats: store.latestCategoryStats, now: now) else {
@@ -360,7 +390,7 @@ final class WristBridge: NSObject {
         if ledger.contains(command.id) {
             receipt = WristReceipt(id: command.id, outcome: .duplicate, reason: nil)
         } else {
-            receipt = WristCommandApplier.apply(command, to: store, defaults: defaults)
+            receipt = WristCommandApplier.apply(command, to: store, defaults: defaults, awaitingNames: awaitingNames)
             // A finish or extend that outran its start is answered "not
             // found"; the watch gets the receipt, but the id is deliberately
             // not remembered: the durable copy that arrives after the start

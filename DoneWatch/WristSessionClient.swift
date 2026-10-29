@@ -146,16 +146,23 @@ final class WristSessionClient: NSObject, ObservableObject {
 
     /// A block drawn on the today page: a start with the drawn range, past
     /// or future — the phone stores whatever range a start names — and the
-    /// name picked for it, if any.
+    /// name picked for it, if any, or "name later" (`awaitsName`), which
+    /// starts it under its type with the phone asking for a name.
     /// Returns the new event's id, nil when the range is empty.
     @discardableResult
-    func create(_ type: WristType, title: String? = nil, start: Date, end: Date, now: Date = Date()) -> UUID? {
+    func create(
+        _ type: WristType, title: String? = nil, awaitsName: Bool = false,
+        start: Date, end: Date, now: Date = Date()
+    ) -> UUID? {
         guard end > start else { return nil }
         let eventID = UUID()
         send(
             WristCommand(
                 id: UUID(), issuedAt: now,
-                kind: .start(eventID: eventID, typeTitle: type.title, start: start, end: end, title: title)
+                kind: .start(
+                    eventID: eventID, typeTitle: type.title, start: start, end: end,
+                    title: awaitsName ? nil : title, awaitsName: awaitsName ? true : nil
+                )
             )
         )
         return eventID
@@ -165,7 +172,7 @@ final class WristSessionClient: NSObject, ObservableObject {
     /// yet: their blocks are this watch's own.
     var localCreates: Set<UUID> {
         Set(pending.compactMap { entry in
-            if case .start(let eventID, _, _, _, _) = entry.command.kind { return eventID }
+            if case .start(let eventID, _, _, _, _, _) = entry.command.kind { return eventID }
             return nil
         })
     }
@@ -502,8 +509,19 @@ final class WristSessionClient: NSObject, ObservableObject {
         let types = ["Work", "Meeting", "Read", "Gym"].enumerated().map {
             WristType(id: id(100 + $0.offset), title: $0.element, colorHex: colors[$0.element]!)
         }
+        // `-wristNameLaterFixture`: names for Work, so the names step opens,
+        // and a block waiting for a name at 7:30.
+        var hints: [String: [WristTitleHint]] = [:]
+        if ProcessInfo.processInfo.arguments.contains("-wristNameLaterFixture") {
+            var waiting = occ(18, "Work", "Work", at(7.5), at(8.5))
+            waiting.awaitsName = true
+            list.append(waiting)
+            hints["Work"] = ["Deep work", "Standup", "Review"].enumerated().map {
+                WristTitleHint(title: $0.element, weight: 3 - Double($0.offset), startMinute: 540, concentration: 1, minutes: 60)
+            }
+        }
         return WristSnapshot(
-            generatedAt: now, types: types, occurrences: list, receipts: [],
+            generatedAt: now, types: types, occurrences: list, receipts: [], titleHints: hints,
             motions: WristMotionSettings(create: .assemble, delete: .dissolve, resize: .standard)
         )
     }
