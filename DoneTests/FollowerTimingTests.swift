@@ -327,6 +327,61 @@ final class FollowerTimingRecorderTests: XCTestCase {
     }
 }
 
+// MARK: - The main actor
+
+/// The recorder lives on the main actor and times only the synchronous body
+/// it wraps: work the body hands to a later turn — a Task, an await — runs
+/// outside the span even though it runs on the same main thread.
+@MainActor
+final class FollowerTimingMainActorTests: XCTestCase {
+    private var displaced: FollowerTimingRecorder?
+
+    override func setUp() {
+        super.setUp()
+        displaced = FollowerTiming.recorder
+    }
+
+    override func tearDown() {
+        FollowerTiming.recorder = displaced
+        super.tearDown()
+    }
+
+    func testWorkTheBodyDefersToALaterTurnIsNotChargedToIt() async throws {
+        let recorder = FollowerTimingRecorder(isForeground: true)
+        FollowerTiming.recorder = recorder
+        var laterRanForNs: UInt64 = 0
+        FollowerTiming.measure(.wristSnapshot) {
+            Task { @MainActor in
+                let start = FollowerClock.now()
+                while FollowerClock.now() - start < 30_000_000 {}
+                laterRanForNs = FollowerClock.now() - start
+            }
+        }
+        let deadline = Date().addingTimeInterval(5)
+        while laterRanForNs == 0, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertGreaterThanOrEqual(laterRanForNs, 30_000_000, "positive control: the deferred work ran on main")
+        let stat = recorder.dailySnapshot()[.wristSnapshot]
+        XCTAssertEqual(stat.count, 1)
+        XCTAssertLessThan(stat.totalNs, 5_000_000, "the span closed before the deferred work ran")
+    }
+
+    /// A run started from a background task reaches the recorder only by
+    /// hopping to the main actor, and is recorded there.
+    func testARunFromABackgroundTaskIsRecordedOnTheMainActor() async {
+        let recorder = FollowerTimingRecorder(isForeground: true)
+        FollowerTiming.recorder = recorder
+        let onMain = await Task.detached { () -> Bool in
+            await MainActor.run {
+                FollowerTiming.measure(.imageScan) { Thread.isMainThread }
+            }
+        }.value
+        XCTAssertTrue(onMain)
+        XCTAssertEqual(recorder.dailySnapshot()[.imageScan].count, 1)
+    }
+}
+
 // MARK: - Records, registry and trail (pure)
 
 @MainActor

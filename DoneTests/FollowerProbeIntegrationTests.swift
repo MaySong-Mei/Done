@@ -434,6 +434,11 @@ final class FollowerObservatoryReadTests: XCTestCase {
         XCTAssertEqual(summary.windowCount, 1, "the window older than the deck's reach is left out")
         XCTAssertEqual(summary.windowRows.map(\.totalMs), [4])
         XCTAssertEqual(summary.todayRows, [FollowerReport.Row(id: "widget", runs: 2, totalMs: 3, maxMs: 2, inMaxFrameMs: nil)])
+
+        // Before today's first flush only yesterday's line exists: the card
+        // shows nothing for today rather than yesterday's numbers.
+        let morning = FixWatchAttention.followerSummary(local: (dailies: [yesterday], windows: []), now: now, calendar: calendar)
+        XCTAssertEqual(morning.todayRows, [], "yesterday's line is not today's")
     }
 }
 
