@@ -556,3 +556,85 @@ final class PerfBatch2QATokenOffTests: XCTestCase {
 
 
 
+
+// MARK: - The sync flush: every network await stays outside the baseline spans
+
+/// The batch's own flush test holds the INSERT; these hold the tombstone and
+/// the conditional patch, the two awaits that sit right after the first
+/// baseline span ends. A span whose end slid past either await would charge
+/// the network's time (and any main-actor work interleaved during it).
+@MainActor
+final class PerfBatch2QASyncSpanTests: XCTestCase {
+    private var suiteName = ""
+    private var defaults: UserDefaults!
+    private var server: SyncFakeServer!
+    private var service: SupabaseSyncService!
+    private var recorder: FollowerTimingRecorder!
+    private var displaced: FollowerTimingRecorder?
+    private let uid = "55555555-4444-4444-8444-444444444444"
+
+    override func setUp() {
+        super.setUp()
+        suiteName = "PerfBatch2QASyncSpanTests-\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        server = SyncFakeServer(userId: uid)
+        service = SupabaseSyncService(gateway: server, userId: uid, defaults: defaults)
+        recorder = FollowerTimingRecorder(isForeground: true)
+        displaced = FollowerTiming.recorder
+        FollowerTiming.recorder = recorder
+    }
+
+    override func tearDown() {
+        FollowerTiming.recorder = displaced
+        server.releaseAll()
+        defaults.removePersistentDomain(forName: suiteName)
+        super.tearDown()
+    }
+
+    private func events(_ count: Int) -> [Event] {
+        let start = Date(timeIntervalSince1970: 1_780_000_000)
+        return (0..<count).map {
+            Event(title: "e\($0)", timeRanges: [.init(start: start, end: start.addingTimeInterval(3600))])
+        }
+    }
+
+    /// Runs `second` as a flush with `verb` held for `holdMs` on the far
+    /// side; returns (wall ms of that flush, baseline runs it added, baseline
+    /// ms it added).
+    private func heldFlush(_ verb: SyncFakeServer.Verb, holdMs: Int, _ second: [Event]) async throws -> (Double, Int, Double) {
+        let before = recorder.dailySnapshot()[.syncCalendarBaseline]
+        server.holdWhen = { held, _ in held == verb }
+        let started = FollowerClock.now()
+        let flush = Task { await service.syncEvents(second, kind: "calendar") }
+        let deadline = Date().addingTimeInterval(5)
+        while server.heldCount == 0, Date() < deadline { try await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertGreaterThan(server.heldCount, 0, "fixture: the flush reached the network with a \(verb)")
+        try await Task.sleep(for: .milliseconds(holdMs))
+        server.holdWhen = nil
+        server.releaseAll()
+        await flush.value
+        let wallMs = Double(FollowerClock.now() - started) / 1e6
+        let after = recorder.dailySnapshot()[.syncCalendarBaseline]
+        return (wallMs, after.count - before.count, Double(after.totalNs - before.totalNs) / 1e6)
+    }
+
+    func testATombstoneAwaitIsOutsideTheBaselineSpans() async throws {
+        let all = events(3)
+        await service.syncEvents(all, kind: "calendar")
+        let (wall, runs, spanMs) = try await heldFlush(.tombstone, holdMs: 400, Array(all.dropFirst()))
+        XCTAssertGreaterThanOrEqual(wall, 400, "positive control: the tombstone really took the held time")
+        XCTAssertEqual(runs, 2, "before the sends and after them")
+        XCTAssertLessThan(spanMs, 100, "the baseline spans are main-thread work only (wall \(wall)ms)")
+    }
+
+    func testAConditionalPatchAwaitIsOutsideTheBaselineSpans() async throws {
+        var all = events(3)
+        await service.syncEvents(all, kind: "calendar")
+        all[1].title = "changed"
+        let (wall, runs, spanMs) = try await heldFlush(.patch, holdMs: 400, all)
+        XCTAssertGreaterThanOrEqual(wall, 400, "positive control: the patch really took the held time")
+        XCTAssertEqual(runs, 2, "before the sends and after them")
+        XCTAssertLessThan(spanMs, 100, "the baseline spans are main-thread work only (wall \(wall)ms)")
+    }
+}
