@@ -369,4 +369,108 @@ final class SyncFlushLiveArrayTests: XCTestCase {
         XCTAssertFalse(server.isTombstoned(table: "events", key: kept.id.uuidString))
         XCTAssertEqual(liveLines("events").count, linesBefore, "a flush with nothing in the gap writes no trail line")
     }
+
+    // MARK: - Uploads turned off in the gap
+
+    private struct ErasedInTheGap {
+        let onServer: [Event]
+        let writesBefore: Int
+        let baselineBefore: [String: SyncBaselineEntry]
+    }
+
+    /// What `LocalDataEraser.resetAllLocalData` does before it signs out,
+    /// landing between the debounce delivering and the flush task running:
+    /// the master switch off (unless `uploadsStayOn`), then the stores
+    /// emptied. The sign-out never comes, so the session, the owner and I1
+    /// all still let the queued flush through, and it reads empty stores
+    /// against a baseline that holds two rows. Returns once that flush has
+    /// read the emptied store: its trail line is the witness that it ran.
+    private func eraseWithoutSignOutLandsInTheGap(uploadsStayOn: Bool) async throws -> ErasedInTheGap {
+        let a = makeEvent("a"), b = makeEvent("b")
+        store.addCalendarEvent(a)
+        store.addCalendarEvent(b)
+        scheduler.advance(by: SupabaseSyncConfig.debounceSeconds)
+        try await syncEventually("a and b on the server") {
+            [a, b].allSatisfy {
+                self.server.row(table: "events", key: $0.id.uuidString) != nil
+                    && self.service.baseline.entry(table: "calendar_events", id: $0.id.uuidString)
+                        .map { $0.hash != SyncBaselineEntry.unknownHash } == true
+            }
+        }
+        let erased = ErasedInTheGap(onServer: [a, b], writesBefore: writeCount(),
+                                    baselineBefore: service.baseline.entries(table: "calendar_events"))
+
+        store.addCalendarEvent(makeEvent("mine"))
+        scheduler.advance(by: SupabaseSyncConfig.debounceSeconds)
+        if !uploadsStayOn { defaults.set(false, forKey: AppSettingsKeys.syncUploadsEnabled) }
+        store.clearAllLocalData()
+        XCTAssertTrue(store.rawCalendarEvents.isEmpty, "fixture: the stores are empty")
+        XCTAssertEqual(writeCount(), erased.writesBefore, "fixture: the flush task had not run when the stores were emptied")
+        XCTAssertEqual(service.userId, uid, "fixture: no sign-out ended the session")
+        XCTAssertTrue(service.inboundAtHead && !service.serverPaused && service.ownerState.allowsSync,
+                      "fixture: nothing but the switch can hold the flush")
+
+        try await syncEventually("the queued flush read the emptied store") { !self.liveLines("calendar_events").isEmpty }
+        try await settle()
+        XCTAssertEqual(liveLines("calendar_events").count, 1)
+        XCTAssertTrue(liveLines("calendar_events").last?.hasSuffix("delivered=3 live=0") == true,
+                      liveLines("calendar_events").last ?? "no line")
+        return erased
+    }
+
+    /// The fake server's calls are main-actor calls, so a handful of turns
+    /// is the rest of a flush. Used only after the trail said it ran.
+    private func settle() async throws {
+        for _ in 0..<20 { await Task.yield() }
+        try await Task.sleep(for: .milliseconds(50))
+    }
+
+    private func assertTheRefusedFlushLeftEverythingAsItWas(_ erased: ErasedInTheGap,
+                                                           file: StaticString = #filePath, line: UInt = #line) {
+        let writes = server.requests.filter { [.patch, .insert, .tombstone, .upsert, .delete].contains($0.verb) }
+        XCTAssertEqual(writes.count, erased.writesBefore,
+                       "a flush ran with uploads off and wrote: \(writes.dropFirst(erased.writesBefore).map { "\($0.verb) \($0.keys)" })",
+                       file: file, line: line)
+        for e in erased.onServer {
+            XCTAssertNotNil(server.row(table: "events", key: e.id.uuidString), "\(e.title) left the server", file: file, line: line)
+            XCTAssertFalse(server.isTombstoned(table: "events", key: e.id.uuidString), "\(e.title) tombstoned", file: file, line: line)
+        }
+        XCTAssertEqual(service.baseline.entries(table: "calendar_events"), erased.baselineBefore,
+                       "the refused flush marked rows as sent", file: file, line: line)
+        // Turning the switch on runs a full sync of every table, so the
+        // held flush owes nothing to the next chain at head.
+        XCTAssertFalse(service.needsFlush.contains("calendar_events"), file: file, line: line)
+    }
+
+    func testUploadsTurnedOffInTheGapHoldTheQueuedFlush_killsNoSwitchAtFlushTime_killsSwitchReadAfterTheDiff() async throws {
+        let erased = try await eraseWithoutSignOutLandsInTheGap(uploadsStayOn: false)
+        assertTheRefusedFlushLeftEverythingAsItWas(erased)
+    }
+
+    /// The positive control: the same gap with the switch left on is a
+    /// tombstone for every row the stores lost.
+    func testUploadsLeftOnInTheGapTheQueuedFlushTombstonesTheEmptiedRows() async throws {
+        let erased = try await eraseWithoutSignOutLandsInTheGap(uploadsStayOn: true)
+        let ids = Set(erased.onServer.map { $0.id.uuidString.lowercased() })
+        try await syncEventually("the emptied rows tombstoned") { self.tombstonedKeys("events") == ids }
+        XCTAssertTrue(erased.onServer.allSatisfy { server.isTombstoned(table: "events", key: $0.id.uuidString) })
+    }
+
+    func testFallbackUploadsTurnedOffInTheGapDeleteNothing_killsNoSwitchAtFlushTime() async throws {
+        service.outboundFallback = true
+        let erased = try await eraseWithoutSignOutLandsInTheGap(uploadsStayOn: false)
+        assertTheRefusedFlushLeftEverythingAsItWas(erased)
+    }
+
+    /// The fallback's positive control: a physical DELETE of every row the
+    /// stores lost.
+    func testFallbackUploadsLeftOnInTheGapDeleteTheEmptiedRows() async throws {
+        service.outboundFallback = true
+        let erased = try await eraseWithoutSignOutLandsInTheGap(uploadsStayOn: true)
+        try await syncEventually("the emptied rows deleted") {
+            erased.onServer.allSatisfy { self.server.row(table: "events", key: $0.id.uuidString) == nil }
+        }
+        let deleted = Set(server.requests(.delete, table: "events").flatMap(\.keys).map { $0.lowercased() })
+        XCTAssertEqual(deleted, Set(erased.onServer.map { $0.id.uuidString.lowercased() }))
+    }
 }

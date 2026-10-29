@@ -2231,11 +2231,20 @@ final class SupabaseSyncService: ObservableObject {
         var paused = false
     }
 
-    /// Whether a flush may send at all: I1 read here, after the debounce
-    /// fired, not when it was scheduled. A held table owes a flush to the
-    /// next chain that reaches head.
+    /// Whether a flush may send at all: the master switch and I1 read here,
+    /// after the debounce fired, not when it was scheduled. A held table
+    /// owes a flush to the next chain that reaches head; one held by the
+    /// switch does not, because turning it on runs a full sync of every
+    /// table (`userDidEnableUploads`).
     private func flushGate(_ table: String) -> Bool {
         guard !userId.isEmpty else { return false }
+        // An injected gateway is a fake server, never production: the build
+        // block does not apply to it, the switch does.
+        let uploadsOn = gatewayIsInjected ? defaults.bool(forKey: AppSettingsKeys.syncUploadsEnabled) : canUpload
+        guard uploadsOn else {
+            logger.notice("\(table, privacy: .public): flush held — uploads off (D9)")
+            return false
+        }
         guard ownerState.allowsSync else {
             logger.notice("\(table, privacy: .public): flush held — local data belongs to another account (S5)")
             return false
