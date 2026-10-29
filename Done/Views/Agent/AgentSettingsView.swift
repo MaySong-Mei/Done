@@ -154,7 +154,6 @@ struct AgentSettingsView: View {
     @AppStorage(AppSettingsKeys.agentAPIKey) private var apiKey = ""
     @AppStorage(AppSettingsKeys.calendarAgenticCreateEnabled) private var calendarAgenticCreateEnabled = true
     @AppStorage(AppSettingsKeys.agentAskBeforeCreatingEventTypeTemplates) private var askBeforeCreatingEventTypeTemplates = true
-    @AppStorage(AppSettingsKeys.tokenInferenceLLMEnabled) private var tokenInferenceLLMEnabled = false
 
     let showsDoneButton: Bool
 
@@ -209,14 +208,13 @@ struct AgentSettingsView: View {
             settingsCard(L(.behavior)) {
                 Toggle(L(.aiTypeSuggestionsAfterSave), isOn: $calendarAgenticCreateEnabled)
                 Toggle(L(.askBeforeCreatingTemplates), isOn: $askBeforeCreatingEventTypeTemplates)
-                Toggle(L(.tokenInferenceEngineToggle), isOn: $tokenInferenceLLMEnabled)
+                // gh#282: the token inference engine toggle is hidden. The
+                // app no longer runs the engine, so the switch would be a
+                // dead control. Its key stays declared and on the erase
+                // list until #282 retires the engine itself.
             }
 
             settingsHintCard(L(.hintTypeSuggestions))
-
-            if tokenInferenceLLMEnabled {
-                settingsHintCard(L(.hintTokenInferenceEngine))
-            }
 
             settingsCard(L(.learning)) {
                 if agentRuntime.preferenceStore.listRules().isEmpty {

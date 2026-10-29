@@ -568,9 +568,16 @@ final class TokenInferenceCoordinator {
     private let service: TokenInferenceService
     private weak var store: EventStore?
 
+    /// gh#282: every coordinator alive in this process, held weakly. The app
+    /// creates none since token inference was switched off; the host-app
+    /// test reads the count to prove the running app wires no store to it.
+    private static let live = NSHashTable<TokenInferenceCoordinator>.weakObjects()
+    static var liveCount: Int { live.allObjects.count }
+
     init(store: EventStore, service: TokenInferenceService? = nil) {
         self.store = store
         self.service = service ?? .shared
+        Self.live.add(self)
         bind()
     }
 
