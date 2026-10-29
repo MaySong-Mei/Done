@@ -292,7 +292,9 @@ final class PerfBatch1QATests: XCTestCase {
                             source: .explicitSelection, lastUsedAt: Self.t0)
     }
 
-    private func tokens(_ label: String) -> TokenInferenceRepository.Snapshot {
+    /// `projections: false` is a state whose projections column goes out
+    /// null (testQA_A3's case).
+    private func tokens(_ label: String, projections: Bool = true) -> TokenInferenceRepository.Snapshot {
         let dynamic = TokenDynamicHypothesisRecord(
             id: "dyn-\(label)", category: .state, statement: "s \(label)", confidence: 0.5, weight: 0.5,
             windowStart: Self.t0, windowEnd: Self.t0.addingTimeInterval(86_400), relatedOccurrenceKeys: [],
@@ -300,7 +302,29 @@ final class PerfBatch1QATests: XCTestCase {
         let meta = TokenMetaHypothesisRecord(
             kind: .inputSparse, confidence: 0.4, windowStart: Self.t0, windowEnd: Self.t0.addingTimeInterval(86_400),
             rationale: "m \(label)", status: .active, updatedAt: Self.t0)
-        return ([dynamic], [meta], [])
+        return ([dynamic], [meta], projections ? [projection(label)] : [])
+    }
+
+    /// One projection record as the engine writes them: every field set,
+    /// fractional numbers, an occurrence key. Projections are most of the
+    /// real token state, so a fixture without one never hashes the column
+    /// that matters.
+    private func projection(_ label: String) -> TokenOccurrenceProjectionRecord {
+        let event = Event(title: "Projected \(label)",
+                          timeRanges: [.init(start: Self.t0, end: Self.t0.addingTimeInterval(1800))])
+        return TokenOccurrenceProjectionRecord(
+            occurrenceKey: CalendarOccurrenceKey.make(for: event, occurrenceDate: Self.t0),
+            occurrenceID: "occurrence-\(label)", eventID: event.id, eventTitle: event.title, typeLabel: "Other",
+            start: Self.t0, end: Self.t0.addingTimeInterval(1800), phase: .predicted,
+            tokenBefore: 61.25, tokenAfter: 58.333333333333336,
+            physicalCaloriesBefore: 1_812.5, physicalCaloriesAfter: 1_790.0625,
+            nextDayToken: 63.1, nextDayPhysicalCalories: 1_850.75, confidence: 0.41,
+            dimensions: TokenDimensionBreakdown(cognitiveTokenDelta: -2.916666666666667, physicalCaloriesDelta: -22.4375,
+                                                tomorrowTokenDelta: 1.85, tomorrowCaloriesDelta: 38.2, observability: 0.41),
+            reasoningSummary: "summary \(label) 漢字", evidence: TokenEvidenceBundle(direct: ["direct \(label)"],
+                                                                                   structural: ["structural"], historical: []),
+            stateTags: ["focused"], dynamicHypothesisIDs: ["dynamic-\(label)"], metaHypothesisKinds: [.inputSparse],
+            inferenceSourceLabel: TokenInferenceService.bootstrapSourceLabel, abstained: false, updatedAt: Self.t0)
     }
 
     private func wire<T: Encodable>(_ value: [T]) throws -> Any {
@@ -403,7 +427,7 @@ final class PerfBatch1QATests: XCTestCase {
         let adapter = AgentPreferencesSyncAdapter(engine: svc, store: prefs)
         let local = SupabaseSyncService.rowHash(adapter.localRow())
         for label in ["a", "b"] {
-            var incoming = try legacyRow(svc, rules: gym, tokens: tokens(label))
+            var incoming = try legacyRow(svc, rules: gym, tokens: tokens(label, projections: false))
             incoming["seq"] = 9
             incoming["version_id"] = "v"
             let projected = try XCTUnwrap(adapter.projected(incoming))

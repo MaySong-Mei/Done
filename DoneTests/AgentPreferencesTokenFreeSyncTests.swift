@@ -118,7 +118,8 @@ final class AgentPreferencesTokenFreeSyncTests: XCTestCase {
             resultKind: .selected, resolvedAt: Self.t0, appliedActionSummary: summary, wasDefaulted: false)
     }
 
-    /// A token state no other fixture shares: its ids carry `label`.
+    /// A token state no other fixture shares: its ids carry `label`, and it
+    /// has a projection.
     private func tokens(_ label: String) -> TokenInferenceRepository.Snapshot {
         let dynamic = TokenDynamicHypothesisRecord(
             id: "dynamic-\(label)", category: .state, statement: "statement \(label)", confidence: 0.5, weight: 0.5,
@@ -127,7 +128,29 @@ final class AgentPreferencesTokenFreeSyncTests: XCTestCase {
         let meta = TokenMetaHypothesisRecord(
             kind: .inputSparse, confidence: 0.4, windowStart: Self.t0, windowEnd: Self.t0.addingTimeInterval(86_400),
             rationale: "meta \(label)", status: .active, updatedAt: Self.t0)
-        return ([dynamic], [meta], [])
+        return ([dynamic], [meta], [projection(label)])
+    }
+
+    /// One projection record as the engine writes them: every field set,
+    /// fractional numbers, an occurrence key. Projections are most of the
+    /// real token state, so a fixture without one never hashes the column
+    /// that matters.
+    private func projection(_ label: String) -> TokenOccurrenceProjectionRecord {
+        let event = Event(title: "Projected \(label)",
+                          timeRanges: [.init(start: Self.t0, end: Self.t0.addingTimeInterval(1800))])
+        return TokenOccurrenceProjectionRecord(
+            occurrenceKey: CalendarOccurrenceKey.make(for: event, occurrenceDate: Self.t0),
+            occurrenceID: "occurrence-\(label)", eventID: event.id, eventTitle: event.title, typeLabel: "Other",
+            start: Self.t0, end: Self.t0.addingTimeInterval(1800), phase: .predicted,
+            tokenBefore: 61.25, tokenAfter: 58.333333333333336,
+            physicalCaloriesBefore: 1_812.5, physicalCaloriesAfter: 1_790.0625,
+            nextDayToken: 63.1, nextDayPhysicalCalories: 1_850.75, confidence: 0.41,
+            dimensions: TokenDimensionBreakdown(cognitiveTokenDelta: -2.916666666666667, physicalCaloriesDelta: -22.4375,
+                                                tomorrowTokenDelta: 1.85, tomorrowCaloriesDelta: 38.2, observability: 0.41),
+            reasoningSummary: "summary \(label) 漢字", evidence: TokenEvidenceBundle(direct: ["direct \(label)"],
+                                                                                   structural: ["structural"], historical: []),
+            stateTags: ["focused"], dynamicHypothesisIDs: ["dynamic-\(label)"], metaHypothesisKinds: [.inputSparse],
+            inferenceSourceLabel: TokenInferenceService.bootstrapSourceLabel, abstained: false, updatedAt: Self.t0)
     }
 
     /// A slice as an older build sent it (`encodeJSONOrNull`): the JSON of
@@ -284,7 +307,7 @@ final class AgentPreferencesTokenFreeSyncTests: XCTestCase {
         let peerTokens = tokens("peer-\(UUID())")
         let s1 = server.writeDirectly(table: "agent_preferences", key: uid,
                                       data: try olderBuildRow(device.service, rules: mine, tokens: peerTokens))
-        let ignoredLine = "sync.apply.ignored_columns table=agent_preferences seq=\(s1) columns=token_dynamic_hypotheses,token_meta_hypotheses\n"
+        let ignoredLine = "sync.apply.ignored_columns table=agent_preferences seq=\(s1) columns=token_dynamic_hypotheses,token_meta_hypotheses,token_projections\n"
         let ignoredBefore = trailCount(ignoredLine)
 
         await device.puller.pullToHead()
@@ -325,6 +348,39 @@ final class AgentPreferencesTokenFreeSyncTests: XCTestCase {
         XCTAssertEqual(ownTokenState(), ownTokensBefore)
         await device.service.syncAgentPreferences(device.prefs)
         XCTAssertTrue(preferenceWrites().isEmpty, "nothing pushed: clean")
+    }
+
+    /// The incoming row is what explains the entry. An older build adopted
+    /// B's row (R0, T_B); this device's tokens moved to T_A afterwards with
+    /// no push, and then it upgraded. B, still on the older build, pushes
+    /// (R1, T_B). Only the local rules under the INCOMING row's tokens are
+    /// the legacy entry, so the applier has to hand the incoming row to the
+    /// transition: the pull adopts R1, shelves nothing, and nothing is
+    /// pushed back over it. Driven through the puller, not the engine.
+    func testUpgradePullFirst_theIncomingRowsTokensExplainTheEntry_killsIncomingNotHandedOver() async throws {
+        let r0 = [rule("gym")]
+        let tB = tokens("peer-B")
+        let (device, s0) = try await olderBuildSyncedDevice(rules: r0, serverTokens: tB, localTokens: tokens("moved-A"))
+        let legacy = try XCTUnwrap(entry(device)).hash
+        XCTAssertNotEqual(SupabaseSyncService.rowHash(try olderBuildRow(device.service, rules: r0, tokens: tokens("moved-A"))),
+                          legacy, "fixture: this device's own token state does not explain the entry")
+        let r1 = [rule("gym"), rule("swim")]
+        let s1 = server.writeDirectly(table: "agent_preferences", key: uid,
+                                      data: try olderBuildRow(device.service, rules: r1, tokens: tB))
+        let matchedLine = "sync.baseline.token_free table=agent_preferences matched=local seq=\(s0)\n"
+        let matchedBefore = trailCount(matchedLine)
+        let ownTokensBefore = ownTokenState()
+
+        await device.puller.pullToHead()
+
+        XCTAssertEqual(device.prefs.rules.map(\.id), r1.map(\.id), "B's rules adopted")
+        XCTAssertTrue(device.shelf.entries().isEmpty, "no shelf line")
+        XCTAssertEqual(entry(device), SyncBaselineEntry(hash: tokenFreeHash(device, r1), seq: s1))
+        XCTAssertEqual(trailCount(matchedLine), matchedBefore + 1,
+                       "matched on the local rules, under the incoming row's tokens")
+        XCTAssertEqual(ownTokenState(), ownTokensBefore, "nothing written to this device's token state")
+        await device.service.syncAgentPreferences(device.prefs)
+        XCTAssertTrue(preferenceWrites().isEmpty, "nothing pushed back over B's rules")
     }
 
     /// Pull first, and the device's token state moved since its baseline
