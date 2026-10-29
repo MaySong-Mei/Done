@@ -9,7 +9,11 @@
 //  1,014 B. "Before" runs the 3111ef1 code paths (the oracle's verbatim
 //  copy, or the store calls that did not change); "after" runs this branch's.
 //
-//  Printed, not asserted beyond a loose bound: the numbers are the report.
+//  Timings are printed, not asserted (wall clock is shared with other
+//  agents' builds and suites). What is asserted is deterministic: the new
+//  seed and lookup, through the center's launch and the store's append, read
+//  no whole file and decode a bounded number of lines; the 3111ef1 reads are
+//  whole-file reads the counter sees (the positive control).
 //
 
 import XCTest
@@ -157,6 +161,16 @@ final class ObsReadQAMainThreadCostTests: XCTestCase {
         }
         lines.append("pool: resident-daily \(dailyBytes.count) B, \(dailyLineCount) lines, \(dailyIDCount) ids")
 
+        // Positive control for the counts asserted below: the reads the 3111ef1
+        // seed and lookup made are whole-file reads, and the counter sees each.
+        var reads = SpikeRunStore.wholeFileReads
+        _ = SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.residentDailySpikeID, location: location)
+        XCTAssertEqual(SpikeRunStore.wholeFileReads - reads, 1, "control: the 3111ef1 seed's read is one whole-file read")
+        reads = SpikeRunStore.wholeFileReads
+        _ = SpikeRunStore.loadRuns(spikeID: FixObservationRegistry.residentDailySpikeID, location: location,
+                                   applyRetention: false).first { $0.id == today }
+        XCTAssertEqual(SpikeRunStore.wholeFileReads - reads, 1, "control: the 3111ef1 lookup's read is one whole-file read")
+
         // Launch seed.
         let seedOld = median { _ = ObsReadQAOracle.seed((try? Data(contentsOf: dailyURL)) ?? Data(), matches: matches) }
         let seedHit = median {
@@ -192,7 +206,36 @@ final class ObsReadQAMainThreadCostTests: XCTestCase {
         report("revision lookup, window close, 3111ef1", windowOld)
         report("revision lookup, window close, branch", windowNew)
 
-        // The Settings row, with a live center holding an unwritten day.
+        // The search itself: today's id costs the one line it is on, a fresh id none.
+        var searchDecodes = 0
+        if case .found(let run) = SpikeRunFileScan.latestLine(of: today, in: dailyURL, decodedLines: &searchDecodes) {
+            XCTAssertEqual(run.revision, 5)
+        } else {
+            XCTFail("rig: today's id is on disk")
+        }
+        XCTAssertEqual(searchDecodes, 1, "today's id: one decode")
+        searchDecodes = 0
+        XCTAssertEqual(SpikeRunFileScan.latestLine(of: UUID(), in: dailyURL, decodedLines: &searchDecodes), .absent)
+        XCTAssertEqual(searchDecodes, 0, "a fresh id: no decode")
+
+        // A new build's first launch: the tail misses within its decode budget,
+        // and reads no whole file.
+        reads = SpikeRunStore.wholeFileReads
+        let newBuildLaunch = ResidentObservationCenter(
+            coordinator: SpikeSessionCoordinator(), store: nil, location: location, calendar: .current,
+            now: { [noon] in noon }, mediaNow: { 500 }, makeFrameProbe: { SpikeFrameProbe() },
+            ownerUID: { "owner-a" }, stamp: { [unowned self] in self.stamp(build: "11") },
+            installsFollowerProbe: false, isAppActive: { true }, verifiesSeed: false)
+        XCTAssertEqual(SpikeRunStore.wholeFileReads, reads, "a new build's launch seed reads no whole file")
+        if case .miss(_, let decodes) = newBuildLaunch.launchSeed {
+            XCTAssertLessThanOrEqual(decodes, ResidentObservationCenter.seedMaxDecodes, "within the decode budget")
+        } else {
+            XCTFail("rig: a new build adopts nothing")
+        }
+
+        // The Settings row, with a live center holding an unwritten day. Its
+        // launch is the seed under test: no whole-file read, one decode.
+        reads = SpikeRunStore.wholeFileReads
         let made = ResidentObservationCenter(
             coordinator: SpikeSessionCoordinator(), store: nil, location: location, calendar: .current,
             now: { [noon] in noon }, mediaNow: { 500 }, makeFrameProbe: { SpikeFrameProbe() },
@@ -200,8 +243,13 @@ final class ObsReadQAMainThreadCostTests: XCTestCase {
             installsFollowerProbe: false, isAppActive: { true }, verifiesSeed: false)
         made.activate()
         center = made
-        if case .found(let adopted, _) = made.launchSeed { XCTAssertEqual(adopted.id, today, "rig: the center adopted today's line") }
-        else { XCTFail("rig: the center adopted today's line") }
+        XCTAssertEqual(SpikeRunStore.wholeFileReads, reads, "the launch seed reads no whole file")
+        if case .found(let adopted, let decodes) = made.launchSeed {
+            XCTAssertEqual(adopted.id, today, "rig: the center adopted today's line")
+            XCTAssertEqual(decodes, 1, "today's line is the last: one decode")
+        } else {
+            XCTFail("rig: the center adopted today's line")
+        }
         SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
 
         let poolRead = {
@@ -216,13 +264,29 @@ final class ObsReadQAMainThreadCostTests: XCTestCase {
                 currentSegment: .thisDevice())
         }
         var flushSamples: [Double] = []
-        for _ in 0..<9 {
+        for index in 0..<9 {
             SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
+            reads = SpikeRunStore.wholeFileReads
             let start = DispatchTime.now().uptimeNanoseconds
             made.flushForManualUpload()
             flushSamples.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1e6)
+            if index == 0 {
+                // The first append of today's id here: the revision lookup runs.
+                XCTAssertEqual(SpikeRunStore.wholeFileReads, reads, "the first flush's revision lookup reads no whole file")
+                let appended = try ObsReadQAOracle.decoder().decode(
+                    SpikeRun.self, from: Data(try XCTUnwrap(try Data(contentsOf: dailyURL).split(separator: 0x0A).last)))
+                XCTAssertEqual(appended.id, today)
+                XCTAssertEqual(appended.revision, 6, "liveness: the lookup ran and found revision 5")
+            }
             try dailyBytes.write(to: dailyURL)       // back to the device's size, untimed
         }
+        // A window close: always a fresh id, so always a lookup.
+        reads = SpikeRunStore.wholeFileReads
+        var window = ObsReadQABytes.run(id: UUID(), spikeID: FixObservationRegistry.effortPathFixID, startedAt: noon,
+                                        revision: nil, metrics: ["wTaps": .number(1)])
+        window.kind = .window
+        XCTAssertTrue(SpikeRunStore.finishRun(window, owner: .explicit("owner-a"), location: location))
+        XCTAssertEqual(SpikeRunStore.wholeFileReads, reads, "a window close's revision lookup reads no whole file")
         let flush = flushSamples.sorted()[4]
         let pool = median(9, poolRead)
         SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
@@ -266,8 +330,9 @@ final class ObsReadQAMainThreadCostTests: XCTestCase {
         report("still: compaction crossing (finishRun over 256 KiB)", crossingSamples.sorted()[2])
         try dailyBytes.write(to: dailyURL)
 
+        // Timings are printed, never asserted: a wall-clock ratio goes red under
+        // CPU contention (several agents and suites share this machine). The
+        // claims are held by the counts above.
         print("QA main-thread cost (Debug, simulator), median of 9:\n" + lines.joined(separator: "\n"))
-        XCTAssertLessThan(seedMiss, seedOld / 5, "the seed no longer scales with the file")
-        XCTAssertLessThan(revisionFresh, revisionOld / 5, "the lookup no longer decodes the file")
     }
 }
