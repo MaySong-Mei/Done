@@ -45,7 +45,7 @@ struct MessageBubbleView: View {
             RichTextView(content: message.content)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .background(Color(.systemGray5))
+                .background(Color.platformGray5)
                 .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             Spacer(minLength: 60)
         }
@@ -84,7 +84,7 @@ struct MessageBubbleView: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(Color(.systemGray6))
+            .background(Color.platformGray6)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             Spacer()
         }
@@ -95,7 +95,7 @@ struct MessageBubbleView: View {
             TypingDotsView()
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
-                .background(Color(.systemGray5))
+                .background(Color.platformGray5)
                 .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             Spacer(minLength: 60)
         }
@@ -210,7 +210,7 @@ struct PendingDestructiveActionSection: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .background(Color(.systemGray6))
+            .background(Color.platformGray6)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             Spacer(minLength: 40)
         }

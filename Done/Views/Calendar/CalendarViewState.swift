@@ -17,6 +17,14 @@ let calendarTimelineHourHeightDefault: CGFloat = 56
 let calendarTimelineHourHeightMin: CGFloat = 12
 let calendarTimelineHourHeightMax: CGFloat = 96
 
+enum RangeMode {
+    case day
+    case threeDay
+    case week
+    case month
+    case stream
+}
+
 /// 功能：Stores the currently observed date/range for the calendar UI.
 final class CalendarViewState: ObservableObject {
     @Published var selectedDayOffset: Int = 0

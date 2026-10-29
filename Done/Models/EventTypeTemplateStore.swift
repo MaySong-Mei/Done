@@ -776,12 +776,23 @@ enum ColorHex {
     }
 
     static func fromColor(_ color: Color) -> String {
-        let uiColor = UIColor(color)
         var red: CGFloat = 0
         var green: CGFloat = 0
         var blue: CGFloat = 0
         var alpha: CGFloat = 0
-        if uiColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha) {
+        #if canImport(UIKit)
+        let converted = UIColor(color).getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        #else
+        // AppKit traps on getRed for catalog/dynamic colors — hop through sRGB first.
+        let converted: Bool
+        if let srgb = NSColor(color).usingColorSpace(.sRGB) {
+            srgb.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+            converted = true
+        } else {
+            converted = false
+        }
+        #endif
+        if converted {
             let redByte = colorByte(red)
             let greenByte = colorByte(green)
             let blueByte = colorByte(blue)

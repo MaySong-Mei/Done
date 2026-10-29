@@ -8,15 +8,7 @@
 import SwiftUI
 import Combine
 
-// MARK: - Math Utilities
-
-func clamp(_ x: CGFloat, _ a: CGFloat, _ b: CGFloat) -> CGFloat {
-    min(max(x, a), b)
-}
-
-func clamp(_ value: Int, to range: ClosedRange<Int>) -> Int {
-    min(max(value, range.lowerBound), range.upperBound)
-}
+// clamp overloads live in CalendarLayout.swift (shared, UIKit-free).
 
 // MARK: - Page Types
 
@@ -25,13 +17,7 @@ enum PageMode {
     case edit
 }
 
-enum RangeMode {
-    case day
-    case threeDay
-    case week
-    case month
-    case stream
-}
+// `RangeMode` lives in CalendarViewState.swift (shared with the Mac target).
 
 // MARK: - Page Metrics
 

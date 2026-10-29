@@ -769,7 +769,7 @@ final class AuthRefreshTerminalQATests: XCTestCase {
         // about it. See `EraseWiringScan.functionBody`.
         let body = try EraseWiringScan.functionBody(
             of: "func resetAllLocalData(keepingSession: Bool) {",
-            inFileAt: "Done/Views/Agent/AgentSettingsView.swift"
+            inFileAt: "Done/Services/LocalDataEraser.swift"
         )
         guard let sweep = body.range(of: "AppSettingsKeys.removeResettableKeys") else {
             return XCTFail("resetAllLocalData() no longer runs the named-key sweep")

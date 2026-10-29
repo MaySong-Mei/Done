@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(UIKit)
 import UIKit
+#else
+import ImageIO
+#endif
 
 final class AgenticIntakeAssetStore {
     typealias ImageProcessor = (Data) throws -> (data: Data, size: CGSize)
@@ -76,11 +80,13 @@ final class AgenticIntakeAssetStore {
         }
     }
 
+    #if canImport(UIKit)
     func loadImage(for ref: AgenticIntakeImageRef) -> UIImage? {
         let url = absoluteURL(for: ref)
         guard let data = try? Data(contentsOf: url) else { return nil }
         return UIImage(data: data)
     }
+    #endif
 
     func absoluteURL(for ref: AgenticIntakeImageRef) -> URL {
         baseDirectoryURL.appendingPathComponent(ref.relativePath)
@@ -109,6 +115,7 @@ final class AgenticIntakeAssetStore {
         }
     }
 
+    #if canImport(UIKit)
     private func processedJPEG(from data: Data) throws -> (data: Data, size: CGSize) {
         guard let image = UIImage(data: data) else {
             throw AssetStoreError.invalidImageData
@@ -134,6 +141,20 @@ final class AgenticIntakeAssetStore {
             image.draw(in: CGRect(origin: .zero, size: targetSize))
         }
     }
+    #else
+    /// macOS has no photo intake yet; a caller that hands it bytes gets them
+    /// stored as-is (never dropped), with the pixel size read through ImageIO.
+    private func processedJPEG(from data: Data) throws -> (data: Data, size: CGSize) {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = props[kCGImagePropertyPixelWidth] as? CGFloat,
+              let height = props[kCGImagePropertyPixelHeight] as? CGFloat
+        else {
+            throw AssetStoreError.invalidImageData
+        }
+        return (data, CGSize(width: width, height: height))
+    }
+    #endif
 
     /// Take EVERY asset, for "erase all local data" (gh#260).
     ///

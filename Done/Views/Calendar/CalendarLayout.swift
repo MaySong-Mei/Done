@@ -11,6 +11,18 @@
 import Foundation
 import SwiftUI
 
+// MARK: - Math Utilities
+// Shared vocabulary: live here (not CalendarPageState) so UIKit-free targets
+// compile them.
+
+func clamp(_ x: CGFloat, _ a: CGFloat, _ b: CGFloat) -> CGFloat {
+    min(max(x, a), b)
+}
+
+func clamp(_ value: Int, to range: ClosedRange<Int>) -> Int {
+    min(max(value, range.lowerBound), range.upperBound)
+}
+
 /// 功能： Provides layout helpers for calendar timelines (filtering, geometry, and styling).
 enum CalendarLayout {
     /// 功能： Default day range (relative to today) for timeline pagination.

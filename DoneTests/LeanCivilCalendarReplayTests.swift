@@ -32,7 +32,13 @@ final class LeanCivilCalendarReplayTests: XCTestCase {
     }
 
     private static func loadFixtures() throws -> [Fixture] {
-        let url = URL(fileURLWithPath: #filePath)
+        // The DoneMac test target bundles the fixtures (a source tree on an
+        // external volume would make the Mac test host stop on the
+        // removable-volume privacy prompt); the iOS target reads the
+        // source tree directly, as before.
+        let url = Bundle(for: LeanCivilCalendarReplayTests.self)
+            .url(forResource: "fixtures", withExtension: "json")
+            ?? URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("verification/fixtures.json")
