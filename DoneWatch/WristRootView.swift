@@ -21,8 +21,6 @@ struct WristRootView: View {
     @AppStorage(WristLocalSettings.statsPeriodKey) private var periodRaw = ""
     /// Where the running bar's top is on the screen.
     @State private var barTop: CGFloat?
-    /// A block's card is up on Today: it takes the running bar's place.
-    @State private var cardUp = false
     private let housekeeping = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -66,7 +64,7 @@ struct WristRootView: View {
             // `containerBackground(for: .navigation)`.
             .overlay(alignment: .bottom) {
                 ZStack {
-                    if page == .today, !cardUp, let running {
+                    if page == .today, let running {
                         WristRunningBar(
                             occurrence: running.occurrence, pending: running.pending, strings: strings,
                             onExtend: { client.extend(running.occurrence) },
@@ -76,7 +74,7 @@ struct WristRootView: View {
                         .transition(.opacity)
                     }
                 }
-                .animation(.easeOut(duration: 0.15), value: page == .today && !cardUp)
+                .animation(.easeOut(duration: 0.15), value: page == .today)
             }
         }
         .onReceive(housekeeping) { now in
@@ -112,16 +110,13 @@ struct WristRootView: View {
                 titleHints: snapshot.titleHints,
                 localCreates: client.localCreates, motions: snapshot.motions,
                 hourHeight: CGFloat(WristLocalSettings.Zoom(stored: zoomRaw).hourHeight),
-                bottomInset: barInset(running != nil && !cardUp),
-                cardUp: $cardUp,
+                bottomInset: barInset(running != nil),
                 takesRangeEdits: snapshot.takesRangeEdits,
                 pendingEventIDs: pendingIDs,
                 onCreate: { type, name, start, end in
                     client.create(type, title: name.title, awaitsName: name == .later, start: start, end: end)
                 },
                 onEditRange: { occurrence, start, end in client.editRange(occurrence, start: start, end: end) },
-                onExtend: { client.extend($0) },
-                onFinish: { client.finish($0) },
                 onFlick: { step in
                     // Today is the leftmost page.
                     guard step > 0 else { return }
@@ -163,9 +158,8 @@ enum WristPage: String, Hashable {
 /// type, the likeliest few for this range — and closing it discards the
 /// draft. Drawing from the now line is how a session starts now.
 ///
-/// Tap a block to select it: a card names it and offers its quick changes
-/// (+15 and Finish for the running one, the end a quarter hour earlier or
-/// later for the rest). Press and hold a block — it lifts with a click under
+/// Tap a block to select it: it is outlined, nothing opens over the day.
+/// Press and hold a block — it lifts with a click under
 /// the still finger — then drag to move it, or, pressed near its top or
 /// bottom edge, to resize that edge — the phone's
 /// edit on its day timeline (`WristBlockEdit`); the release sends the new
@@ -189,8 +183,6 @@ struct WristTodayView: View {
     /// What the running bar covers at the foot of the page: the day scrolls
     /// clear of it, and drawing scrolls at its top edge.
     var bottomInset: CGFloat = 0
-    /// Whether a block's card is up, for the running bar to make way.
-    var cardUp: Binding<Bool> = .constant(false)
     /// The phone applies range edits (`WristSnapshot.takesRangeEdits`), and
     /// the events with a command it has not answered yet.
     var takesRangeEdits: Bool = false
@@ -199,8 +191,6 @@ struct WristTodayView: View {
     var onCreate: (WristType, WristDraftName, Date, Date) -> UUID? = { _, _, _, _ in nil }
     /// A block's range moved, resized or nudged here.
     var onEditRange: (WristOccurrence, Date, Date) -> Void = { _, _, _ in }
-    var onExtend: (WristOccurrence) -> Void = { _ in }
-    var onFinish: (WristOccurrence) -> Void = { _ in }
     /// A sideways flick: -1 for the page to the left, +1 to the right. The
     /// hold-and-drag on the day is a drag gesture, and any drag gesture here
     /// keeps the paged TabView from turning the page itself.
@@ -229,14 +219,13 @@ struct WristTodayView: View {
     /// When the last hold ended — the release of a hold also reads as a tap
     /// or a flick, which must not act on it.
     @State private var holdEndedAt = Date.distantPast
-    /// The tapped block, by motion key, and its card.
+    /// The tapped block, by motion key.
     @State private var selectedKey: String?
     /// A short note over the day: why a hold did nothing.
     @State private var hint: String?
     @State private var hintToken = UUID()
     /// The scroll view's width, to find the block under a touch.
     @State private var contentWidth: CGFloat = 0
-    @State private var cardHeight: CGFloat = 0
     /// The draft a block was just created from, and the event it made: the
     /// block starts in the draft's place and look. `sheetUp` holds it there
     /// until the picker is gone.
@@ -432,27 +421,6 @@ struct WristTodayView: View {
                 )
                 .scrollDisabled(holding || draft != nil || edit != nil)
                 .mask(WristEdgeFade(top: 0, bottom: 10))
-                // In the running bar's place (it makes way while the card is
-                // up), with the selected block scrolled clear of it.
-                .overlay(alignment: .bottom) {
-                    if draft == nil, edit == nil,
-                       let key = selectedKey, let block = blocks.first(where: { $0.motionKey == key }) {
-                        card(block)
-                            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { _, h in cardHeight = h }
-                            .padding(.bottom, 2)
-                            .transition(.opacity)
-                    }
-                }
-                .onChange(of: selectedKey) { _, key in
-                    cardUp.wrappedValue = key != nil
-                    guard let key, let block = blocks.first(where: { $0.motionKey == key }) else { return }
-                    reveal(block.start, block.end, dayStart: dayStart, dayEnd: dayEnd, height: height, top: top)
-                }
-                // A block dropped low on the page comes clear of the card too.
-                .onChange(of: edit == nil) { _, ended in
-                    guard ended, let key = selectedKey, let block = blocks.first(where: { $0.motionKey == key }) else { return }
-                    reveal(block.start, block.end, dayStart: dayStart, dayEnd: dayEnd, height: height, top: top)
-                }
                 .overlay(alignment: .top) {
                     if let hint {
                         Text(hint)
@@ -715,8 +683,8 @@ struct WristTodayView: View {
         return nil
     }
 
-    /// A tap selects the block under it (again, or on empty time, closes
-    /// the card). The release of a hold is no tap.
+    /// A tap selects the block under it (again, or on empty time, clears
+    /// it). The release of a hold is no tap.
     private func tap(at location: CGPoint, blocks: [WristDayBlock], mapping: WristDraftMapping, top: CGFloat, height: CGFloat) {
         guard draft == nil, edit == nil, !picking, !holding, Date().timeIntervalSince(holdEndedAt) > 0.4 else { return }
         let hit = blockHit(x: location.x, dayY: Double(location.y + scrollY - top), blocks: blocks, mapping: mapping, height: height)
@@ -724,21 +692,6 @@ struct WristTodayView: View {
         withAnimation(.easeOut(duration: 0.15)) {
             selectedKey = key == selectedKey ? nil : key
         }
-    }
-
-    /// Scrolls the day just enough that `start…end` clears the card at
-    /// the foot, never past its own top.
-    private func reveal(_ start: Date, _ end: Date, dayStart: Date, dayEnd: Date, height: CGFloat, top: CGFloat) {
-        let minY = WristDayLayout.fraction(start, dayStart: dayStart, dayEnd: dayEnd) * height
-        let maxY = WristDayLayout.fraction(end, dayStart: dayStart, dayEnd: dayEnd) * height
-        // The card's height is known after its first layout; a typical one
-        // stands in until then.
-        let clear = viewportHeight - (cardHeight > 0 ? cardHeight : 78) - 6
-        let bottom = maxY + top - scrollY
-        guard bottom > clear else { return }
-        let target = min(scrollY + (bottom - clear), minY, max(0, contentHeight - viewportHeight))
-        guard target > scrollY else { return }
-        withAnimation(.easeOut(duration: 0.2)) { position.scrollTo(y: target) }
     }
 
     private func show(hint text: String) {
@@ -917,111 +870,6 @@ struct WristTodayView: View {
             }
             .shadow(color: .black.opacity(0.6), radius: 3)
             .allowsHitTesting(false)
-    }
-
-    /// The selected block's card: its name, type and range, and the quick
-    /// changes the phone allows for it — +15 and Finish while it runs, its
-    /// end a quarter hour earlier or later otherwise.
-    private func card(_ block: WristDayBlock) -> some View {
-        let occurrence = block.occurrence
-        let color = WristColor.color(occurrence.colorHex)
-        let end = occurrence.isOpenEnded ? block.end : occurrence.end
-        let running = block.isCurrent && occurrence.quickActionsEnabled
-        let editable = isEditable(occurrence)
-        let pending = pendingEventIDs.contains(occurrence.eventID)
-        let canShorten = end.addingTimeInterval(-WristTiming.extendStep).timeIntervalSince(occurrence.start)
-            >= WristTiming.minimumDuration
-        return VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .top, spacing: 4) {
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(occurrence.title)
-                        .font(.system(size: 13, weight: .semibold))
-                        .lineLimit(1)
-                    Text("\(occurrence.type) · \(strings.timeRange(occurrence.start, end))")
-                        .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .monospacedDigit()
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                        .foregroundStyle(.white.opacity(0.75))
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                Button {
-                    withAnimation(.easeOut(duration: 0.15)) { selectedKey = nil }
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 11, weight: .bold))
-                        .frame(width: 24, height: 24)
-                        .background(Color.white.opacity(0.15), in: Circle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(strings.close)
-            }
-            if pending {
-                Text(strings.sending)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.6))
-            }
-            if running {
-                HStack(spacing: 6) {
-                    cardButton(strings.extend, fill: Color.white.opacity(0.18)) { onExtend(occurrence) }
-                    cardButton(nil, systemImage: "checkmark", fill: color.opacity(0.85)) { onFinish(occurrence) }
-                        .accessibilityLabel(strings.finish)
-                }
-            } else if editable {
-                HStack(spacing: 6) {
-                    cardButton(strings.endEarlier, fill: Color.white.opacity(0.18), enabled: canShorten) {
-                        onEditRange(occurrence, occurrence.start, end.addingTimeInterval(-WristTiming.extendStep))
-                    }
-                    cardButton(strings.endLater, fill: Color.white.opacity(0.18)) {
-                        onEditRange(occurrence, occurrence.start, end.addingTimeInterval(WristTiming.extendStep))
-                    }
-                }
-            } else {
-                Text(takesRangeEdits || occurrence.isOpenEnded || !occurrence.quickActionsEnabled
-                     ? strings.editOnPhoneShort : strings.updatePhoneForEdits)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.6))
-            }
-        }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        // Plain fills, like the running bar: no blur redrawn as the day moves.
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(color.opacity(0.3))
-                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color(white: 0.08)))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(color.opacity(0.6), lineWidth: 1)
-        )
-        .padding(.horizontal, 4)
-    }
-
-    private func cardButton(
-        _ title: String?, systemImage: String? = nil, fill: Color, enabled: Bool = true, action: @escaping () -> Void
-    ) -> some View {
-        Button {
-            WKInterfaceDevice.current().play(.click)
-            action()
-        } label: {
-            Group {
-                if let systemImage {
-                    Image(systemName: systemImage).font(.system(size: 14, weight: .bold))
-                } else {
-                    Text(title ?? "")
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-                }
-            }
-            .frame(maxWidth: .infinity, minHeight: 30)
-            .background(fill, in: Capsule())
-            .opacity(enabled ? 1 : 0.35)
-        }
-        .buttonStyle(.plain)
-        .disabled(!enabled)
     }
 
     private func blockView(_ block: WristDayBlock, size: CGSize, selected: Bool = false) -> some View {
