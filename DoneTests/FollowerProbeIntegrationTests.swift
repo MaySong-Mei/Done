@@ -395,6 +395,48 @@ final class FollowerProbeCenterTests: XCTestCase {
     }
 }
 
+// MARK: - 观察站 readout over this device's records
+
+@MainActor
+final class FollowerObservatoryReadTests: XCTestCase {
+    private func run(kind: TelemetryRecordKind, dayKey: String, endedAt: Date, metrics: [String: SpikeMetricValue]) -> SpikeRun {
+        if kind == .window {
+            return TelemetryFixtures.run(spikeID: FixObservationRegistry.effortPathFixID,
+                                         scenarioID: FixObservationRegistry.windowScenarioID,
+                                         endedAt: endedAt, metrics: metrics, kind: .window, dayKey: dayKey)
+        }
+        return TelemetryFixtures.run(endedAt: endedAt, metrics: metrics, kind: .dailyRollup, dayKey: dayKey)
+    }
+
+    /// The card reads windows inside the deck's window and TODAY's latest
+    /// daily line — not yesterday's, not an older one of today's.
+    func testTheCardReadsRecentWindowsAndTodaysLatestDailyLine() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 29, hour: 12)))
+        func key(_ daysAgo: Int) -> String {
+            TelemetryClaimKey.dayKey(forDayStart: calendar.startOfDay(for: now.addingTimeInterval(-Double(daysAgo) * 86_400)),
+                                     calendar: calendar).dayKey
+        }
+        let recent = run(kind: .window, dayKey: key(3), endedAt: now, metrics: [
+            "wfl.runs": .number(1), "wfl.mirror.n": .number(1), "wfl.mirror.ms": .number(4), "wfl.mirror.maxMs": .number(4)])
+        let tooOld = run(kind: .window, dayKey: key(FixWatchAttention.observatoryWindowDays + 5), endedAt: now, metrics: [
+            "wfl.runs": .number(1), "wfl.mirror.n": .number(1), "wfl.mirror.ms": .number(400), "wfl.mirror.maxMs": .number(400)])
+        let yesterday = run(kind: .dailyRollup, dayKey: key(1), endedAt: now.addingTimeInterval(-86_400), metrics: [
+            "fl.widget.n": .number(9), "fl.widget.ms": .number(9), "fl.widget.maxMs": .number(1)])
+        let todayEarly = run(kind: .dailyRollup, dayKey: key(0), endedAt: now.addingTimeInterval(-3600), metrics: [
+            "fl.widget.n": .number(1), "fl.widget.ms": .number(1), "fl.widget.maxMs": .number(1)])
+        let todayLate = run(kind: .dailyRollup, dayKey: key(0), endedAt: now, metrics: [
+            "fl.widget.n": .number(2), "fl.widget.ms": .number(3), "fl.widget.maxMs": .number(2)])
+
+        let summary = FixWatchAttention.followerSummary(
+            local: (dailies: [yesterday, todayLate, todayEarly], windows: [recent, tooOld]), now: now, calendar: calendar)
+        XCTAssertEqual(summary.windowCount, 1, "the window older than the deck's reach is left out")
+        XCTAssertEqual(summary.windowRows.map(\.totalMs), [4])
+        XCTAssertEqual(summary.todayRows, [FollowerReport.Row(id: "widget", runs: 2, totalMs: 3, maxMs: 2, inMaxFrameMs: nil)])
+    }
+}
+
 // MARK: - (a) The sync flush: per table, network awaits excluded
 
 @MainActor
@@ -479,6 +521,14 @@ final class FollowerSyncFlushTests: XCTestCase {
         XCTAssertEqual(day[.syncFeedbackHash].count, 1)
         XCTAssertEqual(day[.syncFeedbackBaseline].count, 2)
         XCTAssertEqual(day[.syncCalendarHash].count, 0)
+    }
+
+    /// The settings row is one run per flush, before its network.
+    func testTheSettingsFlushIsOneRun() async {
+        defaults.set("dark", forKey: AppSettingsKeys.appearanceMode)
+        await service.syncSettings()
+        XCTAssertEqual(recorder.dailySnapshot()[.syncSettings].count, 1)
+        XCTAssertGreaterThan(server.requests.count, 0, "positive control: the flush went on to the network")
     }
 
     func testTheBaselineTableNamesMapToTheirGroups() {
