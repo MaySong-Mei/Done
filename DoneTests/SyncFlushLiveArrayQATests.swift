@@ -619,11 +619,17 @@ final class SyncFlushLiveArrayQATests: XCTestCase {
         let identity = ms(1_000) { sameBuffer != delivered }
         let equalCopy = ms(20) { otherBuffer != delivered }
         let endDiff = ms(20) { differAtEnd != delivered }
+        // For scale: what every calendar flush already does on the main
+        // actor with the same array — build each row and hash it.
+        let buildAndHash = ms(3) {
+            delivered.map { SupabaseSyncService.rowHash(self.service.eventToRow($0, kind: "calendar")) }.count == 5_200
+        }
         XCTAssertFalse(identity.1)
         XCTAssertFalse(equalCopy.1)
         XCTAssertTrue(endDiff.1)
-        let line = String(format: "QA-BENCH live!=delivered n=5200 identity=%.6fms equal_other_buffer=%.3fms differ_at_end=%.3fms",
-                          identity.0, equalCopy.0, endDiff.0)
+        XCTAssertTrue(buildAndHash.1)
+        let line = String(format: "QA-BENCH live!=delivered n=5200 identity=%.6fms equal_other_buffer=%.3fms differ_at_end=%.3fms flush_build_and_hash=%.3fms",
+                          identity.0, equalCopy.0, endDiff.0, buildAndHash.0)
         print(line)
         XCTContext.runActivity(named: line) { _ in }
     }
