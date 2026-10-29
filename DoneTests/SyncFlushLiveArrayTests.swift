@@ -142,6 +142,11 @@ final class SyncFlushLiveArrayTests: XCTestCase {
         Set(server.requests(.patch, table: serverTable).flatMap(\.keys).map { $0.lowercased() })
     }
 
+    private func liveLines(_ table: String) -> [String] {
+        DiagnosticTrail.combinedText().split(separator: "\n").map(String.init)
+            .filter { $0.contains("sync.flush.live table=\(table) ") }
+    }
+
     private func seq(_ table: String, _ id: String) -> Int64? {
         service.baseline.entry(table: table, id: id)?.seq
     }
@@ -208,6 +213,7 @@ final class SyncFlushLiveArrayTests: XCTestCase {
 
     func testACalendarRowCreatedRemotelyInTheGapIsNotTombstoned_killsCalendarSinkPushesItsCapture() async throws {
         let mine = makeEvent("mine"), theirs = makeEvent("theirs")
+        let linesBefore = liveLines("calendar_events").count
         try await remoteWriteLandsInTheGap(
             localChange: { store.addCalendarEvent(mine) },
             otherDevice: { server.writeDirectly(table: "events", key: theirs.id.uuidString,
@@ -216,6 +222,11 @@ final class SyncFlushLiveArrayTests: XCTestCase {
             settledBy: "calendar_events", mine.id.uuidString)
         assertTheRemoteRowSurvived(serverTable: "events", baselineTable: "calendar_events", id: theirs.id.uuidString,
                                    isLocal: store.rawCalendarEvents.contains { $0.id == theirs.id })
+        // The device-side witness: the flush found the store ahead of what
+        // the debounce delivered, and says so once.
+        XCTAssertEqual(liveLines("calendar_events").count, linesBefore + 1)
+        XCTAssertTrue(liveLines("calendar_events").last?.hasSuffix("delivered=1 live=2") == true,
+                      liveLines("calendar_events").last ?? "no line")
     }
 
     func testATodoCreatedRemotelyInTheGapIsNotTombstoned_killsTodoSinkPushesItsCapture() async throws {
@@ -339,6 +350,7 @@ final class SyncFlushLiveArrayTests: XCTestCase {
 
     func testAPlainLocalTodoDeleteIsTombstonedThroughTheSink_killsLiveReadSkipsDeletes() async throws {
         let doomed = makeTodo("doomed"), kept = makeTodo("kept")
+        let linesBefore = liveLines("events").count
         store.add(doomed)
         store.add(kept)
         try await flushThroughTheSinks(settledBy: "events", doomed.id.uuidString, "the doomed todo")
@@ -351,5 +363,6 @@ final class SyncFlushLiveArrayTests: XCTestCase {
         XCTAssertEqual(tombstonedKeys("events"), [doomed.id.uuidString.lowercased()])
         XCTAssertTrue(server.isTombstoned(table: "events", key: doomed.id.uuidString))
         XCTAssertFalse(server.isTombstoned(table: "events", key: kept.id.uuidString))
+        XCTAssertEqual(liveLines("events").count, linesBefore, "a flush with nothing in the gap writes no trail line")
     }
 }

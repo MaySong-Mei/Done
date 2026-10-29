@@ -1180,48 +1180,57 @@ final class SupabaseSyncService: ObservableObject {
             }
         }
 
+        // The per-table sinks below push the store's array as it is when
+        // the flush task runs, not the value the debounce delivered: a pull
+        // page applied on the main actor between the delivery and the task
+        // has already written the store and the baseline, and the delivered
+        // array, from before the page, would send every row the page created
+        // as a tombstone and every row it edited back at the old value.
+        // `undoHold.onExpire` and `flushPendingTables` read the stores the
+        // same way. See SyncFlushLiveArrayTests.
+
         // ── Todo events ──
         eventStore.$events
             .dropFirst()
-            .syncDebounceSink(for: debounce, on: scheduler) { [weak self] events in
-                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
-                Task { await self.syncEvents(events, kind: "todo") }
+            .syncDebounceSink(for: debounce, on: scheduler) { [weak self, weak eventStore] events in
+                guard let self, let eventStore, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                Task { await self.syncEvents(self.liveForFlush(eventStore.events, delivered: events, table: "events"), kind: "todo") }
             }
             .store(in: &cancellables)
 
         // ── Calendar events ──
         eventStore.$rawCalendarEvents
             .dropFirst()
-            .syncDebounceSink(for: debounce, on: scheduler) { [weak self] events in
-                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
-                Task { await self.syncEvents(events, kind: "calendar") }
+            .syncDebounceSink(for: debounce, on: scheduler) { [weak self, weak eventStore] events in
+                guard let self, let eventStore, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                Task { await self.syncEvents(self.liveForFlush(eventStore.rawCalendarEvents, delivered: events, table: "calendar_events"), kind: "calendar") }
             }
             .store(in: &cancellables)
 
         // ── Event logs ──
         eventStore.$calendarEventLogRecords
             .dropFirst()
-            .syncDebounceSink(for: debounce, on: scheduler) { [weak self] logs in
-                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
-                Task { await self.syncLogs(logs) }
+            .syncDebounceSink(for: debounce, on: scheduler) { [weak self, weak eventStore] logs in
+                guard let self, let eventStore, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                Task { await self.syncLogs(self.liveForFlush(eventStore.calendarEventLogRecords, delivered: logs, table: "event_logs")) }
             }
             .store(in: &cancellables)
 
         // ── Event feedback ──
         eventStore.$calendarEventFeedbackRecords
             .dropFirst()
-            .syncDebounceSink(for: debounce, on: scheduler) { [weak self] records in
-                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
-                Task { await self.syncFeedback(records) }
+            .syncDebounceSink(for: debounce, on: scheduler) { [weak self, weak eventStore] records in
+                guard let self, let eventStore, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                Task { await self.syncFeedback(self.liveForFlush(eventStore.calendarEventFeedbackRecords, delivered: records, table: "event_feedback")) }
             }
             .store(in: &cancellables)
 
         // ── Todo lists ──
         eventStore.$todoLists
             .dropFirst()
-            .syncDebounceSink(for: debounce, on: scheduler) { [weak self] lists in
-                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
-                Task { await self.syncTodoLists(lists) }
+            .syncDebounceSink(for: debounce, on: scheduler) { [weak self, weak eventStore] lists in
+                guard let self, let eventStore, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                Task { await self.syncTodoLists(self.liveForFlush(eventStore.todoLists, delivered: lists, table: "todo_lists")) }
             }
             .store(in: &cancellables)
 
@@ -1229,14 +1238,14 @@ final class SupabaseSyncService: ObservableObject {
         eventTypeStore.$templates
             .dropFirst()
             .syncDebounceSink(for: debounce, on: scheduler) { [weak self, weak eventTypeStore] templates in
-                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, let eventTypeStore, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 // Checked at the sink as well as inside `syncEventTypes`,
                 // because a frozen catalog still PUBLISHES (a refused write
                 // mirrors the catalog's array back, which is a change) and
                 // the cheapest place to stop a mirror is before it starts.
                 guard !Self.eventTypeExportSuppressed(of: eventTypeStore) else { return }
                 Task {
-                    await self.syncEventTypes(templates)
+                    await self.syncEventTypes(self.liveForFlush(eventTypeStore.templates, delivered: templates, table: "event_types"))
                     // The deleted-type color history rides in the settings
                     // blob, and it left `UserDefaults` when the catalog took
                     // it over — so `didChangeNotification`, which used to be
@@ -1253,9 +1262,9 @@ final class SupabaseSyncService: ObservableObject {
         // ── Skill insights ──
         skillStore.$insights
             .dropFirst()
-            .syncDebounceSink(for: debounce, on: scheduler) { [weak self] insights in
-                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
-                Task { await self.syncSkills(insights) }
+            .syncDebounceSink(for: debounce, on: scheduler) { [weak self, weak skillStore] insights in
+                guard let self, let skillStore, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                Task { await self.syncSkills(self.liveForFlush(skillStore.insights, delivered: insights, table: "skill_insights")) }
             }
             .store(in: &cancellables)
 
@@ -1309,6 +1318,19 @@ final class SupabaseSyncService: ObservableObject {
             .store(in: &cancellables)
         // The token-inference state is not synced (`agentPreferencesTokenColumns`),
         // so its saves trigger nothing here.
+    }
+
+    /// What a debounced per-table flush pushes: `live`, the store's array
+    /// read in the flush task's own turn, the same turn its diff runs in.
+    /// `delivered` is only compared, so the trail shows when the store moved
+    /// between the debounce delivering and the flush starting — a pull page
+    /// in that gap is what a flush of `delivered` would have undone.
+    /// Unchanged arrays share storage, so the usual comparison is one check.
+    private func liveForFlush<Element: Equatable>(_ live: [Element], delivered: [Element], table: String) -> [Element] {
+        if live != delivered {
+            DiagnosticTrail.record("Sync", "sync.flush.live table=\(table) delivered=\(delivered.count) live=\(live.count)")
+        }
+        return live
     }
 
     // MARK: - Session scope
