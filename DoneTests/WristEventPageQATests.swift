@@ -387,6 +387,92 @@ final class WristEventPageQATests: XCTestCase {
         XCTAssertLessThan(p.target, Self.at(13, 0))
     }
 
+    // MARK: 3b. Running floor — first quarter mark at least 2 minutes ahead (spec change 10-29)
+
+    /// Independent: the first 15-minute mark at or after now + 2 min.
+    private static func expectedRunningFloor(_ now: Date) -> Date {
+        let t = now.addingTimeInterval(120).timeIntervalSinceReferenceDate
+        return Date(timeIntervalSinceReferenceDate: (t / q).rounded(.up) * q)
+    }
+
+    private func runningLowest(now: Date, start: Date = at(20, 0), end: Date = at(23, 0)) -> Date? {
+        guard let c = config(start, end, running: true, now: now) else { return nil }
+        var crown = WristEndCrown(c)
+        while crown.turn(-1) == .moved {}
+        return crown.target
+    }
+
+    /// The spec's examples and the 2-minute boundary on both sides.
+    func testRunningFloorIsTheFirstMarkTwoMinutesAhead() {
+        XCTAssertEqual(runningLowest(now: Self.at(21, 26)), Self.at(21, 30), "spec: 21:26 → 21:30")
+        XCTAssertEqual(runningLowest(now: Self.at(21, 29)), Self.at(21, 45), "spec: 21:29 → 21:45")
+        XCTAssertEqual(runningLowest(now: Self.at(21, 28)), Self.at(21, 30), "exactly 2 min ahead is allowed")
+        XCTAssertEqual(runningLowest(now: Self.at(21, 28).addingTimeInterval(1)), Self.at(21, 45), "1 s under 2 min is not")
+        XCTAssertEqual(runningLowest(now: Self.at(21, 27).addingTimeInterval(59)), Self.at(21, 30))
+        XCTAssertEqual(runningLowest(now: Self.at(21, 30)), Self.at(21, 45), "on a mark: the mark itself is 0 min ahead")
+        XCTAssertEqual(runningLowest(now: Self.at(21, 13)), Self.at(21, 15))
+        // Positive control: a non-running event still goes down to start + 15.
+        guard let c = config(Self.at(20, 0), Self.at(23, 0), now: Self.at(21, 26)) else { return }
+        var idle = WristEndCrown(c)
+        while idle.turn(-1) == .moved {}
+        XCTAssertEqual(idle.target, Self.at(20, 15))
+    }
+
+    /// Every 10 s over two hours: the lowest stop is the independent floor;
+    /// no stop other than the end it has is under it; the minimum length
+    /// still holds for a session that just started.
+    func testRunningFloorSweep() {
+        var checked = 0
+        for tick in 0..<(2 * 360) {
+            let now = Self.at(20, 0).addingTimeInterval(Double(tick) * 10)
+            let floor = Self.expectedRunningFloor(now)
+            guard let c = config(Self.at(20, 0), Self.at(23, 0), running: true, now: now) else { return }
+            let crown = WristEndCrown(c)
+            let want = max(floor, Self.at(20, 15))
+            XCTAssertEqual(crown.stops.first(where: { $0 != Self.at(23, 0) }), want, "now \(now)")
+            for stop in crown.stops where stop != Self.at(23, 0) {
+                XCTAssertGreaterThanOrEqual(stop.timeIntervalSince(now), 120 - 0.001)
+            }
+            checked += 1
+        }
+        XCTAssertEqual(checked, 720)
+        // Just started at 21:20, now 21:21: the minimum (21:35) is above the
+        // 21:30 mark and ahead of now; the phone keeps it (its snap to 21:30
+        // is lifted back to start + 15).
+        XCTAssertEqual(runningLowest(now: Self.at(21, 21), start: Self.at(21, 20)), Self.at(21, 35))
+        XCTAssertEqual(Self.phoneStores(start: Self.at(21, 20), oldEnd: Self.at(23, 0), requested: Self.at(21, 35), edges: []), Self.at(21, 35))
+        // Off-grid start 21:13, now 21:14: floor mark 21:30 ≥ 21:28 and kept by the phone.
+        XCTAssertEqual(runningLowest(now: Self.at(21, 14), start: Self.at(21, 13)), Self.at(21, 30))
+    }
+
+    /// At send the chosen end is rechecked against the real clock: no longer
+    /// 2 minutes ahead → the next mark that is; still ahead → as chosen.
+    func testRunningSendRechecksTheRealClock() {
+        guard let c = config(Self.at(20, 0), Self.at(23, 0), running: true, now: Self.at(21, 26)) else { return }
+        var crown = WristEndCrown(c)
+        while crown.turn(-1) == .moved {}
+        XCTAssertEqual(crown.target, Self.at(21, 30))
+        var onTime = crown
+        XCTAssertEqual(onTime.takeUnsent(now: Self.at(21, 28))?.end, Self.at(21, 30), "exactly 2 min ahead at send: kept")
+        var late = crown
+        XCTAssertEqual(late.takeUnsent(now: Self.at(21, 28).addingTimeInterval(30))?.end, Self.at(21, 45), "21:30 is 90 s ahead: lifts")
+        var later = crown
+        XCTAssertEqual(later.takeUnsent(now: Self.at(21, 44))?.end, Self.at(22, 0))
+
+        // A lengthening turn of a session about to end, sent late: still never ends it.
+        guard let s = config(Self.at(20, 0), Self.at(21, 30), running: true, now: Self.at(21, 26)) else { return }
+        var ending = WristEndCrown(s)
+        XCTAssertEqual(ending.turn(1), .moved)
+        XCTAssertEqual(ending.target, Self.at(21, 45))
+        let real = Self.at(21, 44)
+        let sent = ending.takeUnsent(now: real)
+        XCTAssertNotNil(sent)
+        if let sent {
+            XCTAssertGreaterThanOrEqual(sent.end.timeIntervalSince(real), 120, "sent \(sent.end) at \(real)")
+            XCTAssertEqual(sent.end, Self.at(22, 0))
+        }
+    }
+
     // MARK: 4. Subject
 
     func testSubjectIsSelectedThenRunningThenNone() {
@@ -426,8 +512,14 @@ final class WristEventPageQATests: XCTestCase {
         }
         func key(of id: String) -> String? { blocks.first { $0.occurrence.id == id }?.motionKey }
         func show(_ session: inout WristEndCrownSession, selected: String?) -> Bool {
+            show(&session, subject: WristEventSubject.resolve(selectedKey: selected, blocks: blocks, running: running))
+        }
+        /// The view's path: the selection is held as (event, range start).
+        func show(_ session: inout WristEndCrownSession, selection: WristEventSubject.Selection?) -> Bool {
+            show(&session, subject: WristEventSubject.resolve(selection: selection, blocks: blocks, running: running))
+        }
+        func show(_ session: inout WristEndCrownSession, subject: WristEventSubject?) -> Bool {
             let b = blocks
-            let subject = WristEventSubject.resolve(selectedKey: selected, blocks: b, running: running)
             let availability = subject.map {
                 WristEndCrown.availability(for: $0, blocks: b, takesRangeEdits: true,
                                            dayStart: WristEventPageQATests.utcStart, dayEnd: WristEventPageQATests.utcEnd, now: now)
@@ -573,6 +665,26 @@ final class WristEventPageQATests: XCTestCase {
             XCTAssertTrue(WristTiming.sameInstant(send.occurrence.start, Self.at(14, 0)),
                           "turn made on 14:00–15:00 sent as \(send.occurrence.start)…→\(send.end): another range of the event")
         }
+    }
+
+    /// The same reorder through the view's path (selection held as event +
+    /// range start): the subject stays the 14:00 range and the turn goes to
+    /// it, as turned.
+    func testMultiRangeReorderMidTurnKeepsTheTurnOnItsRangeThroughTheViewsSelection() {
+        let eventID = UUID()
+        let r1 = Self.occ(eventID, id: "r1", Self.at(10, 0), Self.at(11, 0))
+        let r2 = Self.occ(eventID, id: "r2", Self.at(14, 0), Self.at(15, 0))
+        var day = Day(occurrences: [r1, r2])
+        var session = WristEndCrownSession()
+        let selection = WristEventSubject.Selection(r2)
+        _ = day.show(&session, selection: selection)
+        _ = session.turn(crownDelta: WristEndCrown.crownLater)
+        day.occurrences = [Self.occ(eventID, id: "r0", Self.at(8, 0), Self.at(9, 0)), r1, r2]
+        XCTAssertFalse(day.show(&session, selection: selection), "the turn is not dropped")
+        XCTAssertEqual(session.shownEnd, Self.at(15, 15))
+        let send = session.takeUnsent(now: day.now)
+        XCTAssertEqual(send?.occurrence.start, Self.at(14, 0))
+        XCTAssertEqual(send?.end, Self.at(15, 15))
     }
 
     /// A later turn not yet sent; the phone then moves the end past it
