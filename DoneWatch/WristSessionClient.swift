@@ -504,6 +504,11 @@ final class WristSessionClient: NSObject, ObservableObject {
             occ(15, "Pair X", "Gym", at(20), at(21)),
             occ(16, "Pair Y", "Lunch", at(20.5), at(21.5)),
         ]
+        // `-wristFixtureIdle`: nothing running now, for the event page's
+        // empty state.
+        if ProcessInfo.processInfo.arguments.contains("-wristFixtureIdle") {
+            list.removeAll { $0.title == "Focus" || $0.title == "Music" }
+        }
         if step >= 1 { list.removeAll { $0.title == "Review" } }
         if step >= 3 { list.append(occ(17, "Coffee", "Coffee", at(10), at(10.5))) }
         let types = ["Work", "Meeting", "Read", "Gym"].enumerated().map {
@@ -522,6 +527,9 @@ final class WristSessionClient: NSObject, ObservableObject {
         }
         return WristSnapshot(
             generatedAt: now, types: types, occurrences: list, receipts: [], titleHints: hints,
+            // `-wristTakesEdits`: a phone that takes range edits, so the
+            // event page's crown and Today's drags can be checked.
+            takesRangeEdits: ProcessInfo.processInfo.arguments.contains("-wristTakesEdits"),
             motions: WristMotionSettings(create: .assemble, delete: .dissolve, resize: .standard)
         )
     }
