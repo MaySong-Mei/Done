@@ -3674,6 +3674,19 @@ private extension CalendarPageView {
                         }
                     }
                 }
+            } else {
+                // The scroll can take the band away here, so it stays until
+                // it is out of view with the scroll at rest. A side the drag
+                // left dissolved under the finger comes back solid, or
+                // scrolling to it shows an empty stretch. A side already out
+                // of view closes now, not on the next scroll. (gh#279)
+                withAnimation(.easeOut(duration: 0.2)) {
+                    timelineLeadingFadeProgress = 0
+                    timelineTrailingFadeProgress = 0
+                }
+                DispatchQueue.main.async {
+                    collapseTimelineBoundaryExtensionsIfNeeded(topOverlayInset: lastTimelineTopOverlayInset)
+                }
             }
         }
     }
