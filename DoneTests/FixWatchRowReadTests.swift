@@ -83,8 +83,11 @@ final class FixWatchRowReadTests: XCTestCase {
         makeActiveCenter()
         SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
 
-        _ = FixWatchAttention.needsAttention(location: location)
-        _ = FixWatchAttention.needsAttention(location: location)
+        let statisticsOff = StatisticsOffDefaults.make()
+        let reads = SpikeRunStore.wholeFileReads
+        _ = FixWatchAttention.needsAttention(location: location, defaults: statisticsOff)
+        _ = FixWatchAttention.needsAttention(location: location, defaults: statisticsOff)
+        XCTAssertGreaterThan(SpikeRunStore.wholeFileReads, reads, "positive control: the row read the records")
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: dailyFile.path), "the row wrote a daily line")
         XCTAssertEqual(triggers, [], "the row fired an upload")
