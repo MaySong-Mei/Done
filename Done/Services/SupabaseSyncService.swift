@@ -925,9 +925,13 @@ final class SupabaseSyncService: ObservableObject {
     /// Re-entry guard for `fullSync`. The sign-in path and
     /// `userDidEnableUploads` can both kick off a fullSync; rapid toggle
     /// flipping could otherwise spawn N parallel passes that idempotent-upsert
-    /// the same rows and stretch the `isFullSyncDone == false` window that
-    /// blocks debounced sinks. Set inside the Task, cleared in defer.
+    /// the same rows. Claimed in the caller's turn (`startFullSync`), so two
+    /// starts before the pass's task runs still make one pass.
     private var fullSyncInFlight = false
+    /// The master switch came on while a pass was running: the pass may
+    /// have met the switch off at a table it has since passed, so it runs
+    /// once more when it ends (switch and session permitting).
+    private var fullSyncRerunOwed = false
 
     init(
         url: String = SupabaseSyncConfig.url,
@@ -1015,23 +1019,22 @@ final class SupabaseSyncService: ObservableObject {
     }
 
     /// Called by the settings UI when the user flips the upload toggle from
-    /// OFF → ON. Triggers a fresh fullSync to catch up the cloud with all
-    /// the local changes that accumulated while uploads were paused. If a
-    /// fullSync is already in flight (e.g. rapid OFF→ON→OFF→ON), this is a
-    /// no-op — the in-flight pass already covers the catch-up work.
+    /// OFF → ON. Starts the puller (D9) and a fresh fullSync to catch up the
+    /// cloud with all the local changes that accumulated while uploads were
+    /// paused. With a fullSync already in flight (e.g. rapid OFF→ON→OFF→ON)
+    /// the puller still starts, and the running pass is owed one more run:
+    /// it may have met the switch off at a table it has already passed.
     func userDidEnableUploads() {
-        guard canUpload, !userId.isEmpty, !fullSyncInFlight else { return }
+        guard canUpload, !userId.isEmpty else { return }
         guard let es = attachedEventStore,
               let ets = attachedEventTypeStore,
               let ss = attachedSkillStore else { return }
         inbound?.sessionDidChange(signedIn: true)
-        Task {
-            self.fullSyncInFlight = true
-            defer { self.fullSyncInFlight = false }
-            self.isFullSyncDone = false
-            await self.fullSync(eventStore: es, eventTypeStore: ets, skillStore: ss)
-            self.isFullSyncDone = true
+        if fullSyncInFlight {
+            fullSyncRerunOwed = true
+            return
         }
+        startFullSync(eventStore: es, eventTypeStore: ets, skillStore: ss)
     }
 
     /// Called by the settings UI when the master switch goes ON → OFF.
@@ -1144,15 +1147,8 @@ final class SupabaseSyncService: ObservableObject {
                     // the puller re-hands the doorbell its credentials and
                     // otherwise begins its session.
                     self.inbound?.sessionDidChange(signedIn: true)
-                    if let es = eventStore, let ets = eventTypeStore, let ss = skillStore,
-                       !self.fullSyncInFlight {
-                        Task {
-                            self.fullSyncInFlight = true
-                            defer { self.fullSyncInFlight = false }
-                            self.isFullSyncDone = false
-                            await self.fullSync(eventStore: es, eventTypeStore: ets, skillStore: ss)
-                            self.isFullSyncDone = true
-                        }
+                    if let es = eventStore, let ets = eventTypeStore, let ss = skillStore {
+                        self.startFullSync(eventStore: es, eventTypeStore: ets, skillStore: ss)
                     }
                 } else {
                     // `$session → nil`: the puller stops first (its chain
@@ -1173,7 +1169,7 @@ final class SupabaseSyncService: ObservableObject {
         // An undo window ended (design §10.6 (A)): the tombstone it held
         // goes out now, not with the next edit.
         undoHold.onExpire = { [weak self, weak eventStore] _ in
-            guard let self, let eventStore, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
+            guard let self, let eventStore, self.deliveryMayFlush("events", "calendar_events") else { return }
             Task {
                 await self.syncEvents(eventStore.events, kind: "todo")
                 await self.syncEvents(eventStore.rawCalendarEvents, kind: "calendar")
@@ -1193,7 +1189,7 @@ final class SupabaseSyncService: ObservableObject {
         eventStore.$events
             .dropFirst()
             .syncDebounceSink(for: debounce, on: scheduler) { [weak self, weak eventStore] events in
-                guard let self, let eventStore, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, let eventStore, self.deliveryMayFlush("events") else { return }
                 Task { await self.syncEvents(self.liveForFlush(eventStore.events, delivered: events, table: "events"), kind: "todo") }
             }
             .store(in: &cancellables)
@@ -1202,7 +1198,7 @@ final class SupabaseSyncService: ObservableObject {
         eventStore.$rawCalendarEvents
             .dropFirst()
             .syncDebounceSink(for: debounce, on: scheduler) { [weak self, weak eventStore] events in
-                guard let self, let eventStore, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, let eventStore, self.deliveryMayFlush("calendar_events") else { return }
                 Task { await self.syncEvents(self.liveForFlush(eventStore.rawCalendarEvents, delivered: events, table: "calendar_events"), kind: "calendar") }
             }
             .store(in: &cancellables)
@@ -1211,7 +1207,7 @@ final class SupabaseSyncService: ObservableObject {
         eventStore.$calendarEventLogRecords
             .dropFirst()
             .syncDebounceSink(for: debounce, on: scheduler) { [weak self, weak eventStore] logs in
-                guard let self, let eventStore, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, let eventStore, self.deliveryMayFlush("event_logs") else { return }
                 Task { await self.syncLogs(self.liveForFlush(eventStore.calendarEventLogRecords, delivered: logs, table: "event_logs")) }
             }
             .store(in: &cancellables)
@@ -1220,7 +1216,7 @@ final class SupabaseSyncService: ObservableObject {
         eventStore.$calendarEventFeedbackRecords
             .dropFirst()
             .syncDebounceSink(for: debounce, on: scheduler) { [weak self, weak eventStore] records in
-                guard let self, let eventStore, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, let eventStore, self.deliveryMayFlush("event_feedback") else { return }
                 Task { await self.syncFeedback(self.liveForFlush(eventStore.calendarEventFeedbackRecords, delivered: records, table: "event_feedback")) }
             }
             .store(in: &cancellables)
@@ -1229,7 +1225,7 @@ final class SupabaseSyncService: ObservableObject {
         eventStore.$todoLists
             .dropFirst()
             .syncDebounceSink(for: debounce, on: scheduler) { [weak self, weak eventStore] lists in
-                guard let self, let eventStore, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, let eventStore, self.deliveryMayFlush("todo_lists") else { return }
                 Task { await self.syncTodoLists(self.liveForFlush(eventStore.todoLists, delivered: lists, table: "todo_lists")) }
             }
             .store(in: &cancellables)
@@ -1238,7 +1234,8 @@ final class SupabaseSyncService: ObservableObject {
         eventTypeStore.$templates
             .dropFirst()
             .syncDebounceSink(for: debounce, on: scheduler) { [weak self, weak eventTypeStore] templates in
-                guard let self, let eventTypeStore, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, let eventTypeStore,
+                      self.deliveryMayFlush("event_types", SyncBaselineStore.settingsTable) else { return }
                 // Checked at the sink as well as inside `syncEventTypes`,
                 // because a frozen catalog still PUBLISHES (a refused write
                 // mirrors the catalog's array back, which is a change) and
@@ -1263,7 +1260,7 @@ final class SupabaseSyncService: ObservableObject {
         skillStore.$insights
             .dropFirst()
             .syncDebounceSink(for: debounce, on: scheduler) { [weak self, weak skillStore] insights in
-                guard let self, let skillStore, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, let skillStore, self.deliveryMayFlush("skill_insights") else { return }
                 Task { await self.syncSkills(self.liveForFlush(skillStore.insights, delivered: insights, table: "skill_insights")) }
             }
             .store(in: &cancellables)
@@ -1275,7 +1272,7 @@ final class SupabaseSyncService: ObservableObject {
         NotificationCenter.default
             .publisher(for: UserDefaults.didChangeNotification)
             .syncDebounceSink(for: SupabaseSyncConfig.settingsDebounceSeconds, on: scheduler) { [weak self] _ in
-                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, self.deliveryMayFlush(SyncBaselineStore.settingsTable) else { return }
                 Task { await self.syncSettings() }
             }
             .store(in: &cancellables)
@@ -1293,7 +1290,7 @@ final class SupabaseSyncService: ObservableObject {
         NotificationCenter.default
             .publisher(for: AgentConversationRepository.didChangeNotification)
             .syncDebounceSink(for: debounce, on: scheduler) { [weak self] _ in
-                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, self.deliveryMayFlush("agent_conversations") else { return }
                 Task { await self.syncAgentConversations() }
             }
             .store(in: &cancellables)
@@ -1311,8 +1308,7 @@ final class SupabaseSyncService: ObservableObject {
             .dropFirst()
             .map { _ in () }
             .syncDebounceSink(for: debounce, on: scheduler) { [weak self, weak preferenceStore] _ in
-                guard let self, let preferenceStore,
-                      self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, let preferenceStore, self.deliveryMayFlush("agent_preferences") else { return }
                 Task { await self.syncAgentPreferences(preferenceStore) }
             }
             .store(in: &cancellables)
@@ -1331,6 +1327,21 @@ final class SupabaseSyncService: ObservableObject {
             DiagnosticTrail.record("Sync", "sync.flush.live table=\(table) delivered=\(delivered.count) live=\(live.count)")
         }
         return live
+    }
+
+    /// A debounced delivery's gate, read when it fires: the switch and the
+    /// session. Before this session's full sync has finished, the delivery
+    /// is owed to it — its tables are flagged and go out when the pass ends
+    /// (`startFullSync`) — rather than dropped: a pass reads each table once,
+    /// so an edit to one it has already passed would otherwise wait for the
+    /// next edit or launch.
+    private func deliveryMayFlush(_ tables: String...) -> Bool {
+        guard canUpload, !userId.isEmpty else { return false }
+        guard isFullSyncDone else {
+            needsFlush.formUnion(tables)
+            return false
+        }
+        return true
     }
 
     // MARK: - Session scope
@@ -1730,9 +1741,12 @@ final class SupabaseSyncService: ObservableObject {
 
     /// The flush each chain that reaches head owes the flagged tables
     /// (design §6 每表单飞 flush (3)): the per-table sync over the attached
-    /// stores' live arrays. Nothing is sent while the master switch is off.
+    /// stores' live arrays. Nothing is sent while the master switch is off,
+    /// and nothing while a full sync runs: a table it has in flight would be
+    /// sent twice, and the pass flushes the flags when it ends.
     func flushPendingTables() async {
         guard gatewayIsInjected || canUpload else { return }
+        guard !fullSyncInFlight else { return }
         let tables = needsFlush
         needsFlush = []
         guard !tables.isEmpty else { return }
@@ -2146,6 +2160,43 @@ final class SupabaseSyncService: ObservableObject {
 
     // MARK: - Full sync (on launch)
 
+    /// The one way a full sync starts: the session sink and the master
+    /// switch turned on (`userDidEnableUploads`). Single flight, claimed in
+    /// the caller's turn. While the pass runs, a debounced delivery owes its
+    /// table a flush (`deliveryMayFlush`) and the chain at head leaves owed
+    /// tables to it (`flushPendingTables`); when it ends — after the rerun a
+    /// switch turned on meanwhile asked for — it sends them, I1 permitting,
+    /// and otherwise the chain that reaches head does.
+    private func startFullSync(
+        eventStore: EventStore,
+        eventTypeStore: EventTypeTemplateStore,
+        skillStore: SkillInsightStore
+    ) {
+        guard !fullSyncInFlight else { return }
+        fullSyncInFlight = true
+        fullSyncRerunOwed = false
+        isFullSyncDone = false
+        Task {
+            repeat {
+                self.fullSyncRerunOwed = false
+                await self.fullSync(eventStore: eventStore, eventTypeStore: eventTypeStore, skillStore: skillStore)
+            } while self.fullSyncRerunOwed && self.fullSyncMayContinue
+            self.fullSyncRerunOwed = false
+            self.isFullSyncDone = true
+            self.fullSyncInFlight = false
+            if self.inboundAtHead, !self.serverPaused {
+                await self.flushPendingTables()
+            }
+        }
+    }
+
+    /// Whether a running pass goes on to its next table: the switch is on
+    /// and the session stands. Turned off, the pass stops at the next
+    /// table rather than run on with every table refused.
+    private var fullSyncMayContinue: Bool {
+        !userId.isEmpty && uploadsSwitchOn
+    }
+
     private func fullSync(
         eventStore: EventStore,
         eventTypeStore: EventTypeTemplateStore,
@@ -2154,18 +2205,29 @@ final class SupabaseSyncService: ObservableObject {
         logger.info("Full sync starting…")
         statusReporter?.structuredBeginBurst()
         defer { statusReporter?.structuredEndBurst() }
-        await syncEvents(eventStore.events, kind: "todo")
-        await syncEvents(eventStore.rawCalendarEvents, kind: "calendar")
-        await syncLogs(eventStore.calendarEventLogRecords)
-        await syncFeedback(eventStore.calendarEventFeedbackRecords)
-        await syncTodoLists(eventStore.todoLists)
-        await syncEventTypes(eventTypeStore.templates)
-        await syncSkills(skillStore.insights)
-        await syncSettings()
-        if let preferenceStore = attachedPreferenceStore {
-            await syncAgentPreferences(preferenceStore)
+        let tables: [@MainActor () async -> Void] = [
+            { await self.syncEvents(eventStore.events, kind: "todo") },
+            { await self.syncEvents(eventStore.rawCalendarEvents, kind: "calendar") },
+            { await self.syncLogs(eventStore.calendarEventLogRecords) },
+            { await self.syncFeedback(eventStore.calendarEventFeedbackRecords) },
+            { await self.syncTodoLists(eventStore.todoLists) },
+            { await self.syncEventTypes(eventTypeStore.templates) },
+            { await self.syncSkills(skillStore.insights) },
+            { await self.syncSettings() },
+            {
+                if let preferenceStore = self.attachedPreferenceStore {
+                    await self.syncAgentPreferences(preferenceStore)
+                }
+            },
+            { await self.syncAgentConversations() },
+        ]
+        for table in tables {
+            guard fullSyncMayContinue else {
+                logger.notice("Full sync stopped: uploads off or signed out")
+                return
+            }
+            await table()
         }
-        await syncAgentConversations()
         logger.info("Full sync complete")
     }
 
@@ -2238,10 +2300,7 @@ final class SupabaseSyncService: ObservableObject {
     /// table (`userDidEnableUploads`).
     private func flushGate(_ table: String) -> Bool {
         guard !userId.isEmpty else { return false }
-        // An injected gateway is a fake server, never production: the build
-        // block does not apply to it, the switch does.
-        let uploadsOn = gatewayIsInjected ? defaults.bool(forKey: AppSettingsKeys.syncUploadsEnabled) : canUpload
-        guard uploadsOn else {
+        guard uploadsSwitchOn else {
             logger.notice("\(table, privacy: .public): flush held — uploads off (D9)")
             return false
         }
@@ -2260,6 +2319,13 @@ final class SupabaseSyncService: ObservableObject {
             return false
         }
         return true
+    }
+
+    /// The master switch as a flush reads it. An injected gateway is a fake
+    /// server, never production: the build block does not apply to it, the
+    /// switch does.
+    private var uploadsSwitchOn: Bool {
+        gatewayIsInjected ? defaults.bool(forKey: AppSettingsKeys.syncUploadsEnabled) : canUpload
     }
 
     /// Rows that failed (not refused) are owed to the next chain that
