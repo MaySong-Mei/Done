@@ -369,6 +369,8 @@
 		SRST10012FE8000000000412 /* SyncRestoreStaleSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRST00012FE8000000000412 /* SyncRestoreStaleSnapshotTests.swift */; };
 		RKLD10012FE8000000000501 /* SyncRestoreKeepLocalDeletesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RKLD00012FE8000000000501 /* SyncRestoreKeepLocalDeletesTests.swift */; };
 		RKLD10012FE8000000000502 /* SyncRestoreKeepLocalDeletesPreviewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RKLD00012FE8000000000502 /* SyncRestoreKeepLocalDeletesPreviewTests.swift */; };
+		QRKD10012FE8000000000511 /* SyncRestoreKeepLocalDeletesQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QRKD00012FE8000000000511 /* SyncRestoreKeepLocalDeletesQATests.swift */; };
+		QRKD10012FE8000000000512 /* SyncRestoreKeepLocalDeletesPreviewQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QRKD00012FE8000000000512 /* SyncRestoreKeepLocalDeletesPreviewQATests.swift */; };
 		QRSQ10012FE8000000000311 /* SyncRestoreAndSwitchQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QRSQ00012FE8000000000311 /* SyncRestoreAndSwitchQATests.swift */; };
 		QRST10012FE8000000000411 /* SyncRestoreStaleSnapshotQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QRST00012FE8000000000411 /* SyncRestoreStaleSnapshotQATests.swift */; };
 		QRST10012FE8000000000412 /* SyncRestoreStaleSnapshotFixQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QRST00012FE8000000000412 /* SyncRestoreStaleSnapshotFixQATests.swift */; };
@@ -853,6 +855,8 @@
 		SRST00012FE8000000000412 /* SyncRestoreStaleSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRestoreStaleSnapshotTests.swift; sourceTree = "<group>"; };
 		RKLD00012FE8000000000501 /* SyncRestoreKeepLocalDeletesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRestoreKeepLocalDeletesTests.swift; sourceTree = "<group>"; };
 		RKLD00012FE8000000000502 /* SyncRestoreKeepLocalDeletesPreviewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRestoreKeepLocalDeletesPreviewTests.swift; sourceTree = "<group>"; };
+		QRKD00012FE8000000000511 /* SyncRestoreKeepLocalDeletesQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRestoreKeepLocalDeletesQATests.swift; sourceTree = "<group>"; };
+		QRKD00012FE8000000000512 /* SyncRestoreKeepLocalDeletesPreviewQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRestoreKeepLocalDeletesPreviewQATests.swift; sourceTree = "<group>"; };
 		QRSQ00012FE8000000000311 /* SyncRestoreAndSwitchQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRestoreAndSwitchQATests.swift; sourceTree = "<group>"; };
 		QRST00012FE8000000000411 /* SyncRestoreStaleSnapshotQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRestoreStaleSnapshotQATests.swift; sourceTree = "<group>"; };
 		QRST00012FE8000000000412 /* SyncRestoreStaleSnapshotFixQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRestoreStaleSnapshotFixQATests.swift; sourceTree = "<group>"; };
@@ -1141,6 +1145,8 @@
 				SRST00012FE8000000000412 /* SyncRestoreStaleSnapshotTests.swift */,
 				RKLD00012FE8000000000501 /* SyncRestoreKeepLocalDeletesTests.swift */,
 				RKLD00012FE8000000000502 /* SyncRestoreKeepLocalDeletesPreviewTests.swift */,
+				QRKD00012FE8000000000511 /* SyncRestoreKeepLocalDeletesQATests.swift */,
+				QRKD00012FE8000000000512 /* SyncRestoreKeepLocalDeletesPreviewQATests.swift */,
 				QRSQ00012FE8000000000311 /* SyncRestoreAndSwitchQATests.swift */,
 				QRST00012FE8000000000411 /* SyncRestoreStaleSnapshotQATests.swift */,
 				QRST00012FE8000000000412 /* SyncRestoreStaleSnapshotFixQATests.swift */,
@@ -1932,6 +1938,8 @@
 				SRST10012FE8000000000412 /* SyncRestoreStaleSnapshotTests.swift in Sources */,
 				RKLD10012FE8000000000501 /* SyncRestoreKeepLocalDeletesTests.swift in Sources */,
 				RKLD10012FE8000000000502 /* SyncRestoreKeepLocalDeletesPreviewTests.swift in Sources */,
+				QRKD10012FE8000000000511 /* SyncRestoreKeepLocalDeletesQATests.swift in Sources */,
+				QRKD10012FE8000000000512 /* SyncRestoreKeepLocalDeletesPreviewQATests.swift in Sources */,
 				QRSQ10012FE8000000000311 /* SyncRestoreAndSwitchQATests.swift in Sources */,
 				QRST10012FE8000000000411 /* SyncRestoreStaleSnapshotQATests.swift in Sources */,
 				QRST10012FE8000000000412 /* SyncRestoreStaleSnapshotFixQATests.swift in Sources */,
