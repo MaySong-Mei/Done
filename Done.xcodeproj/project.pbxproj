@@ -368,6 +368,7 @@
 		SRSW10012FE8000000000301 /* SyncRestoreAndSwitchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRSW00012FE8000000000301 /* SyncRestoreAndSwitchTests.swift */; };
 		SRST10012FE8000000000412 /* SyncRestoreStaleSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRST00012FE8000000000412 /* SyncRestoreStaleSnapshotTests.swift */; };
 		QRSQ10012FE8000000000311 /* SyncRestoreAndSwitchQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QRSQ00012FE8000000000311 /* SyncRestoreAndSwitchQATests.swift */; };
+		QRST10012FE8000000000411 /* SyncRestoreStaleSnapshotQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QRST00012FE8000000000411 /* SyncRestoreStaleSnapshotQATests.swift */; };
 		SAGT10012FE8000000000264 /* SyncAccountGoneTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SAGT00012FE8000000000264 /* SyncAccountGoneTests.swift */; };
 		SDRT10012FE8000000000262 /* SyncDecisionReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SDRT00012FE8000000000262 /* SyncDecisionReplayTests.swift */; };
 		SSMT10012FE8000000000262 /* SyncSettingsMergeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSMT00012FE8000000000262 /* SyncSettingsMergeTests.swift */; };
@@ -848,6 +849,7 @@
 		SRSW00012FE8000000000301 /* SyncRestoreAndSwitchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRestoreAndSwitchTests.swift; sourceTree = "<group>"; };
 		SRST00012FE8000000000412 /* SyncRestoreStaleSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRestoreStaleSnapshotTests.swift; sourceTree = "<group>"; };
 		QRSQ00012FE8000000000311 /* SyncRestoreAndSwitchQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRestoreAndSwitchQATests.swift; sourceTree = "<group>"; };
+		QRST00012FE8000000000411 /* SyncRestoreStaleSnapshotQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRestoreStaleSnapshotQATests.swift; sourceTree = "<group>"; };
 		SAGT00012FE8000000000264 /* SyncAccountGoneTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncAccountGoneTests.swift; sourceTree = "<group>"; };
 		SDRT00012FE8000000000262 /* SyncDecisionReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncDecisionReplayTests.swift; sourceTree = "<group>"; };
 		SSMT00012FE8000000000262 /* SyncSettingsMergeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSettingsMergeTests.swift; sourceTree = "<group>"; };
@@ -1132,6 +1134,7 @@
 				SRSW00012FE8000000000301 /* SyncRestoreAndSwitchTests.swift */,
 				SRST00012FE8000000000412 /* SyncRestoreStaleSnapshotTests.swift */,
 				QRSQ00012FE8000000000311 /* SyncRestoreAndSwitchQATests.swift */,
+				QRST00012FE8000000000411 /* SyncRestoreStaleSnapshotQATests.swift */,
 				SAGT00012FE8000000000264 /* SyncAccountGoneTests.swift */,
 				SDRT00012FE8000000000262 /* SyncDecisionReplayTests.swift */,
 				SSMT00012FE8000000000262 /* SyncSettingsMergeTests.swift */,
@@ -1919,6 +1922,7 @@
 				SRSW10012FE8000000000301 /* SyncRestoreAndSwitchTests.swift in Sources */,
 				SRST10012FE8000000000412 /* SyncRestoreStaleSnapshotTests.swift in Sources */,
 				QRSQ10012FE8000000000311 /* SyncRestoreAndSwitchQATests.swift in Sources */,
+				QRST10012FE8000000000411 /* SyncRestoreStaleSnapshotQATests.swift in Sources */,
 				SAGT10012FE8000000000264 /* SyncAccountGoneTests.swift in Sources */,
 				SDRT10012FE8000000000262 /* SyncDecisionReplayTests.swift in Sources */,
 				SSMT10012FE8000000000262 /* SyncSettingsMergeTests.swift in Sources */,
