@@ -14,7 +14,10 @@
 //     flush against a puller that has not reached head, an erase in the
 //     middle of a pass, and every way a pass can end leaving the next one
 //     startable (the in-flight flag never sticks).
-//  4. Sign-out and sign-in of the same account during a pass.
+//  4. The session changing during a pass: the same account signing out
+//     and back in, another account signing in (blocked, or A → B → A),
+//     the switch and a sign-in together, and a token refresh (round 2,
+//     1972163d).
 //  5. The pass stopping at a table boundary once the switch is off (the
 //     implementer's surviving mutant): nothing is built for a table after.
 //  6. Main-thread cost of the restore replay at a production data size.
@@ -455,15 +458,14 @@ final class SyncSwitchFullSyncQATests: SyncRestoreAndSwitchQATestCase {
     }
 
     /// Sign-out and sign-in of the same account while a pass is in flight.
-    /// A delivery while signed out is dropped (no session); the sign-in's
-    /// session sink asks for a full sync, which is refused because the old
-    /// pass is still running, and nothing owes it a rerun. The old pass
-    /// already passed the calendar table, so the edit made while signed
-    /// out is sent by nothing until its table is next edited or the app
-    /// next launches. Same shape as bug 2's third symptom, through the
-    /// session instead of the switch; pre-existing (ad877111 alike).
+    /// A delivery while signed out is dropped (no session to owe it to), and
+    /// the pass had already read the calendar table, so only a rerun sends
+    /// the edit made while signed out: the session the sign-in begins owes
+    /// one (`beginSession`), and the sign-in's own full sync is refused while
+    /// the pass runs. (Up to 90141d28 nothing owed that rerun and the edit
+    /// waited for its table's next edit or the next launch; fixed in
+    /// 1972163d.)
     func testQA_S5_anEditMadeWhileSignedOutDuringAPassIsSentAfterTheSameAccountSignsBackIn() async throws {
-        XCTExpectFailure("pre-existing: the session sink's full sync is refused while a pass runs and owes no rerun", strict: true)
         try await parkARefreshPass()
         device.auth.signOut()
         let signedOut = makeEvent("made while signed out")
@@ -474,9 +476,7 @@ final class SyncSwitchFullSyncQATests: SyncRestoreAndSwitchQATestCase {
                                                                 syncEnvironment: .local), "fixture: signed in again")
         try await releaseEverything()
         try await syncEventually("the puller reached head after the sign-in") { self.puller.active && self.service.inboundAtHead }
-        // Given time: what fails is the edit never going, not a slow send.
-        try? await syncEventually("the edit made while signed out reached the cloud", timeout: 1) { self.onServer(signedOut) != nil }
-        XCTAssertNotNil(onServer(signedOut), "an edit made while signed out during a pass never left the device")
+        try await syncEventually("the edit made while signed out reached the cloud") { self.onServer(signedOut) != nil }
     }
 
     /// The surviving mutant (the pass ignores the switch at table
@@ -545,11 +545,11 @@ final class SyncSwitchFullSyncQATests: SyncRestoreAndSwitchQATestCase {
     }
 
     /// A token refresh while the switch is off during a pass runs the
-    /// session sink's `!canUpload` branch, which marks this session's full
-    /// sync done although the pass still runs. With the switch back on, a
-    /// delivery to the row the pass has in flight goes straight to its own
-    /// flush beside the pass's send of that row, instead of being owed to
-    /// the pass. The edit must still end on the server, and nothing may be
+    /// session sink's `!canUpload` branch. With the switch back on, a
+    /// delivery to the row the pass has in flight is owed to the pass, not
+    /// sent beside the pass's own POST of it (up to 90141d28 that branch
+    /// marked the full sync done while the pass ran, and the row was POSTed
+    /// twice; fixed in 1972163d). The edit ends on the server, nothing is
     /// shelved or lost for it.
     func testQA_S8_aRefreshWithTheSwitchOffDuringAPass_thenAnEditToTheRowInFlight_stillLands() async throws {
         let inFlight = makeEvent("in flight", note: "v1")
@@ -566,8 +566,9 @@ final class SyncSwitchFullSyncQATests: SyncRestoreAndSwitchQATestCase {
         store.updateCalendarEvent(edited)
         scheduler.advance(by: debounce)
         try await settle()
-        // The delivery goes out beside the parked POST of the same row
-        // (not owed to the pass); what is held is the outcome below.
+        XCTAssertTrue(service.needsFlush.contains("calendar_events"), "the delivery was not owed to the running pass")
+        XCTAssertEqual(server.requests(.insert, table: "events").filter { names($0, inFlight.id) }.count, 1,
+                       "the delivery sent the row beside the pass")
 
         try await releaseEverything()
         try await syncEventually("the edit reached the cloud") { self.onServer(inFlight)?["note"] as? String == "v2" }
@@ -579,6 +580,171 @@ final class SyncSwitchFullSyncQATests: SyncRestoreAndSwitchQATestCase {
     private func sessionJSON() -> String {
         let expiresAt = Date().addingTimeInterval(3600).timeIntervalSince1970
         return #"{"access_token":"at-again","refresh_token":"r-again","user_id":"\#(uid)","email":"switch@example.com","expires_at":\#(expiresAt)}"#
+    }
+}
+
+// MARK: - 2b. The session changing during a full sync (round 2, 1972163d)
+
+@MainActor
+final class SyncSessionDuringFullSyncQATests: SyncRestoreAndSwitchQATestCase {
+    private let uidB = "66666666-7777-4888-8999-aaaaaaaaaaaa"
+
+    private func trailLines(_ text: String) -> Int {
+        DiagnosticTrail.combinedText().split(separator: "\n").filter { $0.contains(text) }.count
+    }
+
+    /// A phone whose one gateway points at whichever account's cloud is
+    /// signed in, switch on, puller at head as A.
+    private func twoAccountPhone() async -> (phone: SyncSwitchTestDevice, cloudA: SyncFakeServer, cloudB: SyncFakeServer, router: SyncAccountRouter) {
+        let cloudA = SyncFakeServer(userId: uid), cloudB = SyncFakeServer(userId: uidB)
+        let router = SyncAccountRouter(cloudA)
+        let phone = SyncSwitchTestDevice(server: cloudA, gateway: router, uid: uid, start: Self.t0, switchOnAtAttach: false)
+        phone.defaults.set(true, forKey: AppSettingsKeys.syncUploadsEnabled)
+        phone.puller.beginSession(autoPull: false)
+        await phone.puller.pullToHead()
+        return (phone, cloudA, cloudB, router)
+    }
+
+    private func writes(_ server: SyncFakeServer) -> [SyncFakeServer.Request] {
+        server.requests.filter { Self.writeVerbs.contains($0.verb) }
+    }
+
+    /// Another account signs in while A's pass is parked on its calendar
+    /// POST, and A's unsent data blocks it (no switch). A's pass stops at its
+    /// next table instead of reading A's lists, skills and settings for B;
+    /// the rerun the new session is owed runs for B and every table is
+    /// refused by the owner guard: B's cloud is never written, and A's cloud
+    /// gets nothing after the switch beyond the request already parked.
+    func testQA_T1_anotherAccountBlockedByAsDataSignsInDuringAsPass_nothingReachesEitherCloud() async throws {
+        let (phone, cloudA, cloudB, router) = await twoAccountPhone()
+        defer {
+            cloudA.holdWhen = nil
+            cloudA.releaseAll()
+            phone.tearDown()
+        }
+        let rowA = makeEvent("A's calendar row")
+        phone.store.addCalendarEvent(rowA)
+        phone.store.addList(TodoList(title: "A's list", colorName: "green", createdAt: Self.t0))
+        phone.skills.add(makeSkill("A's skill"))
+        cloudA.holdWhen = { verb, table in verb == .insert && table == "events" }
+        phone.service.userDidEnableUploads()
+        try await syncEventually("A's pass is parked on its calendar POST") { cloudA.heldCount == 1 }
+        DiagnosticTrail.clear()
+        let requestsToA = cloudA.requests.count
+
+        phone.auth.signOut()
+        router.current = cloudB
+        XCTAssertTrue(phone.signIn(uidB), "fixture: B signed in")
+        guard case .blocked = phone.service.ownerState else {
+            return XCTFail("fixture: A's unsent rows block B, got \(phone.service.ownerState)")
+        }
+        let madeUnderB = makeEvent("made in B's session")
+        phone.store.addCalendarEvent(madeUnderB)
+        phone.scheduler.advance(by: debounce)
+        cloudA.holdWhen = nil
+        cloudA.releaseAll()
+        try await syncEventually("A's pass stopped for the account change") {
+            self.trailLines("sync.fullsync.stopped reason=account_changed") == 1
+        }
+        try await settle()
+        try await settle()
+
+        XCTAssertEqual(writes(cloudB).map { "\($0.verb) \($0.table)" }, [], "B's cloud was written while A's data blocks it")
+        XCTAssertEqual(cloudA.requests.count, requestsToA, "A's cloud was written after the switch")
+        XCTAssertNil(cloudA.row(table: "todo_lists", key: phone.store.todoLists.first?.id.uuidString ?? "-"),
+                     "A's pass read on into its lists after the switch")
+    }
+
+    /// A → B → A while A's pass is parked: signed out, an edit made (its
+    /// delivery fires with no session), B signs in (blocked), signs out, A
+    /// signs back in. A's pass reads on for A, the rerun the sign-ins owed
+    /// sends the edit to A's cloud, B's cloud is never written, and the
+    /// engine leaves the pass: a later delivery is not owed to one.
+    func testQA_T2_aToBToAWhileAsPassIsParked_theSignedOutEditReachesA_bIsNeverWritten_thePassEnds() async throws {
+        let (phone, cloudA, cloudB, router) = await twoAccountPhone()
+        defer {
+            cloudA.holdWhen = nil
+            cloudA.releaseAll()
+            phone.tearDown()
+        }
+        phone.skills.add(makeSkill("parks A's pass"))
+        cloudA.holdWhen = { verb, table in verb == .insert && table == "skill_insights" }
+        phone.service.userDidEnableUploads()
+        try await syncEventually("A's pass is parked on skills") { cloudA.heldCount == 1 }
+
+        phone.auth.signOut()
+        let signedOut = makeEvent("made while signed out")
+        phone.store.addCalendarEvent(signedOut)
+        phone.scheduler.advance(by: debounce)
+        try await settle()
+        XCTAssertTrue(phone.service.needsFlush.isEmpty, "positive control: nothing owes the edit")
+        router.current = cloudB
+        XCTAssertTrue(phone.signIn(uidB), "fixture: B signed in")
+        phone.auth.signOut()
+        router.current = cloudA
+        XCTAssertTrue(phone.signIn(uid), "fixture: A signed in again")
+        XCTAssertEqual(phone.service.ownerState, .active(uid: uid))
+
+        cloudA.holdWhen = nil
+        cloudA.releaseAll()
+        try await syncEventually("the edit made while signed out reached A's cloud") {
+            cloudA.row(table: "events", key: signedOut.id.uuidString) != nil
+        }
+        try await settle()
+        XCTAssertEqual(writes(cloudB).map { "\($0.verb) \($0.table)" }, [], "B's cloud was written")
+        XCTAssertEqual(Set(writes(cloudA).compactMap { ($0.body as? [[String: Any]])?.first?["user_id"] as? String }), [uid])
+
+        let later = makeEvent("after it all")
+        phone.store.addCalendarEvent(later)
+        phone.scheduler.advance(by: debounce)
+        XCTAssertFalse(phone.service.needsFlush.contains("calendar_events"), "a delivery after the rerun was owed to a pass that never ended")
+        try await syncEventually("the later edit reached A's cloud") { cloudA.row(table: "events", key: later.id.uuidString) != nil }
+    }
+
+    /// The switch and the session together: the switch off, signed out, an
+    /// edit, then an interactive sign-in (which turns the switch on without
+    /// `userDidEnableUploads`), all while a pass is parked. The puller runs
+    /// again and the edit is sent.
+    func testQA_T3_switchOffThenSignOutThenAnInteractiveSignInDuringAPass_thePullerRuns_andTheEditIsSent() async throws {
+        device.skills.add(makeSkill("parks the pass"))
+        try await parkAPass(on: { verb, table in verb == .insert && table == "skill_insights" },
+                            startedBy: { await self.device.auth.forceRefreshToken() })
+        switchOff()
+        device.auth.signOut()
+        let edit = makeEvent("made with the switch off, signed out")
+        store.addCalendarEvent(edit)
+        scheduler.advance(by: debounce)
+        try await settle()
+        XCTAssertTrue(device.signIn(uid), "fixture: signed in")
+        XCTAssertTrue(service.canUpload, "fixture: an interactive sign-in turns the switch on")
+        XCTAssertTrue(puller.active, "signed in with the switch on and nothing pulls")
+        try await releaseEverything()
+        try await syncEventually("the edit reached the cloud") { self.onServer(edit) != nil }
+    }
+
+    /// A token refresh during a pass owes no second pass, and loses nothing:
+    /// an edit delivered during the pass to a table it has passed is sent
+    /// once, when the pass ends.
+    func testQA_T4_aRefreshDuringAPassOwesNoRerun_butAnEditDeliveredMeanwhileIsSentOnce() async throws {
+        let displaced = FollowerTiming.recorder
+        let recorder = FollowerTimingRecorder()
+        FollowerTiming.recorder = recorder
+        defer { FollowerTiming.recorder = displaced }
+        device.skills.add(makeSkill("parks the pass"))
+        try await parkAPass(on: { verb, table in verb == .insert && table == "skill_insights" },
+                            startedBy: { self.service.userDidEnableUploads() })
+        XCTAssertEqual(recorder.dailySnapshot()[.syncLogsBuild].count, 1, "fixture: the pass read the logs table once")
+        await device.auth.forceRefreshToken()
+        let edit = makeEvent("delivered during the pass")
+        store.addCalendarEvent(edit)
+        scheduler.advance(by: debounce)
+        try await settle()
+        XCTAssertTrue(service.needsFlush.contains("calendar_events"), "fixture: the delivery is owed to the pass")
+        try await releaseEverything()
+        try await syncEventually("the edit reached the cloud") { self.onServer(edit) != nil }
+        try await settle()
+        XCTAssertEqual(server.requests(.insert, table: "events").filter { names($0, edit.id) }.count, 1)
+        XCTAssertEqual(recorder.dailySnapshot()[.syncLogsBuild].count, 1, "the refresh ran a second pass")
     }
 }
 
