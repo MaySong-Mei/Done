@@ -41,6 +41,26 @@ struct WristStrings {
     var endLater: String { isChinese ? "结束 +15" : "End +15" }
     var close: String { isChinese ? "关闭" : "Close" }
 
+    // MARK: Event page
+
+    /// The event page with nothing selected and nothing running.
+    var eventPageEmpty: String { isChinese ? "在今天页点一个事件" : "Tap an event on Today" }
+    /// An open-ended session (a phone timer) has no end to show.
+    var running: String { isChinese ? "进行中" : "Running" }
+    /// "10:30": one time of day.
+    func clock(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
+    }
+    /// Under the end: how long the event is, and where it starts —
+    /// "3h30m from 10:00" / "10:00 起 · 3小时30分".
+    func durationFrom(_ start: Date, _ end: Date) -> String {
+        let length = compactDuration(hours: max(0, end.timeIntervalSince(start)) / 3600)
+        return isChinese ? "\(clock(start)) 起 · \(length)" : "\(length) from \(clock(start))"
+    }
+
     /// "10:15–11:00": a drawn block's range, on the block and over the
     /// type picker.
     func timeRange(_ start: Date, _ end: Date) -> String {

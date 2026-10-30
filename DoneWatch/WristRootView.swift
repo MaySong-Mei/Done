@@ -2,9 +2,11 @@
 //  WristRootView.swift
 //  DoneWatch
 //
-//  Three pages, swiped left and right: Today (the day's timeline, the
-//  default page), Stats (time by category over a period) and Settings.
-//  The minute schedule re-resolves every page at event boundaries.
+//  Four pages, swiped left and right: the event page (one event, its end
+//  on the crown), Today (the day's timeline, the default page), Stats
+//  (time by category over a period) and Settings. The block selected on
+//  Today is the event page's subject. The minute schedule re-resolves
+//  every page at event boundaries.
 //
 
 import Combine
@@ -14,6 +16,9 @@ import WatchKit
 struct WristRootView: View {
     @EnvironmentObject private var client: WristSessionClient
     @State private var page = WristPage.initial
+    /// The block selected on Today, by motion key: shared with the event
+    /// page, whose subject it is.
+    @State private var selectedKey: String? = WristPage.initialSelection
     @AppStorage(WristLocalSettings.zoomKey) private var zoomRaw = WristLocalSettings.Zoom.standard.rawValue
     /// Empty until a period is picked on the watch: the phone's applies.
     @AppStorage(WristLocalSettings.statsPeriodKey) private var periodRaw = ""
@@ -26,6 +31,10 @@ struct WristRootView: View {
             let stats = client.snapshot?.stats?.markingLeftOut(settings)
             let running = runningSession(now: context.date)
             TabView(selection: $page) {
+                NavigationStack {
+                    eventPage(now: context.date, strings: strings, running: running)
+                }
+                .tag(WristPage.event)
                 NavigationStack {
                     today(now: context.date, strings: strings, stats: stats, running: running)
                 }
@@ -67,6 +76,46 @@ struct WristRootView: View {
         return nil
     }
 
+    /// Today's blocks as the day lays them out, for the event page's subject
+    /// and its neighbours' edges.
+    private func dayBlocks(_ snapshot: WristSnapshot, now: Date, currentID: String?) -> (blocks: [WristDayBlock], pendingIDs: Set<UUID>, dayStart: Date, dayEnd: Date) {
+        let calendar = Calendar.current
+        let dayStart = calendar.startOfDay(for: now)
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart.addingTimeInterval(86_400)
+        let (timeline, pendingIDs) = WristStateReducer.overlaid(snapshot, pending: client.pending, now: now)
+        let blocks = WristDayLayout.blocks(
+            timeline, dismissed: client.dismissed, dayStart: dayStart, dayEnd: dayEnd, now: now, currentID: currentID
+        )
+        return (blocks, pendingIDs, dayStart, dayEnd)
+    }
+
+    @ViewBuilder
+    private func eventPage(
+        now: Date, strings: WristStrings, running: (occurrence: WristOccurrence, pending: Bool)?
+    ) -> some View {
+        if let snapshot = client.snapshot {
+            let day = dayBlocks(snapshot, now: now, currentID: running?.occurrence.id)
+            let subject = WristEventSubject.resolve(selectedKey: selectedKey, blocks: day.blocks, running: running?.occurrence)
+            WristEventPage(
+                subject: subject,
+                availability: subject.map {
+                    WristEndCrown.availability(
+                        for: $0, blocks: day.blocks, takesRangeEdits: snapshot.takesRangeEdits,
+                        dayStart: day.dayStart, dayEnd: day.dayEnd, now: now
+                    )
+                },
+                pendingEventIDs: day.pendingIDs,
+                page: $page,
+                now: now, strings: strings,
+                onSend: { client.editRange($0.occurrence, start: $0.start, end: $0.end) },
+                onExtend: { client.extend($0) },
+                onFinish: { client.finish($0) }
+            )
+        } else {
+            WristEmptyView(strings: strings)
+        }
+    }
+
     @ViewBuilder
     private func today(
         now: Date, strings: WristStrings, stats: CategoryStatsPayload?,
@@ -82,14 +131,14 @@ struct WristRootView: View {
                 hourHeight: CGFloat(WristLocalSettings.Zoom(stored: zoomRaw).hourHeight),
                 takesRangeEdits: snapshot.takesRangeEdits,
                 pendingEventIDs: pendingIDs,
+                selectedKey: $selectedKey,
                 onCreate: { type, name, start, end in
                     client.create(type, title: name.title, awaitsName: name == .later, start: start, end: end)
                 },
                 onEditRange: { occurrence, start, end in client.editRange(occurrence, start: start, end: end) },
                 onFlick: { step in
-                    // Today is the leftmost page.
-                    guard step > 0 else { return }
-                    withAnimation { page = .stats }
+                    // The event page is to the left, Stats to the right.
+                    withAnimation { page = step > 0 ? .stats : .event }
                 }
             )
         } else {
@@ -99,10 +148,10 @@ struct WristRootView: View {
 }
 
 enum WristPage: String, Hashable {
-    case today, stats, settings
+    case event, today, stats, settings
 
-    /// Today. Debug builds accept `-wristPage today|stats|settings` so a
-    /// paired-simulator check can open a page without a swipe.
+    /// Today. Debug builds accept `-wristPage event|today|stats|settings` so
+    /// a paired-simulator check can open a page without a swipe.
     static var initial: WristPage {
 #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
@@ -112,6 +161,17 @@ enum WristPage: String, Hashable {
         }
 #endif
         return .today
+    }
+
+    /// Nothing. Debug builds accept `-wristSelect <motion key>` (e.g.
+    /// `00000000-0000-0000-0000-000000000003#0` for the parallel fixture's
+    /// Deep work) so a check can open with a block selected without a tap.
+    static var initialSelection: String? {
+#if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        if let i = arguments.firstIndex(of: "-wristSelect"), i + 1 < arguments.count { return arguments[i + 1] }
+#endif
+        return nil
     }
 }
 
@@ -153,6 +213,8 @@ struct WristTodayView: View {
     /// the events with a command it has not answered yet.
     var takesRangeEdits: Bool = false
     var pendingEventIDs: Set<UUID> = []
+    /// The tapped block, by motion key — the event page's subject.
+    @Binding var selectedKey: String?
     /// Returns the created event's id.
     var onCreate: (WristType, WristDraftName, Date, Date) -> UUID? = { _, _, _, _ in nil }
     /// A block's range moved, resized or nudged here.
@@ -185,8 +247,6 @@ struct WristTodayView: View {
     /// When the last hold ended — the release of a hold also reads as a tap
     /// or a flick, which must not act on it.
     @State private var holdEndedAt = Date.distantPast
-    /// The tapped block, by motion key.
-    @State private var selectedKey: String?
     /// A short note over the day: why a hold did nothing.
     @State private var hint: String?
     @State private var hintToken = UUID()
@@ -234,6 +294,8 @@ struct WristTodayView: View {
     @State private var viewportHeight: CGFloat = 0
     @State private var contentHeight: CGFloat = 0
     @State private var position = ScrollPosition(edge: .top)
+    /// The day has opened on the present.
+    @State private var opened = false
     /// Where the finger is while drawing, in the scroll view's coordinates:
     /// near an edge the day scrolls under a still finger, and the draft's
     /// moving end follows the time that passes under it.
@@ -400,7 +462,11 @@ struct WristTodayView: View {
                             .transition(.opacity)
                     }
                 }
+                // Opens on the present once; back from the event page (or
+                // any other) the day is where it was left.
                 .onAppear {
+                    guard !opened else { return }
+                    opened = true
                     DispatchQueue.main.async { proxy.scrollTo(Self.debugScrollRow ?? nowRow, anchor: .center) }
                 }
                 // A new zoom puts the same hour row elsewhere: back to now.

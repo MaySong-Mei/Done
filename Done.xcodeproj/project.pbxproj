@@ -362,6 +362,7 @@
 		WENDCRWN00000000000000B01 /* WristEndCrown.swift in Sources */ = {isa = PBXBuildFile; fileRef = WENDCRWN00000000000000F01 /* WristEndCrown.swift */; };
 		WENDCRWN00000000000000B02 /* WristEndCrown.swift in Sources */ = {isa = PBXBuildFile; fileRef = WENDCRWN00000000000000F01 /* WristEndCrown.swift */; };
 		WENDCRWN00000000000000B03 /* WristEndCrownTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WENDCRWN00000000000000F02 /* WristEndCrownTests.swift */; };
+		WEVTPAGE00000000000000B01 /* WristEventPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = WEVTPAGE00000000000000F01 /* WristEventPage.swift */; };
 		WATCHTTL0000000000000B01 /* WristTitles.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCHTTL0000000000000F01 /* WristTitles.swift */; };
 		WATCHTTL0000000000000B02 /* WristTitles.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCHTTL0000000000000F01 /* WristTitles.swift */; };
 		WATCHTTL0000000000000B03 /* WristTitleSuggestionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCHTTL0000000000000F02 /* WristTitleSuggestionTests.swift */; };
@@ -805,6 +806,7 @@
 		WATCHDAY0000000000000F01 /* WristDay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristDay.swift; sourceTree = "<group>"; };
 		WENDCRWN00000000000000F01 /* WristEndCrown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristEndCrown.swift; sourceTree = "<group>"; };
 		WENDCRWN00000000000000F02 /* WristEndCrownTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristEndCrownTests.swift; sourceTree = "<group>"; };
+		WEVTPAGE00000000000000F01 /* WristEventPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristEventPage.swift; sourceTree = "<group>"; };
 		WATCHTTL0000000000000F01 /* WristTitles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristTitles.swift; sourceTree = "<group>"; };
 		WATCHTTL0000000000000F02 /* WristTitleSuggestionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristTitleSuggestionTests.swift; sourceTree = "<group>"; };
 		WATCHTTL0000000000000F03 /* WristTitleBacktestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristTitleBacktestTests.swift; sourceTree = "<group>"; };
@@ -1342,6 +1344,7 @@
 				WATCH000000000000000F007 /* DoneWatchApp.swift */,
 				WATCH000000000000000F008 /* WristSessionClient.swift */,
 				WATCH000000000000000F009 /* WristRootView.swift */,
+				WEVTPAGE00000000000000F01 /* WristEventPage.swift */,
 				WATCH000000000000000F010 /* WristStrings.swift */,
 				WMOV00000000000000000F01 /* WristMotionViews.swift */,
 				WGTR00000000000000000F01 /* WristGestureTrail.swift */,
@@ -1943,6 +1946,7 @@
 				WATCH000000000000000B009 /* DoneWatchApp.swift in Sources */,
 				WATCH000000000000000B010 /* WristSessionClient.swift in Sources */,
 				WATCH000000000000000B011 /* WristRootView.swift in Sources */,
+				WEVTPAGE00000000000000B01 /* WristEventPage.swift in Sources */,
 				WATCH000000000000000B012 /* WristStrings.swift in Sources */,
 				WMOV00000000000000000B01 /* WristMotionViews.swift in Sources */,
 				WGTR00000000000000000B01 /* WristGestureTrail.swift in Sources */,
