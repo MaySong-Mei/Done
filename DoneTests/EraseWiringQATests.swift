@@ -80,6 +80,9 @@ final class EraseWiringQATests: XCTestCase {
              "the resident observer's day in memory — counters, followers, an open auto-window and the "
              + "daily id with its owner — which the next flush wrote back into the wiped directory "
              + "under the erased owner"),
+            ("SpikeSessionCoordinator.shared?.forgetAfterErase()",
+             "a manual spike run armed from the Developer page, still shown as armed and still "
+             + "measuring after the erase, and the runners' last completed run — the erased owner's"),
             ("AppSettingsKeys.removeResettableKeys(from: defaults)",
              "the by-name sweep, which now also carries the telemetry switch, its consent moment, "
              + "the note opt-in, the decided bit and the by-default bit (gh#273): the next account on "

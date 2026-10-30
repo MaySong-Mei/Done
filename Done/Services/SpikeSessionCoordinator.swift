@@ -135,6 +135,14 @@ final class SpikeSessionCoordinator: ObservableObject {
     static let defaultManualRunExpiry: TimeInterval = 30 * 60
     private var expiryTimers: [UUID: Timer] = [:]
 
+    /// The coordinator "erase all local data" tells (`LocalDataEraser`): the
+    /// most recently created one, or nil once that one is released (weak, set
+    /// by every init). The app creates exactly one, at its root. Under XCTest
+    /// it is whichever coordinator a test created last: test-case instances
+    /// live for the whole run, so a coordinator a test still holds outlives
+    /// the test.
+    private(set) static weak var shared: SpikeSessionCoordinator?
+
     init(manualRunExpiry: TimeInterval = SpikeSessionCoordinator.defaultManualRunExpiry) {
         self.manualRunExpiry = manualRunExpiry
         // Every stored property first — `self` is not usable for the
@@ -153,6 +161,7 @@ final class SpikeSessionCoordinator: ObservableObject {
                 .sink { [weak self] _ in self?.objectWillChange.send() }
                 .store(in: &runnerChangeForwarders)
         }
+        Self.shared = self
     }
 
     // MARK: Registration
@@ -310,6 +319,21 @@ final class SpikeSessionCoordinator: ObservableObject {
         for runID in order {
             stop(runID: runID)
         }
+    }
+
+    // MARK: Erase
+
+    /// "Erase all local data": every armed run began before the erase. The
+    /// owned runners drop theirs, and their last completed run, without a
+    /// write. Anything else still armed is stopped through its own handler;
+    /// the store refuses what that handler writes only when it is a copy of
+    /// a record made before the erase (`SpikeRun.eraseEpoch`), not a record
+    /// it builds fresh. Residents are not runs: they stay attached and are
+    /// told separately.
+    func forgetAfterErase() {
+        runner195.forgetAfterErase()
+        runner201.forgetAfterErase()
+        stopAll()
     }
 
     // MARK: Seam management (the ONLY writers of the physical seams)

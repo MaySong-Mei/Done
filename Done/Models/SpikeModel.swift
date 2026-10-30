@@ -339,7 +339,58 @@ nonisolated struct SpikeRun: Codable, Identifiable, Equatable {
     var revision: Int? = nil
     var kind: TelemetryRecordKind? = nil
 
+    /// The erase epoch this value was born in (`LocalDataEraseEpoch`), taken
+    /// when it is built or decoded and carried by every copy. A run armed
+    /// before "erase all local data" and closed after it is the erased
+    /// owner's, and `SpikeRunStore` refuses any record whose epoch is not the
+    /// current one (`LocalDataEraseEpoch.isStale`). Memory only: never
+    /// written, never compared.
+    var eraseEpoch: Int {
+        get { birthEpoch.value }
+        set { birthEpoch.value = newValue }
+    }
+
+    /// `eraseEpoch`'s storage; see `SpikeRunBirthEpoch`.
+    var birthEpoch = SpikeRunBirthEpoch()
+
     var isOpen: Bool { endedAt == nil }
+}
+
+/// `SpikeRun.eraseEpoch`'s storage. Equal to every other, so two copies of
+/// one run compare equal whichever epoch each was read in; and absent from
+/// the line: the two container overloads below are what the synthesized
+/// `Codable` of `SpikeRun` calls, so encoding writes nothing for it (a line
+/// names the fields it named before the field existed) and decoding stamps
+/// the epoch current at the read. Its own `Codable` conformance exists only
+/// for that synthesis to type-check.
+///
+/// A stored property of this type, not a property wrapper: `SpikeRun` is
+/// `nonisolated`, and a wrapped property in it draws "'nonisolated' cannot
+/// be applied to mutable stored properties", an error in Swift 6 mode.
+nonisolated struct SpikeRunBirthEpoch: Codable, Equatable {
+    var value: Int
+
+    init(value: Int = LocalDataEraseEpoch.capture()) {
+        self.value = value
+    }
+
+    init(from decoder: Decoder) throws {
+        value = LocalDataEraseEpoch.capture()
+    }
+
+    func encode(to encoder: Encoder) throws {}
+
+    static func == (lhs: SpikeRunBirthEpoch, rhs: SpikeRunBirthEpoch) -> Bool { true }
+}
+
+nonisolated extension KeyedDecodingContainer {
+    func decode(_ type: SpikeRunBirthEpoch.Type, forKey key: Key) throws -> SpikeRunBirthEpoch {
+        SpikeRunBirthEpoch()
+    }
+}
+
+nonisolated extension KeyedEncodingContainer {
+    mutating func encode(_ value: SpikeRunBirthEpoch, forKey key: Key) throws {}
 }
 
 // MARK: - Run log algebra (pure)

@@ -34,6 +34,15 @@
 //      its precondition (`MeAvatarStore.delete()` is what makes its
 //      `hasImage` guard pass); `syncAvatarIfNeeded` re-creates the
 //      per-account `lastSyncedAvatarVersion.<id>` key.
+//    • `SpikeRunStore` — a manual spike run armed before the erase and
+//      closed after it. Here the token rides on the record value itself
+//      (`SpikeRun.eraseEpoch`) and the store's one append path refuses a
+//      value born before the erase. That gates VALUES, not writers: a writer
+//      that keeps pre-erase state in memory and builds a fresh `SpikeRun`
+//      from it after the erase passes the check. The resident observer's
+//      auto-window close and daily record are built that way and rely on
+//      `ResidentObservationCenter.forgetAfterErase` instead; a new writer of
+//      that shape needs its own forget, or a token taken when it started.
 //
 //  ⚠️ Nothing makes the next one fail on arrival. This is the write-side
 //  twin of the gap `resetAllLocalData` admits for the purge list: a writer
