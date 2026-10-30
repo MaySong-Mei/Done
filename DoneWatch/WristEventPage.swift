@@ -50,6 +50,13 @@ struct WristEventPage: View {
     @State private var restToken = UUID()
     /// The crown is turning: the end shown is where it is going.
     @State private var turning = false
+    /// Turned past the last stop: the end time leans that way, less with
+    /// each detent (`tension`), and springs back when the crown rests; the
+    /// limit's tap plays once a hit.
+    @State private var tension: CGFloat = 0
+    @State private var pastLimit = 0
+    /// The last stop went earlier: the digits roll down.
+    @State private var countsDown = false
     @Environment(\.scenePhase) private var scenePhase
 
     private var subject: WristEventSubject? {
@@ -74,6 +81,10 @@ struct WristEventPage: View {
         let subject = subject
         let availability = availability
         WristPageFrame(header: nil) { top in
+            WristRubberBand(onFlick: { step in
+                // The leftmost page: a flick to the left turns to Today.
+                if step > 0, page == .event { withAnimation { page = .today } }
+            }) {
             Group {
                 if let subject {
                     content(subject, availability: availability)
@@ -88,6 +99,7 @@ struct WristEventPage: View {
             .padding(.top, top + 2)
             .padding(.horizontal, 10)
             .padding(.bottom, 6)
+            }
         }
         // The crown's host, a leaf of its own: its rotation changes every
         // frame of a turn, and only whole detents reach the page.
@@ -140,10 +152,19 @@ struct WristEventPage: View {
             raw.map { String(format: "%.2f", $0) } ?? "voiceover", delta, strings.clock(target),
             step.limited && !step.moved ? " limit" : ""
         ))
+        let later = WristEndCrown.direction(ofCrownDelta: delta) > 0
         if step.moved {
+            // A light click a stop (the crown's own haptic is off).
             WKInterfaceDevice.current().play(.click)
+            countsDown = !later
+            if pastLimit != 0 { relax() }
         } else if step.limited {
-            WKInterfaceDevice.current().play(WristEndCrown.direction(ofCrownDelta: delta) > 0 ? .directionUp : .directionDown)
+            // The limit's tap once a hit, then only the lean.
+            if pastLimit == 0 { WKInterfaceDevice.current().play(later ? .directionUp : .directionDown) }
+            pastLimit += abs(delta)
+            withAnimation(.interactiveSpring(response: 0.25, dampingFraction: 0.8)) {
+                tension = (later ? 1 : -1) * Self.lean(detentsPast: pastLimit)
+            }
         }
         turning = true
         let token = UUID()
@@ -151,8 +172,22 @@ struct WristEventPage: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + WristEndCrown.restDelay) {
             guard restToken == token else { return }
             turning = false
+            relax()
             sendUnsent()
         }
+    }
+
+    /// The most the end time leans past a limit, in points, and how it
+    /// gets there: less with each detent, as a rubber band.
+    static let maxLean: CGFloat = 9
+    static func lean(detentsPast n: Int) -> CGFloat {
+        maxLean * (1 - 1 / (CGFloat(n) * 0.6 + 1))
+    }
+
+    private func relax() {
+        pastLimit = 0
+        guard tension != 0 else { return }
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) { tension = 0 }
     }
 
     private func sendUnsent() {
@@ -191,10 +226,12 @@ struct WristEventPage: View {
                     .font(.system(size: 46, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(changed || turning ? accent : .white)
-                    .contentTransition(.numericText(value: end.timeIntervalSinceReferenceDate))
-                    .animation(.easeOut(duration: 0.12), value: end)
+                    .contentTransition(.numericText(countsDown: countsDown))
+                    .animation(.spring(response: 0.22, dampingFraction: 0.85), value: end)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
+                    // Later is down the day, as on Today.
+                    .offset(y: tension)
                     // VoiceOver moves the end a stop a swipe, as a detent.
                     .accessibilityLabel(strings.endLabel)
                     .accessibilityValue(strings.clock(end))
@@ -237,7 +274,7 @@ struct WristEventPage: View {
                             .frame(maxWidth: .infinity, minHeight: 34)
                             .background(Color.white.opacity(0.18), in: Capsule())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(WristPressStyle())
                     Button {
                         restToken = UUID()
                         turning = false
@@ -249,7 +286,7 @@ struct WristEventPage: View {
                             .frame(maxWidth: .infinity, minHeight: 34)
                             .background(accent.opacity(0.85), in: Capsule())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(WristPressStyle())
                     .accessibilityLabel(strings.finish)
                     // The double tap finishes only from this page: it stays
                     // loaded beside Today, whose double tap is not Finish.
@@ -285,6 +322,8 @@ struct WristCrownDetents: View {
                 $turned, from: -100_000, through: 100_000, by: 1,
                 sensitivity: .low, isContinuous: false, isHapticFeedbackEnabled: false
             )
+            // No crown scroll bar at the edge: the end time is what moves.
+            .digitalCrownAccessory(.hidden)
             .accessibilityHidden(true)
             .onChange(of: turned) { _, raw in
                 let now = Int(raw.rounded())
@@ -338,4 +377,73 @@ struct WristCrownDetents: View {
         }
     }
 #endif
+}
+
+/// A button pressed: a little smaller and brighter, back with a spring.
+struct WristPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.93 : 1)
+            .brightness(configuration.isPressed ? 0.12 : 0)
+            .animation(.spring(response: 0.2, dampingFraction: 0.65), value: configuration.isPressed)
+    }
+}
+
+/// A page that does not scroll still gives under a vertical drag: the
+/// content follows the finger with a rubber band's resistance (the scroll
+/// view's, `(1 − 1/(d·0.55/dim + 1))·dim`) and springs back on release,
+/// carrying the finger's speed. A sideways drag moves nothing here — the
+/// drag decides its axis once, at its start — and a sideways flick turns
+/// the page (`onFlick`: +1 for the page to the right), since a drag on the
+/// page can keep the paged view from turning it. The offset lives in this
+/// leaf: a drag redraws it, not the page.
+struct WristRubberBand<Content: View>: View {
+    let onFlick: (Int) -> Void
+    @ViewBuilder let content: Content
+
+    @State private var offset: CGFloat = 0
+    @State private var vertical: Bool?
+    @State private var height: CGFloat = 200
+
+    /// The rubber band's offset for a drag of `d` points over `dim`.
+    static func band(_ d: CGFloat, dim: CGFloat) -> CGFloat {
+        guard dim > 0 else { return 0 }
+        let pulled = (1 - 1 / (abs(d) * 0.55 / dim + 1)) * dim
+        return d < 0 ? -pulled : pulled
+    }
+
+    var body: some View {
+        content
+            .offset(y: offset)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { _, h in height = h }
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 8)
+                    .onChanged { value in
+                        let dx = value.translation.width, dy = value.translation.height
+                        if vertical == nil { vertical = abs(dy) > abs(dx) }
+                        guard vertical == true else { return }
+                        offset = Self.band(dy, dim: height)
+                    }
+                    .onEnded { value in
+                        defer { vertical = nil }
+                        if vertical == true {
+                            // The finger's speed, as the band passes it on.
+                            let d = abs(value.translation.height)
+                            let give = 0.55 / pow(d * 0.55 / max(height, 1) + 1, 2)
+                            let speed = value.velocity.height * give
+                            let velocity = offset != 0 ? speed / -offset : 0
+                            withAnimation(.interpolatingSpring(mass: 1, stiffness: 260, damping: 22, initialVelocity: velocity)) {
+                                offset = 0
+                            }
+                        } else {
+                            let dx = value.translation.width
+                            let reach = max(abs(dx), abs(value.predictedEndTranslation.width))
+                            guard reach > 40 else { return }
+                            onFlick(dx < 0 ? 1 : -1)
+                        }
+                    }
+            )
+    }
 }
