@@ -544,6 +544,38 @@ final class SyncSwitchFullSyncQATests: SyncRestoreAndSwitchQATestCase {
         try await syncEventually("the later edit reached the cloud") { self.onServer(later) != nil }
     }
 
+    /// A token refresh while the switch is off during a pass runs the
+    /// session sink's `!canUpload` branch, which marks this session's full
+    /// sync done although the pass still runs. With the switch back on, a
+    /// delivery to the row the pass has in flight goes straight to its own
+    /// flush beside the pass's send of that row, instead of being owed to
+    /// the pass. The edit must still end on the server, and nothing may be
+    /// shelved or lost for it.
+    func testQA_S8_aRefreshWithTheSwitchOffDuringAPass_thenAnEditToTheRowInFlight_stillLands() async throws {
+        let inFlight = makeEvent("in flight", note: "v1")
+        store.addCalendarEvent(inFlight)
+        try await parkAPass(on: { verb, table in verb == .insert && table == "events" },
+                            startedBy: { await self.device.auth.forceRefreshToken() })
+        XCTAssertTrue(server.requests(.insert, table: "events").contains { names($0, inFlight.id) }, "fixture: the pass sent the row")
+        switchOff()
+        await device.auth.forceRefreshToken()
+        switchOn()
+        try await syncEventually("the restarted puller reached head") { self.service.inboundAtHead }
+        var edited = inFlight
+        edited.note = "v2"
+        store.updateCalendarEvent(edited)
+        scheduler.advance(by: debounce)
+        try await settle()
+        // The delivery goes out beside the parked POST of the same row
+        // (not owed to the pass); what is held is the outcome below.
+
+        try await releaseEverything()
+        try await syncEventually("the edit reached the cloud") { self.onServer(inFlight)?["note"] as? String == "v2" }
+        try await settle()
+        XCTAssertEqual(shelved(inFlight.id).count, 0, "the device's own edit was shelved")
+        XCTAssertEqual(store.rawCalendarEvents.first { $0.id == inFlight.id }?.note, "v2", "the edit was lost locally")
+    }
+
     private func sessionJSON() -> String {
         let expiresAt = Date().addingTimeInterval(3600).timeIntervalSince1970
         return #"{"access_token":"at-again","refresh_token":"r-again","user_id":"\#(uid)","email":"switch@example.com","expires_at":\#(expiresAt)}"#
