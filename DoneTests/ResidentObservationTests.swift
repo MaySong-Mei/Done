@@ -2198,8 +2198,9 @@ final class MeAggregateWitnessPolarityTests: XCTestCase {
 
 /// The pure half of `FixWatchAttention`: any firing alarm, or any entry
 /// past its review date, must light the settings row — and nothing else
-/// may. Entries are built locally so the fixture cannot rot with the
-/// registry's real review dates.
+/// may — unless statistics uploads are on, when nothing lights it and the
+/// records are not read. Entries are built locally so the fixture cannot
+/// rot with the registry's real review dates.
 final class FixWatchAttentionTests: XCTestCase {
     private func entry(reviewBy: String) -> FixObservationEntry {
         FixObservationEntry(
@@ -2236,6 +2237,64 @@ final class FixWatchAttentionTests: XCTestCase {
         XCTAssertFalse(FixWatchAttention.isOverdue(entries[0], now: noon(2026, 10, 17)),
                        "the review day itself is not yet overdue — same rule as the deck's OVERDUE badge")
         XCTAssertTrue(FixWatchAttention.isOverdue(entries[0], now: noon(2026, 10, 18)))
+    }
+
+    /// Uploads on: the records are analysed from the cloud, so the row
+    /// stays quiet over a firing alarm AND an overdue entry — and the
+    /// records are never read. Uploads off, the same inputs: read once and
+    /// lit, as before.
+    @MainActor
+    func testUploadsOnKeepTheRowQuietWithoutReadingTheRecords() {
+        let entries = [entry(reviewBy: "2026-10-17")]
+        let after = noon(2026, 10, 18)
+        var reads = 0
+        let alarming: () -> [FixVerdict] = {
+            reads += 1
+            return [self.verdict(alarm: true)]
+        }
+
+        XCTAssertFalse(FixWatchAttention.needsAttention(uploadsEnabled: true, verdicts: alarming, entries: entries, now: after),
+                       "uploads on: no dot, whatever the records say")
+        XCTAssertEqual(reads, 0, "uploads on: the records are not read at all")
+
+        XCTAssertTrue(FixWatchAttention.needsAttention(uploadsEnabled: false, verdicts: alarming, entries: [], now: after),
+                      "uploads off: a firing alarm lights the row")
+        XCTAssertEqual(reads, 1, "uploads off: the records are read once")
+        XCTAssertTrue(FixWatchAttention.needsAttention(uploadsEnabled: false, verdicts: { [] }, entries: entries, now: after),
+                      "uploads off: an overdue entry lights the row")
+        XCTAssertFalse(FixWatchAttention.needsAttention(uploadsEnabled: false, verdicts: { [] }, entries: entries, now: noon(2026, 9, 2)),
+                       "uploads off: nothing firing, nothing overdue — quiet")
+    }
+
+    /// The row's own entry point reads the switch the uploader gates on,
+    /// from the defaults it is handed. Off (absent, or false): it reads
+    /// this device's records and lights over the registry — every entry is
+    /// overdue by 2100. On: no dot and no records read.
+    @MainActor
+    func testTheRowReadsTheUploadSwitchAndSkipsTheRecordsWhenItIsOn() throws {
+        let suite = "FixWatchAttentionTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let location = SpikeRunStorageLocation.ephemeral(id: UUID())
+        let later = noon(2100, 1, 1)
+        XCTAssertFalse(FixObservationRegistry.all.isEmpty, "fixture: the registry has entries to be overdue")
+
+        var reads = SpikeRunStore.wholeFileReads
+        XCTAssertTrue(FixWatchAttention.needsAttention(now: later, location: location, defaults: defaults),
+                      "switch never set: lit, as before")
+        XCTAssertGreaterThan(SpikeRunStore.wholeFileReads, reads, "switch never set: the records are read")
+
+        defaults.set(false, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        reads = SpikeRunStore.wholeFileReads
+        XCTAssertTrue(FixWatchAttention.needsAttention(now: later, location: location, defaults: defaults),
+                      "switch off: lit, as before")
+        XCTAssertGreaterThan(SpikeRunStore.wholeFileReads, reads, "switch off: the records are read")
+
+        defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        reads = SpikeRunStore.wholeFileReads
+        XCTAssertFalse(FixWatchAttention.needsAttention(now: later, location: location, defaults: defaults),
+                       "switch on: no dot")
+        XCTAssertEqual(SpikeRunStore.wholeFileReads, reads, "switch on: the records are not read")
     }
 }
 

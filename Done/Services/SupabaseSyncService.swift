@@ -4138,8 +4138,15 @@ final class SupabaseSyncService: ObservableObject {
             replaySingleton(table: "agent_conversations", hash: Self.rowHash(agentConversationsToRow()))
         }
         // Persist the just-restored baseline so the next launch starts from
-        // here, not from an empty map that would re-upload everything.
-        baseline.persistAll()
+        // here, not from an empty map that would re-upload everything. A
+        // snapshot from `fetchRestoreSnapshot` also takes the cursor back to
+        // where the fetch began, persisting the baseline first (see
+        // `RestoreFetchMark`).
+        if let mark = cloud.fetchMark {
+            rewindCursorAfterRestore(to: mark)
+        } else {
+            baseline.persistAll()
+        }
     }
 
     /// One table's replay. Only rows the device holds after the restore

@@ -24,6 +24,8 @@
 //
 
 import XCTest
+import Combine
+import QuartzCore
 @testable import Done
 
 /// One device on a fake server: the engine, its stores, its puller, and an
@@ -816,5 +818,264 @@ final class SyncSwitchDuringFullSyncTests: SyncRestoreAndSwitchTestCase {
         try await syncEventually("the edit reached the cloud at head") {
             launchServer.row(table: "events", key: edit.id.uuidString) != nil
         }
+    }
+}
+
+// MARK: - 3. The restore's loading view goes up before the work
+
+/// The coordinator's frame wait, held by the test: it logs and counts its
+/// entries and parks the FIRST restore there until released. A later
+/// entry — a second apply — passes straight through, so it shows up in
+/// what the test reads instead of hanging the run.
+@MainActor
+final class HeldLoadingFrame {
+    private(set) var entries = 0
+    var onEnter: () -> Void = {}
+    let entered: XCTestExpectation
+    private var parked: CheckedContinuation<Void, Never>?
+
+    init(entered: XCTestExpectation) {
+        self.entered = entered
+    }
+
+    func wait() async {
+        entries += 1
+        onEnter()
+        guard entries == 1 else { return }
+        await withCheckedContinuation { continuation in
+            parked = continuation
+            entered.fulfill()
+        }
+    }
+
+    func release() {
+        parked?.resume()
+        parked = nil
+    }
+}
+
+/// Counts display refreshes while it runs.
+@MainActor
+final class DisplayRefreshCounter: NSObject {
+    private(set) var count = 0
+    private var link: CADisplayLink?
+
+    func start() {
+        guard link == nil else { return }
+        let link = CADisplayLink(target: self, selector: #selector(tick))
+        link.add(to: .main, forMode: .common)
+        self.link = link
+    }
+
+    func stop() {
+        link?.invalidate()
+        link = nil
+    }
+
+    @objc private func tick(_ link: CADisplayLink) {
+        count += 1
+    }
+}
+
+/// "正在恢复…" has to be on the screen before the restore's synchronous work
+/// holds the main thread. The coordinator publishes `.applying`, then waits
+/// for a frame, then mutates the stores — on each of the four ways into an
+/// apply. These tests hold that wait and look at what has happened by then;
+/// the last one runs the app's own wait and counts the display refreshes
+/// that pass before the first store change.
+@MainActor
+final class RestoreLoadingFrameTests: SyncRestoreAndSwitchTestCase {
+    private var log: [String] = []
+    private var bag: Set<AnyCancellable> = []
+
+    override func tearDown() async throws {
+        bag.removeAll()
+        try await super.tearDown()
+    }
+
+    private static func name(_ phase: RestoreCoordinator.Phase) -> String {
+        switch phase {
+        case .idle: return "idle"
+        case .fetching: return "fetching"
+        case .ready: return "ready"
+        case .mergeReview: return "mergeReview"
+        case .perRowReview: return "perRowReview"
+        case .applying: return "applying"
+        case .finished: return "finished"
+        case .failed: return "failed"
+        }
+    }
+
+    private func makeCoordinator(waitForLoadingFrame: @escaping @MainActor () async -> Void) -> RestoreCoordinator {
+        let coordinator = RestoreCoordinator(waitForLoadingFrame: waitForLoadingFrame)
+        coordinator.configure(syncService: service, eventStore: store, eventTypeStore: device.types,
+                              skillStore: device.skills, preferenceStore: device.prefs)
+        return coordinator
+    }
+
+    private func fetched(_ coordinator: RestoreCoordinator) async throws {
+        await coordinator.startFetch()
+        guard case .ready = coordinator.phase else {
+            throw FixtureFailure(description: "the restore fetch did not finish: \(coordinator.phase)")
+        }
+    }
+
+    private func holds(_ event: Event) -> Bool {
+        store.rawCalendarEvents.contains { $0.id == event.id }
+    }
+
+    /// One way into an apply, from the phase `reach` leaves it in, held at
+    /// the frame wait. While held: the loading phase is published, nothing
+    /// in the store has changed, and every entry point — a second tap on any
+    /// button — starts nothing. Released: the store changes, then the
+    /// restore finishes.
+    private func assertTheLoadingFrameComesFirst(
+        _ path: String,
+        strategy: RestoreStrategy,
+        incoming: Event?,
+        reach: (RestoreCoordinator) async throws -> Void,
+        apply: @escaping (RestoreCoordinator) async -> Void
+    ) async throws {
+        let frame = HeldLoadingFrame(entered: expectation(description: "\(path): the frame wait was entered"))
+        let coordinator = makeCoordinator { await frame.wait() }
+        try await fetched(coordinator)
+        try await reach(coordinator)
+        if let incoming { XCTAssertFalse(holds(incoming), "fixture: the cloud's row is not on this device yet") }
+
+        coordinator.$phase.dropFirst().sink { [unowned self] in self.log.append("phase " + Self.name($0)) }.store(in: &bag)
+        store.objectWillChange.sink { [unowned self] in self.log.append("store") }.store(in: &bag)
+        frame.onEnter = { [unowned self] in self.log.append("frame") }
+
+        let run = Task { await apply(coordinator) }
+        await fulfillment(of: [frame.entered], timeout: 5)
+        guard frame.entries == 1 else {
+            return XCTFail("\(path): the apply never reached the frame wait: \(coordinator.phase), \(log)")
+        }
+
+        XCTAssertEqual(coordinator.phase, .applying(strategy), "\(path): the loading phase is published before the wait")
+        XCTAssertEqual(log, ["phase applying", "frame"], "\(path): by the wait, the loading phase and nothing else")
+        if let incoming { XCTAssertFalse(holds(incoming), "\(path): the store changed before the loading frame") }
+
+        await coordinator.applyOverwrite()
+        await coordinator.prepareMerge()
+        await coordinator.applyMerge(resolution: .keepCloud)
+        coordinator.enterPerRowReview()
+        await coordinator.applyPerRow()
+        XCTAssertEqual(frame.entries, 1, "\(path): a second tap during the wait started a second apply")
+        XCTAssertEqual(coordinator.phase, .applying(strategy), "\(path): a second tap moved the phase")
+        XCTAssertEqual(log, ["phase applying", "frame"], "\(path): a second tap changed something")
+
+        frame.release()
+        await run.value
+        guard case .finished(_, strategy, _) = coordinator.phase else {
+            return XCTFail("\(path): the restore did not finish: \(coordinator.phase)")
+        }
+        XCTAssertEqual(Array(log.prefix(3)), ["phase applying", "frame", "store"],
+                       "\(path): the store changes after the wait, first thing")
+        XCTAssertEqual(log.filter { $0.hasPrefix("phase") }, ["phase applying", "phase finished"], "\(path)")
+        XCTAssertEqual(log.last, "phase finished", "\(path)")
+        if let incoming { XCTAssertTrue(holds(incoming), "\(path): the restore landed the cloud's row") }
+    }
+
+    private func seedIncoming() -> Event {
+        let incoming = makeEvent("only in the cloud")
+        server.seed(table: "events", rows: [row(incoming)])
+        return incoming
+    }
+
+    func testOverwrite_theLoadingFrameComesBeforeTheStoreChanges() async throws {
+        try await assertTheLoadingFrameComesFirst(
+            "overwrite", strategy: .cloudOverwritesLocal, incoming: seedIncoming(),
+            reach: { _ in },
+            apply: { await $0.applyOverwrite() })
+    }
+
+    func testMergeFromTheReview_theLoadingFrameComesBeforeTheStoreChanges() async throws {
+        try await assertTheLoadingFrameComesFirst(
+            "merge", strategy: .merge, incoming: seedIncoming(),
+            reach: { coordinator in
+                await coordinator.prepareMerge()
+                guard case .mergeReview = coordinator.phase else {
+                    throw FixtureFailure(description: "a cloud-only row leaves something to review: \(coordinator.phase)")
+                }
+            },
+            apply: { await $0.applyMerge(resolution: .keepLocal) })
+    }
+
+    func testPerRow_theLoadingFrameComesBeforeTheStoreChanges() async throws {
+        try await assertTheLoadingFrameComesFirst(
+            "per-row", strategy: .merge, incoming: seedIncoming(),
+            reach: { coordinator in
+                await coordinator.prepareMerge()
+                coordinator.enterPerRowReview()
+                guard case .perRowReview = coordinator.phase else {
+                    throw FixtureFailure(description: "the per-row review did not open: \(coordinator.phase)")
+                }
+            },
+            apply: { await $0.applyPerRow() })
+    }
+
+    /// `prepareMerge` with nothing to review applies directly: the cloud
+    /// holds exactly what this device holds, its event types included.
+    func testMergeWithNothingToReview_theLoadingFrameComesBeforeTheStoreChanges() async throws {
+        let same = makeEvent("on both, the same")
+        server.seed(table: "events", rows: [row(same)])
+        server.seed(table: "event_types", rows: device.types.templates.map(service.eventTypeToRow))
+        await puller.pullToHead()
+        XCTAssertTrue(holds(same), "fixture: the device holds the cloud's row")
+        try await assertTheLoadingFrameComesFirst(
+            "merge, nothing to review", strategy: .merge, incoming: nil,
+            reach: { _ in },
+            apply: { await $0.prepareMerge() })
+    }
+
+    /// The app's own wait, not a held one: at least one display refresh
+    /// passes between publishing `.applying` and the first store change —
+    /// the window in which the loading view is committed to the screen.
+    /// Before the wait existed the two happened in one main-actor turn, with
+    /// no refresh between them.
+    func testTheAppsWaitLetsADisplayRefreshPassBeforeTheFirstStoreChange() async throws {
+        let incoming = seedIncoming()
+        let coordinator = RestoreCoordinator()
+        coordinator.configure(syncService: service, eventStore: store, eventTypeStore: device.types,
+                              skillStore: device.skills, preferenceStore: device.prefs)
+        try await fetched(coordinator)
+
+        let refreshes = DisplayRefreshCounter()
+        defer { refreshes.stop() }
+        var applyingPublished = false
+        var refreshesAtFirstStoreChange: Int?
+        coordinator.$phase.sink { phase in
+            guard case .applying = phase else { return }
+            applyingPublished = true
+            refreshes.start()
+        }.store(in: &bag)
+        store.objectWillChange.sink {
+            if applyingPublished, refreshesAtFirstStoreChange == nil {
+                refreshesAtFirstStoreChange = refreshes.count
+            }
+        }.store(in: &bag)
+
+        await coordinator.applyOverwrite()
+        guard case .finished = coordinator.phase else { return XCTFail("the restore finished: \(coordinator.phase)") }
+        XCTAssertTrue(holds(incoming), "the restore landed")
+        XCTAssertTrue(applyingPublished, "the loading phase was published")
+        let atStoreChange = try XCTUnwrap(refreshesAtFirstStoreChange, "the store changed after the loading phase")
+        // Liveness: the counter does count, so a zero above is a finding.
+        let after = refreshes.count
+        try await syncEventually("the refresh counter ticks") { refreshes.count > after }
+        XCTAssertGreaterThanOrEqual(atStoreChange, 1,
+                                    "no display refresh passed between the loading phase and the store change")
+    }
+
+    /// When no refresh comes in time, the wait gives up at its ceiling and
+    /// the restore goes ahead — it is never parked on the display.
+    func testTheFrameWaitGivesUpAtItsCeiling() async throws {
+        let clock = ContinuousClock()
+        let start = clock.now
+        await DisplayedFrameWait.wait(frames: 1_000_000, ceiling: .milliseconds(100))
+        let waited = clock.now - start
+        XCTAssertGreaterThanOrEqual(waited, .milliseconds(100), "the wait ran to its ceiling")
+        XCTAssertLessThan(waited, .seconds(5), "the wait returned at its ceiling")
     }
 }
