@@ -698,7 +698,8 @@ final class SyncFlushLiveArrayQATests: XCTestCase {
 
         scheduler.advance(by: debounce)          // flush task queued with [kept, gone, mine]
         _ = store.applyRestore(snapshot, strategy: .cloudOverwritesLocal, resolution: .keepLocal)
-        service.markRestoreCompleted(eventStore: store, eventTypeStore: types, skillStore: skills, snapshot: snapshot)
+        service.markRestoreCompleted(eventStore: store, eventTypeStore: types, skillStore: skills, snapshot: snapshot,
+                                     strategy: .cloudOverwritesLocal)
         XCTAssertEqual(store.rawCalendarEvents.map(\.id), [kept.id], "fixture: the overwrite left only the cloud's row")
 
         try await syncEventually("the flush ran") {
@@ -722,18 +723,15 @@ final class SyncFlushLiveArrayQATests: XCTestCase {
                        liveLines("calendar_events").last ?? "no line")
     }
 
-    // MARK: - 9. Observed while building QA2c/QA3 (pre-existing, not this fix)
+    // MARK: - 9. A merge restore over a row the cloud never had
 
-    /// A merge restore writes every LOCAL row into the baseline: a row the
-    /// cloud did not carry gets the hash of the local row (`replayBaseline`,
-    /// "keeps the legacy shape"). A row that never reached the cloud — made
-    /// while the master switch was off, or still in its debounce — then
-    /// reads clean, and no later flush sends it until it is edited.
-    func testQA12_PreExisting_ALocalOnlyRowAtAMergeRestoreStillReachesTheCloud() async throws {
-        // Strict: this test turns red the day the restore stops marking
-        // never-uploaded rows clean — then delete this line. Without it the
-        // last assertion fails (on 3111ef1 and on the fix alike).
-        XCTExpectFailure("pre-existing (restore baseline replay), not the live-array fix", strict: true)
+    /// A row that never reached the cloud — made while the master switch
+    /// was off — is still unsent after a merge restore: the cloud did not
+    /// carry it, so the replay records nothing for it, and the next flush
+    /// with the switch on sends it. (Up to ad877111 the replay gave such a
+    /// row the hash of the local row, it read clean, and no flush sent it
+    /// until it was edited; fixed on fix/sync-restore-and-toggle.)
+    func testQA12_ALocalOnlyRowAtAMergeRestoreStillReachesTheCloud() async throws {
         defaults.set(false, forKey: AppSettingsKeys.syncUploadsEnabled)   // made while uploads were off
         let offline = makeEvent("made-offline")
         store.addCalendarEvent(offline)
@@ -745,22 +743,24 @@ final class SyncFlushLiveArrayQATests: XCTestCase {
         _ = store.applyRestore(snapshot, strategy: .merge, resolution: .keepLocal)
         service.markRestoreCompleted(eventStore: store, eventTypeStore: types, skillStore: skills, snapshot: snapshot)
         XCTAssertTrue(store.rawCalendarEvents.contains { $0.id == offline.id }, "fixture: the merge kept the local row")
+        XCTAssertNil(service.baseline.entry(table: "calendar_events", id: offline.id.uuidString),
+                     "the merge restore recorded a row the cloud never had as uploaded")
 
         defaults.set(true, forKey: AppSettingsKeys.syncUploadsEnabled)
         service.markNeedsFlush("calendar_events")                         // the flush a chain at head owes
         await service.flushPendingTables()
         try await settle()
         XCTAssertNotNil(server.row(table: "events", key: offline.id.uuidString),
-                        "a row that was only ever local reads clean after a merge restore and is never uploaded")
+                        "a row that was only ever local read clean after a merge restore and was never uploaded")
     }
 
     // MARK: - 10. The switch: refused while off, sent once it is back on
 
     /// 09d9fa4 does not flag a flush the switch refuses, on the premise that
-    /// turning the switch back on runs a full sync. A refusal needs the
-    /// debounce to deliver with `isFullSyncDone` true (the sinks drop a
-    /// delivery while a full sync runs), so no full sync is in flight when
-    /// the switch comes back on and `userDidEnableUploads` starts one.
+    /// turning the switch back on runs a full sync. Here the debounce
+    /// delivers with `isFullSyncDone` true (no full sync is in flight), so
+    /// the switch coming back on has `userDidEnableUploads` start one. The
+    /// same refusal during a running pass is QA15b/QA15c's case.
     func testQA15a_AFlushTheSwitchRefusedIsSentByTheFullSyncWhenItComesBackOn() async throws {
         let edit = makeEvent("edited-then-switch-off")
         store.addCalendarEvent(edit)
@@ -779,14 +779,13 @@ final class SyncFlushLiveArrayQATests: XCTestCase {
         XCTAssertNotNil(server.row(table: "events", key: edit.id.uuidString))
     }
 
-    /// Pre-existing (3111ef1 as well): the toggle off and on while a full
-    /// sync is running. `userDidDisableUploads` ends the puller's session;
-    /// `userDidEnableUploads` returns before starting it again because a
-    /// full sync is in flight, so nothing pulls (no doorbell, no poll) until
-    /// the next launch or sign-in.
-    func testQA15b_PreExisting_ThePullerRunsAgainWhenTheSwitchComesBackOnDuringAFullSync() async throws {
-        XCTExpectFailure("pre-existing: userDidEnableUploads returns before restarting the puller while a full sync is in flight",
-                         strict: true)
+    /// The toggle off and on while a full sync is running.
+    /// `userDidDisableUploads` ends the puller's session; turning the switch
+    /// back on must start it again although a full sync is in flight, or
+    /// nothing pulls (no doorbell, no poll) until the next launch or
+    /// sign-in. (Up to ad877111 `userDidEnableUploads` returned before
+    /// restarting it; fixed on fix/sync-restore-and-toggle.)
+    func testQA15b_ThePullerRunsAgainWhenTheSwitchComesBackOnDuringAFullSync() async throws {
         try await parkAFullSyncOnSkills()
         XCTAssertTrue(puller.active, "fixture: the puller runs")
         defaults.set(false, forKey: AppSettingsKeys.syncUploadsEnabled)
@@ -795,20 +794,25 @@ final class SyncFlushLiveArrayQATests: XCTestCase {
         service.userDidEnableUploads()
         server.holdWhen = nil
         server.releaseAll()
+        XCTAssertTrue(puller.active, "the switch came back on during the pass and nothing pulls")
         try await fullSyncFinishes()
         XCTAssertTrue(puller.active, "the switch is on and nothing pulls")
     }
 
-    /// Pre-existing (3111ef1 as well): the sinks drop a delivery while a
-    /// full sync runs (`isFullSyncDone` false), and flag nothing. An edit to
-    /// a table the full sync has already passed waits for the next edit of
-    /// that table or the next launch.
-    func testQA15c_PreExisting_AnEditToATableTheRunningFullSyncPassedIsSent() async throws {
-        XCTExpectFailure("pre-existing: a sink delivery during a full sync is dropped unflagged", strict: true)
+    /// A sink delivery while a full sync runs (`isFullSyncDone` false), to
+    /// a table the pass has already passed, is owed to the pass and sent
+    /// when it ends — not left for the next edit of that table or the next
+    /// launch. (Up to ad877111 the sinks dropped it unflagged; fixed on
+    /// fix/sync-restore-and-toggle.)
+    func testQA15c_AnEditToATableTheRunningFullSyncPassedIsSent() async throws {
         try await parkAFullSyncOnSkills()
         let edit = makeEvent("edited-during-the-full-sync")
         store.addCalendarEvent(edit)
         scheduler.advance(by: debounce)
+        try await settle()
+        XCTAssertNil(server.row(table: "events", key: edit.id.uuidString),
+                     "fixture: the delivery came while the pass was parked, and was not sent beside it")
+        XCTAssertTrue(service.needsFlush.contains("calendar_events"), "positive control: the delivery was owed to the pass")
         server.holdWhen = nil
         server.releaseAll()
         try await fullSyncFinishes()
