@@ -15172,6 +15172,56 @@ final class BoundaryBandCloseTests: XCTestCase {
         XCTAssertEqual(view.contentOffset.y, 700 - band, accuracy: 0.01)
     }
 
+    func testKeeperUsesTheOffsetFromBeforeUIKitClampsIt() {
+        // At rest UIKit clamps the offset into the shorter range before the
+        // size change is reported; the keeper must start from where the
+        // user was, not from the clamped value.
+        let band = 12 * hourHeight
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 375, height: 667))
+        let view = scrollView(contentHeight: 2000, offsetY: 1400)
+        window.addSubview(view)
+        window.isHidden = false
+        var seen: [CGFloat] = []
+        let watch = view.observe(\.contentOffset, options: [.new]) { _, change in
+            if let y = change.newValue?.y { seen.append(y) }
+        }
+        let keeper = BoundaryBandOffsetKeeper()
+        keeper.attach(view)
+        XCTAssertTrue(keeper.expect(heightChange: -band))
+        view.contentSize.height = 2000 - band
+        watch.invalidate()
+        XCTAssertTrue(seen.contains { abs($0 - (2000 - band - viewport)) < 0.5 },
+                      "UIKit did not clamp first, so this test proves nothing: \(seen)")
+        XCTAssertEqual(view.contentOffset.y, 1400 - band, accuracy: 0.01)
+    }
+
+    func testBandThatNoScrollCanHideIsReportedUnreachable() {
+        let state = TimelineBoundaryExtensionState(leadingHours: 12, trailingHours: 12, source: nil)
+        func canLeave(hourHeight hh: CGFloat, bottomPad: CGFloat = 60) -> (leading: Bool, trailing: Bool) {
+            let contentHeight = topInset + header + 48 * hh + bottomPad
+            return calendarTimelineBoundaryExtensionCanLeaveView(
+                contentHeight: contentHeight, viewportHeight: viewport,
+                contentTopInset: topInset, allDayHeight: 0, headerHeight: header,
+                hourHeight: hh, state: state
+            )
+        }
+        // A day well taller than the screen: both sides can be scrolled away.
+        XCTAssertTrue(canLeave(hourHeight: 44).leading)
+        XCTAssertTrue(canLeave(hourHeight: 44).trailing)
+        // 24 h plus what lies below 24:00 shorter than the screen: the band
+        // above can never cross the top edge.
+        XCTAssertFalse(canLeave(hourHeight: 12).leading)
+        // Today's 24:00 above the screen's bottom at offset 0: the band below
+        // can never cross the bottom edge.
+        let below = calendarTimelineBoundaryExtensionCanLeaveView(
+            contentHeight: topInset + header + 36 * 12 + 60, viewportHeight: viewport,
+            contentTopInset: topInset, allDayHeight: 0, headerHeight: header, hourHeight: 12,
+            state: TimelineBoundaryExtensionState(leadingHours: 0, trailingHours: 12, source: nil)
+        )
+        XCTAssertFalse(below.trailing)
+        XCTAssertTrue(below.leading, "a closed side is never unreachable")
+    }
+
     func testKeeperDoesNothingUnarmed() {
         let view = scrollView(contentHeight: 2000, offsetY: 700)
         let keeper = BoundaryBandOffsetKeeper()

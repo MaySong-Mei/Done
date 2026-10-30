@@ -117,9 +117,9 @@ enum AppSettingsKeys {
     /// uses a `UIScrollView`-backed host (`TimelineScrollHost`) instead of
     /// the SwiftUI `ScrollView`. The new host can atomically co-commit
     /// `contentSize` + `contentOffset` in a single `CATransaction`, so the
-    /// boundary-extension close path (today covered by the
-    /// `timelineCollapseDim` opacity dip) collapses without a 1-frame
-    /// layout flash. Strict parity, default OFF until on-device A/B
+    /// boundary-extension close path collapses without a 1-frame layout
+    /// flash. (The SwiftUI path now gets the same from
+    /// `BoundaryBandOffsetKeeper`, gh#279.) Strict parity, default OFF until on-device A/B
     /// settles. See `TimelineScrollHost.swift` (issue #57).
     static let calendarUseUIScrollViewTimeline = "calendarUseUIScrollViewTimeline"
 

@@ -19,18 +19,34 @@ final class BoundaryBandOffsetKeeper {
     private(set) weak var scrollView: UIScrollView?
     private var observation: NSKeyValueObservation?
     private var pending: (heightChange: CGFloat, armedAt: CFTimeInterval)?
+    /// The offset just before the content size changes. When the scroll is
+    /// at rest, UIKit clamps the offset into the shorter range before the
+    /// change is reported, and that clamped value is not where the user was.
+    private var offsetBeforeSizeChange: CGFloat?
     /// How long an armed shift waits for the content to shrink. The shrink
     /// lands in the layout pass right after the state write, so anything
     /// later is some other change.
     private let armWindow: CFTimeInterval = 0.25
 
+    /// True while a finger or a coast is moving the scroll. A
+    /// `ScrollPosition` write then loses to the finger, or stops the coast.
+    var userIsScrolling: Bool {
+        guard let scrollView else { return false }
+        return scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating
+    }
+
     func attach(_ candidate: UIScrollView) {
         guard candidate !== scrollView else { return }
         scrollView = candidate
         pending = nil
-        observation = candidate.observe(\.contentSize, options: [.old, .new]) { [weak self] view, change in
+        observation = candidate.observe(\.contentSize, options: [.prior, .old, .new]) { [weak self] view, change in
             MainActor.assumeIsolated {
-                self?.contentSizeChanged(view, old: change.oldValue ?? .zero, new: change.newValue ?? .zero)
+                guard let self else { return }
+                if change.isPrior {
+                    self.offsetBeforeSizeChange = view.contentOffset.y
+                    return
+                }
+                self.contentSizeChanged(view, old: change.oldValue ?? .zero, new: change.newValue ?? .zero)
             }
         }
     }
@@ -52,13 +68,16 @@ final class BoundaryBandOffsetKeeper {
     }
 
     private func contentSizeChanged(_ view: UIScrollView, old: CGSize, new: CGSize) {
+        let reportedBefore = offsetBeforeSizeChange
+        offsetBeforeSizeChange = nil
         guard let p = pending else { return }
         let shrink = new.height - old.height
         // Only a shrink of at least half the band is this close; a content
         // change that grows, or barely moves, is something else.
         guard shrink <= p.heightChange / 2 else { return }
         pending = nil
-        let before = view.contentOffset.y
+        let atReport = view.contentOffset.y
+        let before = reportedBefore ?? atReport
         let after = max(-view.adjustedContentInset.top, before + p.heightChange)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -70,6 +89,7 @@ final class BoundaryBandOffsetKeeper {
                 "heightChange": String(format: "%.1f", p.heightChange),
                 "contentShrink": String(format: "%.1f", shrink),
                 "before": String(format: "%.1f", before),
+                "atReport": String(format: "%.1f", atReport),
                 "after": String(format: "%.1f", after),
                 "dragging": "\(view.isDragging)",
                 "decelerating": "\(view.isDecelerating)",
