@@ -413,7 +413,7 @@ enum LKey {
     case cloudOverwritesLocalHint, keepAllLocal, keepAllLocalHint, keepAllCloud
     case keepAllCloudHint, reviewEachIndividually, reviewEachHint, applyMerge
     case restoreComplete, restoreFailed, keepLocal, keepCloud, restoreSnapshotOutdated
-    case restoreKeptDeletesFormat, restoreKeptDeletesOne
+    case restoreKeptDeletesFormat, restoreKeptDeletesOne, restoreKeptDeletedTag
 
     // People & Friend Groups
     case withWhom, people, friendGroups, peopleAndGroups, selectPeople
@@ -1238,6 +1238,7 @@ enum LKey {
         case .restoreSnapshotOutdated: return "The account, or this device's sync state, changed after the backup was read. Nothing on this device was changed. Tap Try again to read the backup again."
         case .restoreKeptDeletesFormat: return "%d rows you deleted on this device stay deleted, and the deletions still sync to the cloud."
         case .restoreKeptDeletesOne: return "%d row you deleted on this device stays deleted, and the deletion still syncs to the cloud."
+        case .restoreKeptDeletedTag: return "%d stay deleted"
         }
     }
 
@@ -1949,6 +1950,7 @@ enum LKey {
         case .restoreSnapshotOutdated: return "读取备份之后，账户或这台设备的同步状态发生了变化。这台设备上的数据没有任何改动。点「重试」重新读取备份。"
         case .restoreKeptDeletesFormat: return "你在这台设备上删除的 %d 条记录会保持删除，删除仍会同步到云端。"
         case .restoreKeptDeletesOne: return "你在这台设备上删除的 %d 条记录会保持删除，删除仍会同步到云端。"
+        case .restoreKeptDeletedTag: return "%d 条保持删除"
         }
     }
 }

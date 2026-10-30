@@ -81,7 +81,7 @@ struct ConflictReport: Equatable {
 }
 
 /// Full preview of what `merge` will do to the local store, computed before
-/// the user picks a resolution. Four independent counts per table:
+/// the user picks a resolution. Independent counts per table:
 ///   - `conflicts`: same identity on both sides with different content
 ///   - `addsFromCloud`: cloud has it, local doesn't → will be added
 ///   - `keepsLocalOnly`: local has it, cloud doesn't → will stay untouched
@@ -385,12 +385,12 @@ final class RestoreCoordinator: ObservableObject {
         }
 
         // A merge leaves out the cloud rows this device deleted without the
-        // delete reaching the cloud. Read here, after the refusal check and
-        // with no suspension before the mutations below and the replay in
-        // `markRestoreCompleted`: the set names exactly the deletes in the
-        // baseline the replay keeps entries from, against the local rows the
-        // merge starts from. The preview's count was read earlier and only
-        // informs the review.
+        // delete reaching the cloud, and the replay in `markRestoreCompleted`
+        // keeps those deletes' entries. Read here: after the refusal check,
+        // before `applyRestore` and `clearCatalogFault` unfreeze anything (a
+        // frozen table's emptiness is not a delete), and with no suspension
+        // before the mutations and the replay. The preview's count was read
+        // earlier and only informs the review.
         let pendingDeletes: RestorePendingDeletes = {
             guard strategy == .merge, let syncService else { return .none }
             return syncService.pendingDeletes(in: snapshot, eventStore: eventStore,
@@ -525,7 +525,8 @@ final class RestoreCoordinator: ObservableObject {
             eventTypeStore: eventTypeStore,
             skillStore: skillStore,
             snapshot: snapshot,
-            strategy: strategy
+            strategy: strategy,
+            keepingDeletes: pendingDeletes.baselineIds
         )
 
         // After structured restore, pull any cloud-backed image binaries
