@@ -13,8 +13,9 @@
 //    account test signs out, which the epoch check would also refuse);
 //  - a sign-out while the loading frame is awaited (the check must run
 //    after the wait);
-//  - a fetch taken before the device first saw the server's epoch (nil →
-//    set is a first sighting and must apply);
+//  - a fetch taken before the device first saw the server's epoch: refused
+//    under 19309fe3's strict rule, and Try again applies (before 19309fe3
+//    this test asserted the first-sighting pass);
 //  - the replayed baseline is on disk, with the generations the rewound
 //    cursor expects, when the apply returns;
 //  - a fetch with no cursor: the rewind goes to the start of the feed and
@@ -214,9 +215,13 @@ final class SyncRestoreStaleSnapshotFixQATests: SyncRestoreAndSwitchTestCase {
 
     /// The fetch ran before this device had ever recorded the server's
     /// epoch (a cursor key from before epochs); the pull during the review
-    /// records it. That is a first sighting, which resets nothing: the
-    /// apply goes ahead. Kills QA mutant "a nil epoch at the fetch refuses".
-    func testAFetchTakenBeforeTheFirstEpochSightingStillApplies() async throws {
+    /// records it — a first sighting, no reset. Under 19309fe3's strict
+    /// rule (the epoch at the apply must be the fetch's, none included)
+    /// that is refused, since a first sighting followed by a reset looks the
+    /// same once the reset's catch-up is done. The cost is one Try again:
+    /// the second fetch carries the epoch and applies. (This test asserted
+    /// the opposite, the first-sighting pass, before 19309fe3.)
+    func testAFetchTakenBeforeTheFirstEpochSighting_isRefused_andTryAgainApplies() async throws {
         let x = makeEvent("X", note: "v1")
         let s0 = try await seedAndPull(x)
         defaults.set(NSNumber(value: s0), forKey: SyncBaselineStore.key(userId: uid, table: SyncCursorStore.tableLabel))
@@ -228,13 +233,28 @@ final class SyncRestoreStaleSnapshotFixQATests: SyncRestoreAndSwitchTestCase {
         XCTAssertNil(snapshot.fetchMark?.epoch, "fixture: the mark carries no epoch")
         let peerSeq = try await peerEditPulled(x, note: "peer")
         XCTAssertNotNil(service.cursor.epoch, "fixture: the review's pull recorded the server's epoch")
+        let entryBefore = entry(x)
         DiagnosticTrail.clear()
 
         try await keepCloud(c)
 
-        guard case .finished = c.phase else { return XCTFail("a first epoch sighting refused the restore: \(c.phase)") }
+        XCTAssertEqual(c.phase, .failed(L(.restoreSnapshotOutdated)), "a fetch that saw no epoch applied after the first one was recorded")
+        XCTAssertEqual(trailLines("restore REFUSED reason=epoch").count, 1)
+        XCTAssertEqual(trailLines("restore APPLY").count, 0, "the restore ran")
+        XCTAssertEqual(local(x.id)?.note, "peer", "the refused keep-cloud replaced X")
+        XCTAssertEqual(entry(x), entryBefore, "the refused restore touched the baseline")
+        XCTAssertEqual(service.cursor.value, peerSeq, "the refused restore moved the cursor")
+
+        // Try again, as the failed page's button does.
+        c.reset()
+        let again = try await fetch(c)
+        XCTAssertEqual(again.fetchMark?.epoch, service.cursor.epoch, "fixture: the second fetch saw the epoch")
+        DiagnosticTrail.clear()
+        await c.prepareMerge()
+        if case .mergeReview = c.phase { await c.applyMerge(resolution: .keepCloud) }
+        guard case .finished = c.phase else { return XCTFail("Try again did not apply: \(c.phase)") }
         XCTAssertEqual(trailLines("restore REFUSED").count, 0)
-        try await syncEventually("the restore's pull brought the peer's X back") { self.local(x.id)?.note == "peer" }
+        XCTAssertEqual(local(x.id)?.note, "peer")
         XCTAssertEqual(entry(x)?.seq, peerSeq)
     }
 
