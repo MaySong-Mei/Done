@@ -3702,8 +3702,11 @@ private extension CalendarPageView {
             UINotificationFeedbackGenerator().notificationOccurred(.warning)
         }
 
+        // The live offset, not `timelineVerticalScrollY`: that one only
+        // follows changes of 2pt or more, and the write below lands after
+        // the keeper's exact shift. (gh#279)
         let targetY = calendarResolvedVerticalScrollOffsetForBoundaryExtensionChange(
-            currentOffsetY: timelineVerticalScrollY,
+            currentOffsetY: boundaryBandOffsetKeeper.liveOffsetY ?? timelineVerticalScrollY,
             previousState: previousState,
             newState: newState,
             hourHeight: calendarState.timelineHourHeight
@@ -3793,8 +3796,10 @@ private extension CalendarPageView {
     /// tick. (gh#279)
     ///
     /// `closeUnreachable`: also close a side that no scroll can take out of
-    /// view any more, which a zoom-out leaves behind. Only at the end of a
-    /// pinch, where the whole timeline has just changed under the user.
+    /// view any more, which a zoom-out leaves behind, or scrolling the other
+    /// side away when both were open. Only where the timeline has just
+    /// changed under the user or come to rest: the end of a pinch, and
+    /// the scroll settling.
     func collapseTimelineBoundaryExtensionsIfNeeded(
         topOverlayInset: CGFloat,
         closeUnreachable: Bool = false
@@ -4018,6 +4023,15 @@ private extension CalendarPageView {
             let isScrollingNow = (newPhase == .interacting || newPhase == .decelerating)
             if isVerticallyScrolling != isScrollingNow {
                 isVerticallyScrolling = isScrollingNow
+            }
+            // With both bands open, scrolling one away can leave the other
+            // where no scroll reaches past it; close that one once the
+            // scroll comes to rest. (gh#279)
+            if newPhase == .idle {
+                collapseTimelineBoundaryExtensionsIfNeeded(
+                    topOverlayInset: topOverlayInset,
+                    closeUnreachable: true
+                )
             }
         }
         // FINGER-DRIVEN dissolve: re-run on every drag-offset change so an

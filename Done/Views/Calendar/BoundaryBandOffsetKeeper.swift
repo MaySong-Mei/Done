@@ -39,6 +39,9 @@ final class BoundaryBandOffsetKeeper {
         return scrollView.isDragging || scrollView.isDecelerating
     }
 
+    /// Where the scroll is right now; nil before a scroll view is attached.
+    var liveOffsetY: CGFloat? { scrollView?.contentOffset.y }
+
     func attach(_ candidate: UIScrollView) {
         guard candidate !== scrollView else { return }
         scrollView = candidate
