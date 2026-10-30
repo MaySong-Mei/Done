@@ -15089,7 +15089,8 @@ final class CalendarDayColumnPreviewTests: XCTestCase {
 }
 
 /// gh#279: a band closes only once it is wholly out of view, and a band
-/// above today closes with the offset moved in the same layout pass.
+/// above today opens and closes with the offset moved in the same layout
+/// pass.
 @MainActor
 final class BoundaryBandCloseTests: XCTestCase {
     private let hourHeight: CGFloat = 44
@@ -15146,6 +15147,18 @@ final class BoundaryBandCloseTests: XCTestCase {
         XCTAssertTrue(keeper.expect(heightChange: -band))
         view.contentSize.height = 2000 - band
         XCTAssertEqual(view.contentOffset.y, 700 - band, accuracy: 0.01)
+    }
+
+    func testKeeperMovesTheOffsetInsideTheContentGrowthWhenTheBandOpens() {
+        let band = 12 * hourHeight
+        let view = scrollView(contentHeight: 1500, offsetY: 40)
+        let keeper = BoundaryBandOffsetKeeper()
+        keeper.attach(view)
+        XCTAssertTrue(keeper.expect(heightChange: band))
+        view.contentSize.height = 1400          // shrinks: not this band
+        XCTAssertEqual(view.contentOffset.y, 40, accuracy: 0.01)
+        view.contentSize.height = 1400 + band
+        XCTAssertEqual(view.contentOffset.y, 40 + band, accuracy: 0.01)
     }
 
     func testKeeperShiftsOnlyOnce() {

@@ -204,10 +204,11 @@ struct TimelineHorizontalScrollProgress: Equatable {
 
 // Extracted for regression tests: boundary-extension reflow does not animate
 // during drag. SwiftUI animating `leading` would interpolate event canvas
-// rows over the spring, fighting our CADisplayLink animator that drives
-// scroll + `.offset` together in lockstep (#55). The visual "unfold" comes
-// entirely from the offset modifier, not from animating `leading` itself.
-// Outside drag, the spring is fine because no animator path is engaged.
+// rows over the spring while the scroll offset has already moved by the
+// band's height (#55). Band changes that move the offset are also written
+// with animations disabled at the source (`applyTimelineBoundaryExtensionState`,
+// gh#279), so a resize drag, which this guard doesn't cover, doesn't spring
+// either.
 //
 // Same suppression applies during the follow-event-across-midnight re-
 // anchor (#55): when the atomic swap flips `leading` (0↔12), SwiftUI's
@@ -1258,9 +1259,6 @@ struct TimelinePagerView: View {
     @Binding var selectedDayOffset: Int
     @Binding var rangeMode: RangeMode
     @Binding var hourHeight: CGFloat
-    /// #55: visual y-offset applied to timeline content during OPEN animation
-    /// so events stay glued to finger while scroll catches up. Default 0.
-    var boundaryExtensionVisualYOffset: CGFloat = 0
     /// #55: when true, skip the day-column horizontal swipe animation when
     /// `selectedDayOffset` changes. Used by follow-event-across-midnight so
     /// its math-equivalent atomic swap is invisible (no horizontal slide).
@@ -1802,11 +1800,6 @@ struct TimelinePagerView: View {
             .padding(.horizontal, timelineEdgePadding)
             .scaleEffect(x: rangePinchVisualScale, y: rangePinchVisualScaleY, anchor: .center)
             .simultaneousGesture(rangePinchGesture)
-            // #55: visual offset cancels the leading-snap canvas-row jump so
-            // dragged events stay glued to the finger. Driven by the
-            // CADisplayLink animator in CalendarPageView, animates from
-            // -delta → 0 over 0.28s in lockstep with scrollTo. Idle = 0.
-            .offset(y: boundaryExtensionVisualYOffset)
             .animation(boundaryExtensionAnimation, value: boundaryExtensionHours.leading)
             .animation(boundaryExtensionAnimation, value: boundaryExtensionHours.trailing)
             // Spec 07 §5 row S4 — dragState mirror channel (dragPreviewDayStep).

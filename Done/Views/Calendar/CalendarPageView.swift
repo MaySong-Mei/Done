@@ -1148,17 +1148,6 @@ struct CalendarPageView: View {
     @State private var allDayOccurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
     @State private var maxAllDayCountCache: Int = 0
     @State private var dayRange: ClosedRange<Int> = CalendarLayout.defaultDayRange
-    /// #55: visual y-offset applied to TimelineView content during the
-    /// boundary-extension OPEN animation. Cancels the layout jump caused
-    /// by `leading` snapping to 12 in logical state while scroll catches
-    /// up over 0.28s. Computed each animator tick as `scrollY - targetY`
-    /// (negative during animation, 0 at end), so events stay glued to the
-    /// finger position visually:
-    ///   event_viewport_y = layout_y + dragOffset.y + visualOffset - scrollY
-    ///                    = layout_y + dragOffset.y + (scrollY - targetY) - scrollY
-    ///                    = layout_y + dragOffset.y - targetY
-    /// which equals the pre-open position + finger delta.
-    @State private var boundaryExtensionVisualYOffset: CGFloat = 0
     @State private var selectedEventDetailRoute: CalendarEventDetailRoute? = nil
     @State private var selectedEventChatOccurrence: CalendarEventOccurrenceContext? = nil
     @State private var selectedEventForEdit: Event? = nil
@@ -1348,11 +1337,6 @@ struct CalendarPageView: View {
     @State private var isVerticallyScrolling: Bool = false
     @State private var timelineVisibleDayFrameGlobal: CGRect = .zero
     @State private var pendingBoundaryExtensionScrollTask: Task<Void, Never>? = nil
-    /// Spring animator for the proactive boundary-extension OPEN transition
-    /// during drag. CADisplayLink-paced, runs scrollTo 60×/sec over ~0.28s in
-    /// lockstep with `.animation(_:value:leading)` so the canvas unfolds
-    /// smoothly instead of snapping. (#55)
-    @State private var boundaryExtensionScrollAnimator: BoundaryExtensionScrollAnimator? = nil
     /// Single-overshoot scroll rebounce after a cross-midnight commit
     /// follows the event to the new day. CADisplayLink-driven, ~0.4s, one
     /// damped half-sine peak. Decouples cleanly from the open animator —
@@ -3532,7 +3516,16 @@ private extension CalendarPageView {
             if newState.hasAnyExtension {
                 // In the zone (intent to cross) → keep the band solid.
                 if !wasOpen {
-                    fadeInBoundaryExtension()
+                    // Solid from the first frame. The offset moves with the
+                    // open, so the band arrives above or below what's on
+                    // screen and scrolls in; a fade-in only left the part of
+                    // the dragged event inside it faint, as if cut. (gh#279)
+                    var solidTransaction = Transaction()
+                    solidTransaction.disablesAnimations = true
+                    withTransaction(solidTransaction) {
+                        timelineLeadingFadeProgress = 0
+                        timelineTrailingFadeProgress = 0
+                    }
                 } else {
                     // Re-engaging: make SOLID only the side(s) currently being
                     // crossed (per `newState`). Leave the other side at its
@@ -3716,21 +3709,23 @@ private extension CalendarPageView {
             hourHeight: calendarState.timelineHourHeight
         )
 
-        // Hours leaving the top of the content move everything below them
-        // up, so the offset must drop by the same height in the pass the
-        // content shrinks, whatever the finger or a coast is doing. The
-        // keeper does that from inside the scroll view; the band's height
-        // change must not spring, or the rows would slide while the offset
-        // has already moved. (gh#279)
-        let leadingClosing = newState.leadingHours < previousState.leadingHours
-        let keeperHoldsOffset = leadingClosing && boundaryBandOffsetKeeper.expect(
-            heightChange: -CGFloat(previousState.leadingHours - newState.leadingHours)
-                * calendarState.timelineHourHeight
-        )
-        if leadingClosing {
-            var closeTransaction = Transaction()
-            closeTransaction.disablesAnimations = true
-            withTransaction(closeTransaction) {
+        // The band above today sits at the top of the content, so opening or
+        // closing it moves everything below by its height, and the offset
+        // must move by the same height in the pass the content resizes,
+        // whatever a finger, a coast or an edge autoscroll is doing. The
+        // keeper does that from inside the scroll view. The band's height
+        // must not spring then, or the rows would slide while the offset has
+        // already moved. (gh#279) A focus expand keeps its deferred write.
+        let leadingDelta = newState.leadingHours - previousState.leadingHours
+        let keeperHoldsOffset = leadingDelta != 0
+            && newState.source != .focused
+            && boundaryBandOffsetKeeper.expect(
+                heightChange: CGFloat(leadingDelta) * calendarState.timelineHourHeight
+            )
+        if keeperHoldsOffset {
+            var bandTransaction = Transaction()
+            bandTransaction.disablesAnimations = true
+            withTransaction(bandTransaction) {
                 timelineBoundaryExtensionState = newState
             }
         } else {
@@ -3759,54 +3754,19 @@ private extension CalendarPageView {
         guard let targetY else { return }
 
         pendingBoundaryExtensionScrollTask?.cancel()
-        if boundaryExtensionScrollAnimator != nil {
-            boundaryExtensionScrollAnimator?.cancel(reason: "applyState reentry")
-            boundaryExtensionScrollAnimator = nil
-            boundaryExtensionVisualYOffset = 0
-        }
-        // While a finger or a coast moves the scroll, the keeper alone moves
-        // the offset: a ScrollPosition write would lose to the finger or stop
-        // the coast. At rest the write goes too. SwiftUI applies it after the
-        // keeper in the same update, so it replaces any target a scripted
-        // scroll (the settle, the follow) queued this update in the old,
-        // band-open coordinates.
-        if keeperHoldsOffset, boundaryBandOffsetKeeper.userIsScrolling { return }
-        let targetPoint = CGPoint(x: 0, y: targetY)
-
-        // Spring-animate scroll when opening the extension during drag
-        // (#55): SwiftUI ScrollPosition.scrollTo snaps in one frame on iOS
-        // 26 regardless of ambient animation, so we feed it 60 interpolated
-        // targets/sec from a CADisplayLink. The `.animation(_:value:)`
-        // modifier on `leading` springs over the same 0.28s duration, so
-        // both canvas height and scroll position move on the same time
-        // axis and the dragged event stays glued to its visible window
-        // position as the canvas unfolds above it.
-        if leadingOpened, newState.source == .moveDrag || newState.source == .resizeTop {
-            let startY = timelineVerticalScrollY
-            let delta = targetY - startY
-            // Seed the visual offset to -delta so the first rendered frame
-            // shows pre-open positions (cancels the leading-snap layout jump).
-            boundaryExtensionVisualYOffset = -delta
-            boundaryExtensionScrollAnimator = BoundaryExtensionScrollAnimator(
-                onTick: { progress in
-                    let y = startY + delta * progress
-                    // offset = scrollY - targetY: at progress=0 → -delta, at progress=1 → 0.
-                    // Keeps events glued to their pre-open visible position throughout the spring.
-                    let offset = y - targetY
-                    var transaction = Transaction()
-                    transaction.disablesAnimations = true
-                    withTransaction(transaction) {
-                        scrollVerticallyTo(y: y)
-                        boundaryExtensionVisualYOffset = offset
-                    }
-                },
-                onComplete: {
-                    boundaryExtensionVisualYOffset = 0
-                    boundaryExtensionScrollAnimator = nil
-                }
-            )
+        // The keeper alone moves the offset while the user moves the scroll
+        // (a ScrollPosition write loses to the finger or stops the coast) and
+        // during an edit drag (the edge autoscroll moves the offset between
+        // this read of it and the write's landing; this replaces the 0.28 s
+        // open animator, whose absolute writes stalled that autoscroll). At
+        // rest the write goes too: SwiftUI applies it after the keeper in the
+        // same update, so it replaces any target a scripted scroll (the
+        // settle, the follow) queued this update in the old coordinates.
+        if keeperHoldsOffset,
+           boundaryBandOffsetKeeper.userIsScrolling || newState.source != nil {
             return
         }
+        let targetPoint = CGPoint(x: 0, y: targetY)
 
         if calendarShouldApplyBoundaryExtensionScrollCompensationImmediately(source: newState.source) {
             pendingBoundaryExtensionScrollTask = nil
@@ -3844,10 +3804,7 @@ private extension CalendarPageView {
         // A scripted settle owns the offset until it finishes and closes the
         // band itself; closing under it would leave its next frame in the
         // old coordinates.
-        guard sameDayRebounceAnimator == nil,
-              crossDayRebounceAnimator == nil,
-              boundaryExtensionScrollAnimator == nil
-        else { return }
+        guard sameDayRebounceAnimator == nil, crossDayRebounceAnimator == nil else { return }
 
         let visibility = calendarTimelineBoundaryExtensionVisibility(
             currentOffsetY: timelineVerticalScrollY,
@@ -3908,16 +3865,12 @@ private extension CalendarPageView {
         guard timelineBoundaryExtensionState != .none
             || timelineRawBoundaryExtensionState != .none
             || pendingBoundaryExtensionScrollTask != nil
-            || boundaryExtensionScrollAnimator != nil
             || sameDayRebounceAnimator != nil
         else { return }
         pendingBoundaryExtensionScrollTask?.cancel()
         pendingBoundaryExtensionScrollTask = nil
-        boundaryExtensionScrollAnimator?.cancel(reason: "clearState")
-        boundaryExtensionScrollAnimator = nil
         sameDayRebounceAnimator?.cancel()
         sameDayRebounceAnimator = nil
-        boundaryExtensionVisualYOffset = 0
         // Restore the per-side fades so a teardown landing mid-animation
         // (leave day mode / change day / detail route) can't strand the
         // timeline faded. (#55)
@@ -4463,7 +4416,6 @@ private extension CalendarPageView {
             selectedDayOffset: $calendarState.selectedDayOffset,
             rangeMode: $calendarState.rangeMode,
             hourHeight: timelineHourHeightBinding,
-            boundaryExtensionVisualYOffset: boundaryExtensionVisualYOffset,
             suppressDayColumnHorizontalAnimation: suppressDayColumnHorizontalAnimation,
             useImperativeDayLayerModel: usesImperativeDayLayerModel,
             leadingFadeProgress: timelineLeadingFadeProgress,

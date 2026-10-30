@@ -12,7 +12,7 @@
 //  SpikeRun through SpikeRunStore. The runner never assigns either seam
 //  itself. Production views know nothing about this file.
 //
-//  CADisplayLink usage mirrors BoundaryExtensionScrollAnimator's idiom
+//  CADisplayLink usage mirrors CalendarRebounceAnimator's idiom
 //  (NSObject target + `@objc` tick selector added to `.main`/`.common`) —
 //  ported, not reinvented, per gh#197 comment #1's instrumentation
 //  inventory.

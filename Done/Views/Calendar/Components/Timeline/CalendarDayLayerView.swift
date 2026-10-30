@@ -611,6 +611,11 @@ final class DayLayerHostView: UIView {
 
     private var pool: [String: EventLayers] = [:]
     private var currentModel: Model?
+    /// Band hours above today at the last full render. A band opening or
+    /// closing there moves the y of every time by its height while the
+    /// scroll offset moves with it, so the screen stays still; the reflow
+    /// spring's remembered positions have to move the same way. (gh#279)
+    private var lastRenderedLeadingHours: Int?
 
     /// Blocks whose event was just deleted, detached from `pool` and left in
     /// the layer tree until their delete motion plays (`EventDeletionMotion`).
@@ -1652,6 +1657,20 @@ final class DayLayerHostView: UIView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
+
+        // A band above today opened or closed: carry each block's reflow
+        // origin into the new coordinates, or a block that also re-columns
+        // springs in from 12 h away. A spring already running was built in
+        // the old coordinates; it ends here and the block takes its frame.
+        if let lastLeading = lastRenderedLeadingHours, lastLeading != model.leadingExtendedHours {
+            let shift = CGFloat(model.leadingExtendedHours - lastLeading) * model.hourHeight
+            for layers in pool.values {
+                if layers.lastBlockY.isFinite { layers.lastBlockY += shift }
+                layers.container.removeAnimation(forKey: "s5.reflow.position")
+                layers.container.removeAnimation(forKey: "s5.reflow.bounds")
+            }
+        }
+        lastRenderedLeadingHours = model.leadingExtendedHours
 
         // Horizontal placement comes from `CalendarLayout.overlapLayout`:
         // greedy column packing, with the committed (`.auto`) render allowed

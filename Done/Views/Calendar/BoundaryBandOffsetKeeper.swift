@@ -1,19 +1,21 @@
 import SwiftUI
 import UIKit
 
-/// Keeps the single-day timeline still when the band above today closes.
+/// Keeps the single-day timeline still when the band above today opens or
+/// closes.
 ///
-/// Closing that band takes its hours off the top of the scroll content, so
-/// the offset has to drop by the same height in the frame the shorter
-/// content first draws. A `ScrollPosition` write can't promise that: while a
-/// finger is down, UIKit's pan keeps writing the offset from where it thinks
-/// the content is, and the whole day jumps by the band's height. The keeper
-/// instead moves `contentOffset` from inside the scroll view's own
-/// `contentSize` change, the layout pass that shrinks the content, so a drag
-/// or a coast carries on from the moved offset.
+/// That band's hours sit at the top of the scroll content, so opening or
+/// closing it moves everything below by its height, and the offset has to
+/// move by the same height in the frame the new content first draws. A
+/// `ScrollPosition` write can't promise that: while a finger is down,
+/// UIKit's pan keeps writing the offset from where it thinks the content
+/// is, and an edge autoscroll moves the offset between the write's read and
+/// its landing. The keeper instead moves `contentOffset` from inside the
+/// scroll view's own `contentSize` change, the layout pass that resizes the
+/// content, so a drag, a coast or an autoscroll carries on from there.
 ///
-/// A band below today needs none of this: its hours leave the bottom of the
-/// content and nothing above the viewport moves.
+/// A band below today needs none of this: its hours come and go at the
+/// bottom of the content and nothing above the viewport moves.
 @MainActor
 final class BoundaryBandOffsetKeeper {
     private(set) weak var scrollView: UIScrollView?
@@ -23,16 +25,18 @@ final class BoundaryBandOffsetKeeper {
     /// at rest, UIKit clamps the offset into the shorter range before the
     /// change is reported, and that clamped value is not where the user was.
     private var offsetBeforeSizeChange: CGFloat?
-    /// How long an armed shift waits for the content to shrink. The shrink
+    /// How long an armed shift waits for the content to resize. The resize
     /// lands in the layout pass right after the state write, so anything
     /// later is some other change.
     private let armWindow: CFTimeInterval = 0.25
 
     /// True while a finger or a coast is moving the scroll. A
     /// `ScrollPosition` write then loses to the finger, or stops the coast.
+    /// A finger merely resting on the content doesn't count: UIKit takes a
+    /// write until the pan begins.
     var userIsScrolling: Bool {
         guard let scrollView else { return false }
-        return scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating
+        return scrollView.isDragging || scrollView.isDecelerating
     }
 
     func attach(_ candidate: UIScrollView) {
@@ -51,12 +55,12 @@ final class BoundaryBandOffsetKeeper {
         }
     }
 
-    /// Arms one offset shift of `heightChange` (negative: the band's height)
-    /// for the next time the content shrinks. Returns false when no scroll
-    /// view is attached, so the caller falls back to a `ScrollPosition`
-    /// write.
+    /// Arms one offset shift of `heightChange` (the band's height: positive
+    /// when it opens, negative when it closes) for the next time the content
+    /// resizes that way. Returns false when no scroll view is attached, so
+    /// the caller falls back to a `ScrollPosition` write.
     func expect(heightChange: CGFloat) -> Bool {
-        guard scrollView != nil, heightChange < 0 else { return false }
+        guard scrollView != nil, heightChange != 0 else { return false }
         let stamp = CACurrentMediaTime()
         pending = (heightChange, stamp)
         DispatchQueue.main.asyncAfter(deadline: .now() + armWindow) { [weak self] in
@@ -71,10 +75,10 @@ final class BoundaryBandOffsetKeeper {
         let reportedBefore = offsetBeforeSizeChange
         offsetBeforeSizeChange = nil
         guard let p = pending else { return }
-        let shrink = new.height - old.height
-        // Only a shrink of at least half the band is this close; a content
-        // change that grows, or barely moves, is something else.
-        guard shrink <= p.heightChange / 2 else { return }
+        let resize = new.height - old.height
+        // Only a resize the band's way by at least half its height is this
+        // band; one the other way, or one that barely moves, is something else.
+        guard resize * p.heightChange > 0, abs(resize) >= abs(p.heightChange) / 2 else { return }
         pending = nil
         let atReport = view.contentOffset.y
         let before = reportedBefore ?? atReport
@@ -87,7 +91,7 @@ final class BoundaryBandOffsetKeeper {
             "band.keeper.shift",
             fields: [
                 "heightChange": String(format: "%.1f", p.heightChange),
-                "contentShrink": String(format: "%.1f", shrink),
+                "contentResize": String(format: "%.1f", resize),
                 "before": String(format: "%.1f", before),
                 "atReport": String(format: "%.1f", atReport),
                 "after": String(format: "%.1f", after),
