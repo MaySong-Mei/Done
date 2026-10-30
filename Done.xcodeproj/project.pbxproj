@@ -386,6 +386,7 @@
 		QAOS10013000000000000501 /* ObsReadQAScanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QAOS00013000000000000501 /* ObsReadQAScanTests.swift */; };
 		QAOE10013000000000000502 /* ObsReadQAEraseRowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QAOE00013000000000000502 /* ObsReadQAEraseRowTests.swift */; };
 		SPEW10013000000000000601 /* SpikeEraseWritebackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPEW00013000000000000601 /* SpikeEraseWritebackTests.swift */; };
+		QASW10013000000000000701 /* SpikeEraseWritebackQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QASW00013000000000000701 /* SpikeEraseWritebackQATests.swift */; };
 		QAOF10013000000000000503 /* ObsReadQAFormatCompatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QAOF00013000000000000503 /* ObsReadQAFormatCompatTests.swift */; };
 		QAOM10013000000000000504 /* ObsReadQAMainThreadCostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QAOM00013000000000000504 /* ObsReadQAMainThreadCostTests.swift */; };
 		APTF10013000000000000301 /* AgentPreferencesTokenFreeSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = APTF00013000000000000301 /* AgentPreferencesTokenFreeSyncTests.swift */; };
@@ -862,6 +863,7 @@
 		QAOS00013000000000000501 /* ObsReadQAScanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObsReadQAScanTests.swift; sourceTree = "<group>"; };
 		QAOE00013000000000000502 /* ObsReadQAEraseRowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObsReadQAEraseRowTests.swift; sourceTree = "<group>"; };
 		SPEW00013000000000000601 /* SpikeEraseWritebackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeEraseWritebackTests.swift; sourceTree = "<group>"; };
+		QASW00013000000000000701 /* SpikeEraseWritebackQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeEraseWritebackQATests.swift; sourceTree = "<group>"; };
 		QAOF00013000000000000503 /* ObsReadQAFormatCompatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObsReadQAFormatCompatTests.swift; sourceTree = "<group>"; };
 		QAOM00013000000000000504 /* ObsReadQAMainThreadCostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObsReadQAMainThreadCostTests.swift; sourceTree = "<group>"; };
 		APTF00013000000000000301 /* AgentPreferencesTokenFreeSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentPreferencesTokenFreeSyncTests.swift; sourceTree = "<group>"; };
@@ -1110,6 +1112,7 @@
 				QAOS00013000000000000501 /* ObsReadQAScanTests.swift */,
 				QAOE00013000000000000502 /* ObsReadQAEraseRowTests.swift */,
 				SPEW00013000000000000601 /* SpikeEraseWritebackTests.swift */,
+				QASW00013000000000000701 /* SpikeEraseWritebackQATests.swift */,
 				QAOF00013000000000000503 /* ObsReadQAFormatCompatTests.swift */,
 				QAOM00013000000000000504 /* ObsReadQAMainThreadCostTests.swift */,
 				APTF00013000000000000301 /* AgentPreferencesTokenFreeSyncTests.swift */,
@@ -1893,6 +1896,7 @@
 				QAOS10013000000000000501 /* ObsReadQAScanTests.swift in Sources */,
 				QAOE10013000000000000502 /* ObsReadQAEraseRowTests.swift in Sources */,
 				SPEW10013000000000000601 /* SpikeEraseWritebackTests.swift in Sources */,
+				QASW10013000000000000701 /* SpikeEraseWritebackQATests.swift in Sources */,
 				QAOF10013000000000000503 /* ObsReadQAFormatCompatTests.swift in Sources */,
 				QAOM10013000000000000504 /* ObsReadQAMainThreadCostTests.swift in Sources */,
 				APTF10013000000000000301 /* AgentPreferencesTokenFreeSyncTests.swift in Sources */,
