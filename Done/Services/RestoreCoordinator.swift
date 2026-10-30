@@ -359,6 +359,23 @@ final class RestoreCoordinator: ObservableObject {
         // `markRestoreCompleted` below.
         await waitForLoadingFrame()
 
+        // The snapshot was read above the cursor its fetch recorded; the
+        // replay below hands the baseline the snapshot's versions and
+        // `markRestoreCompleted` takes the cursor back to that position
+        // (`RestoreFetchMark`). If the device's feed is no longer the one
+        // that position was taken in — another account, a reset server
+        // epoch, an erase — nothing is applied: checked here, after the
+        // wait and before the first mutation, with no suspension between
+        // this check and `markRestoreCompleted`.
+        if let syncService, let mark = snapshot.fetchMark,
+           let refusal = syncService.restoreApplyRefusal(mark) {
+            let refusedLine = "restore REFUSED reason=\(refusal.rawValue) strategy=\(String(describing: strategy)) resolution=\(String(describing: resolution))"
+            persistenceLogger.log("\(refusedLine, privacy: .public)")
+            DiagnosticTrail.record("Persistence", refusedLine)
+            phase = .failed(L(.restoreSnapshotOutdated))
+            return
+        }
+
         let restoreLine = "restore APPLY strategy=\(String(describing: strategy)) resolution=\(String(describing: resolution)) cloudCalendarRows=\(snapshot.calendarEvents.count) localBefore=\(eventStore.rawCalendarEvents.count)"
         persistenceLogger.log("\(restoreLine, privacy: .public)")
         DiagnosticTrail.record("Persistence", restoreLine)
@@ -474,7 +491,10 @@ final class RestoreCoordinator: ObservableObject {
         // applied. Must happen on the same MainActor tick as the store
         // mutations above, before the upload sinks' debounce timer fires, so
         // the next sync sends only what differs from the cloud — after a
-        // merge that includes the rows the cloud never had.
+        // merge that includes the rows the cloud never had. It also takes
+        // the pull cursor back to where the fetch began and asks for a pull
+        // at once, which re-delivers whatever changed on the server since
+        // the snapshot was read, the user's review time included.
         syncService?.markRestoreCompleted(
             eventStore: eventStore,
             eventTypeStore: eventTypeStore,

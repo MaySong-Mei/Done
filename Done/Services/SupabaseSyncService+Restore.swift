@@ -38,6 +38,11 @@ struct RestoreSnapshot {
     /// `markRestoreCompleted` writes as the baseline seq of a row the cloud
     /// knows (survey S6).
     var cloudSeqs: [SyncBaselineKey: Int64] = [:]
+    /// Where this device's pull stood when the fetch began, and what that
+    /// position belongs to. Set by `fetchRestoreSnapshot`; nil for a
+    /// snapshot built any other way, which the apply neither checks nor
+    /// rewinds the cursor for.
+    var fetchMark: RestoreFetchMark?
 
     var totalCount: Int {
         calendarEvents.count + todoEvents.count + logs.count + feedback.count
@@ -57,6 +62,45 @@ struct RestoreSnapshot {
         agentDecisionHistory: nil as [AgentDecisionRecord]?,
         agentConversationsBlob: nil as Any?
     )
+}
+
+/// The pull cursor as it stood before a restore fetch read its first row,
+/// together with what makes that number a position in THIS device's feed:
+/// the account, the server epoch the cursor key records, and the count of
+/// local-data erases.
+///
+/// Why the apply needs it (Lean `restore_fresh_of_read_above_cursor`,
+/// formal/restore-replay): the fetch reads every row after `cursor` was
+/// taken, so any version of a snapshot row newer than the one the snapshot
+/// carries was written above `cursor`. The apply replays the snapshot's
+/// (hash, seq) into the baseline — possibly older versions than the device
+/// pulled during the user's review — and then moves the cursor back to
+/// `cursor`, so the next pull re-delivers every such version and the
+/// three-way compare settles each row against it. Without the move the
+/// cursor stays past them and no pull ever brings them back.
+///
+/// When any part of that identity has changed by the time of the apply,
+/// the position names nothing in the device's current feed, and the apply
+/// is refused (`SupabaseSyncService.restoreApplyRefusal`).
+struct RestoreFetchMark: Equatable {
+    let userId: String
+    let epoch: String?
+    let eraseToken: Int
+    /// Nil when the device had no cursor: a rewind then means a pull from
+    /// the start of the feed.
+    let cursor: Int64?
+}
+
+/// Why an apply was refused: the part of `RestoreFetchMark` that no longer
+/// matches the device.
+enum RestoreApplyRefusal: String {
+    /// Another account (or none) is signed in.
+    case account
+    /// The cursor key records another server epoch: the server's history
+    /// was reset under the device (design §6.6), or the record is gone.
+    case epoch
+    /// Local data was erased.
+    case erase
 }
 
 // MARK: - Row reading helpers
@@ -278,12 +322,56 @@ extension SupabaseSyncService {
     /// Convenience: fetch + decode in one call. Throws `RestoreError.notSignedIn`
     /// when there's no authenticated user.
     func fetchRestoreSnapshot() async throws -> RestoreSnapshot {
+        // Taken before the first table is read, with no suspension between:
+        // every row the fetch reads then comes from a server state at or
+        // above this cursor.
+        let mark = restoreFetchMark()
         let raw = try await fetchAllRawRows()
-        let snapshot = Self.decodeRestoreSnapshot(raw)
+        var snapshot = Self.decodeRestoreSnapshot(raw)
+        snapshot.fetchMark = mark
         // Kept for `markRestoreCompleted`, whose caller does not hand the
         // snapshot back.
         lastRestoreSnapshot = snapshot
         return snapshot
+    }
+
+    /// The device's pull position now, with its identity.
+    func restoreFetchMark() -> RestoreFetchMark {
+        RestoreFetchMark(userId: userId, epoch: cursor.epoch,
+                         eraseToken: LocalDataEraseEpoch.capture(), cursor: cursor.value)
+    }
+
+    /// Nil when `mark` still names a position in this device's feed: the
+    /// same account, no erase since, and the epoch the cursor key recorded
+    /// then still recorded now. A cursor key that had no epoch then and
+    /// has one now is the first sighting of the server's epoch
+    /// (`SyncCursorStore.recordEpoch`), which resets nothing, so it passes.
+    func restoreApplyRefusal(_ mark: RestoreFetchMark) -> RestoreApplyRefusal? {
+        if mark.userId != userId { return .account }
+        if LocalDataEraseEpoch.isStale(mark.eraseToken) { return .erase }
+        if let fetched = mark.epoch, fetched != cursor.epoch { return .epoch }
+        return nil
+    }
+
+    /// The restore's half of the cursor (see `RestoreFetchMark`): called by
+    /// `markRestoreCompleted` once the baseline holds the replayed snapshot,
+    /// in the same main-actor turn, and persists that baseline. Moves the
+    /// cursor back to the fetch's starting position, never forward, and has
+    /// the puller abandon any chain that began before the move and pull
+    /// again at once. A mark that no longer matches the device moves
+    /// nothing (the coordinator refuses such an apply before it mutates
+    /// anything; this covers any other caller).
+    func rewindCursorAfterRestore(to mark: RestoreFetchMark) {
+        if let refusal = restoreApplyRefusal(mark) {
+            baseline.persistAll()
+            DiagnosticTrail.record("Sync", "sync.cursor.restore_rewind skipped reason=\(refusal.rawValue)")
+            return
+        }
+        let from = cursor.value
+        cursor.rewind(to: mark.cursor, baseline: baseline)
+        let to = cursor.value
+        DiagnosticTrail.record("Sync", "sync.cursor.restore_rewind from=\(from.map(String.init) ?? "none") to=\(to.map(String.init) ?? "none")")
+        inbound?.cursorWasRewound(reason: "restore")
     }
 
     // MARK: Events
