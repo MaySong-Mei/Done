@@ -37,9 +37,6 @@ struct WristStrings {
     var updatePhoneForEdits: String {
         isChinese ? "更新 iPhone 上的 Done 后可在这里移动" : "Update Done on iPhone to move blocks here"
     }
-    var endEarlier: String { isChinese ? "结束 −15" : "End −15" }
-    var endLater: String { isChinese ? "结束 +15" : "End +15" }
-    var close: String { isChinese ? "关闭" : "Close" }
 
     // MARK: Event page
 
@@ -47,12 +44,23 @@ struct WristStrings {
     var eventPageEmpty: String { isChinese ? "在今天页点一个事件" : "Tap an event on Today" }
     /// An open-ended session (a phone timer) has no end to show.
     var running: String { isChinese ? "进行中" : "Running" }
+    /// The end time to VoiceOver, which adjusts it.
+    var endLabel: String { isChinese ? "结束时间" : "Ends" }
     /// "10:30": one time of day.
     func clock(_ date: Date) -> String {
+        (isChinese ? Self.chineseClock : Self.englishClock).string(from: date)
+    }
+
+    /// One formatter per language, made once (on the main actor, as the
+    /// app's code is): a formatter is costly to make, and the pages format
+    /// times on every redraw.
+    private static let englishClock = clockFormatter("en_US")
+    private static let chineseClock = clockFormatter("zh_CN")
+    private static func clockFormatter(_ identifier: String) -> DateFormatter {
         let formatter = DateFormatter()
-        formatter.locale = locale
+        formatter.locale = Locale(identifier: identifier)
         formatter.dateFormat = "HH:mm"
-        return formatter.string(from: date)
+        return formatter
     }
     /// Under the end: how long the event is, and where it starts —
     /// "3h30m from 10:00" / "10:00 起 · 3小时30分".
@@ -64,10 +72,7 @@ struct WristStrings {
     /// "10:15–11:00": a drawn block's range, on the block and over the
     /// type picker.
     func timeRange(_ start: Date, _ end: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = locale
-        formatter.dateFormat = "HH:mm"
-        return "\(formatter.string(from: start))–\(formatter.string(from: end))"
+        "\(clock(start))–\(clock(end))"
     }
 
     func periodLabel(_ period: WristStatsPeriod) -> String {

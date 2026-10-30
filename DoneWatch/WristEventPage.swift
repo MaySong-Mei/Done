@@ -13,9 +13,25 @@
 import SwiftUI
 import WatchKit
 
+/// Today's selected range, shared by Today (which sets it) and the event
+/// page (whose subject it is) — observed by those two alone, so a tap
+/// redraws them and not the root with every page.
+@MainActor
+final class WristSelectionModel: ObservableObject {
+    @Published var selection: WristEventSubject.Selection?
+}
+
 struct WristEventPage: View {
-    let subject: WristEventSubject?
-    let availability: WristEndCrown.Availability?
+    @ObservedObject var selectionModel: WristSelectionModel
+    /// Today's blocks as the day lays them out, the running session, and
+    /// what the crown may do with them.
+    let blocks: [WristDayBlock]
+    let running: WristOccurrence?
+    let takesRangeEdits: Bool
+    let dayStart: Date
+    let dayEnd: Date
+    /// Blocks this watch created that the phone has not reflected yet.
+    let localCreates: Set<UUID>
     /// The events with a command the phone has not answered.
     let pendingEventIDs: Set<UUID>
     /// The page showing — this one, or another: only while it is this
@@ -31,14 +47,23 @@ struct WristEventPage: View {
     let onFinish: (WristOccurrence) -> Void
 
     @State private var session = WristEndCrownSession()
-    /// The crown's raw value and the detents counted from it.
-    @State private var turned = 0.0
-    @State private var detents = 0
     @State private var restToken = UUID()
     /// The crown is turning: the end shown is where it is going.
     @State private var turning = false
-    @FocusState private var focused: Bool
     @Environment(\.scenePhase) private var scenePhase
+
+    private var subject: WristEventSubject? {
+        WristEventSubject.resolve(selection: selectionModel.selection, blocks: blocks, running: running)
+    }
+
+    private var availability: WristEndCrown.Availability? {
+        subject.map {
+            WristEndCrown.availability(
+                for: $0, blocks: blocks, takesRangeEdits: takesRangeEdits,
+                dayStart: dayStart, dayEnd: dayEnd, now: now, localCreates: localCreates
+            )
+        }
+    }
 
     private struct Input: Equatable {
         var subject: WristEventSubject?
@@ -46,10 +71,12 @@ struct WristEventPage: View {
     }
 
     var body: some View {
+        let subject = subject
+        let availability = availability
         WristPageFrame(header: nil) { top in
             Group {
                 if let subject {
-                    content(subject)
+                    content(subject, availability: availability)
                 } else {
                     Text(strings.eventPageEmpty)
                         .font(.system(size: 15, weight: .medium, design: .rounded))
@@ -62,29 +89,13 @@ struct WristEventPage: View {
             .padding(.horizontal, 10)
             .padding(.bottom, 6)
         }
-        // The crown's host: an invisible view behind the page that takes
-        // the crown's focus while the page shows.
+        // The crown's host, a leaf of its own: its rotation changes every
+        // frame of a turn, and only whole detents reach the page.
         .background {
-            Color.clear
-                .focusable(isVisible)
-                .focused($focused)
-                .focusEffectDisabled()
-                .digitalCrownRotation(
-                    $turned, from: -100_000, through: 100_000, by: 1,
-                    sensitivity: .low, isContinuous: false, isHapticFeedbackEnabled: false
-                )
-                .accessibilityHidden(true)
-        }
-        .onChange(of: turned) { _, raw in crown(raw) }
-        .onChange(of: focused) { _, focused in
-            WristGestureTrail.note("event page crown focus \(focused ? "taken" : "let go") visible=\(isVisible)")
+            WristCrownDetents(isActive: isVisible) { delta, raw in turnEnd(delta, raw: raw) }
         }
         .onAppear {
             show(Input(subject: subject, availability: availability))
-            if isVisible { takeFocus() }
-#if DEBUG
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { seedDebugTurn() }
-#endif
         }
         // Paged away, the page is taken down before the selection says so:
         // what was turned goes now, and the crown is the day's again.
@@ -97,38 +108,20 @@ struct WristEventPage: View {
         // The wrist going down mid-turn sends it, as leaving does; back up
         // on this page, the crown is its again.
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active {
-                if isVisible { takeFocus() }
-            } else {
-                restToken = UUID()
-                turning = false
-                sendUnsent()
-            }
+            if phase != .active { leave() }
         }
         // The crown is this page's only while it shows: leaving sends what
-        // was turned and lets the crown go back to Today's day.
+        // was turned, and the crown host lets the crown go back to the day.
         .onChange(of: isVisible) { _, visible in
             WristGestureTrail.note("event page \(visible ? "shown — crown moves the end" : "left — crown back to the day")")
-            if visible {
-                takeFocus()
-            } else {
-                leave()
-            }
+            if !visible { leave() }
         }
     }
 
     private func leave() {
-        focused = false
         restToken = UUID()
         turning = false
         sendUnsent()
-    }
-
-    private func takeFocus() {
-        DispatchQueue.main.async {
-            guard isVisible else { return }
-            focused = true
-        }
     }
 
     private func show(_ input: Input) {
@@ -137,16 +130,15 @@ struct WristEventPage: View {
         }
     }
 
-    private func crown(_ raw: Double) {
-        let now = Int(raw.rounded())
-        let delta = now - detents
-        guard delta != 0 else { return }
-        detents = now
+    /// Whole detents of the crown (in its sign), or one VoiceOver
+    /// adjustment: stops of the end, sent once the turning rests.
+    private func turnEnd(_ delta: Int, raw: Double?) {
         guard isVisible, let step = session.turn(crownDelta: delta) else { return }
         let target = session.shownEnd ?? Date()
         WristGestureTrail.note(String(
-            format: "crown raw=%.2f detent=%d step=%d → end %@%@",
-            raw, now, delta, strings.clock(target), step.limited && !step.moved ? " limit" : ""
+            format: "crown raw=%@ step=%d → end %@%@",
+            raw.map { String(format: "%.2f", $0) } ?? "voiceover", delta, strings.clock(target),
+            step.limited && !step.moved ? " limit" : ""
         ))
         if step.moved {
             WKInterfaceDevice.current().play(.click)
@@ -170,7 +162,7 @@ struct WristEventPage: View {
     }
 
     @ViewBuilder
-    private func content(_ subject: WristEventSubject) -> some View {
+    private func content(_ subject: WristEventSubject, availability: WristEndCrown.Availability?) -> some View {
         let occurrence = subject.occurrence
         let accent = WristColor.color(occurrence.colorHex)
         let crown = session.range == subject.selection ? session.crown : nil
@@ -203,6 +195,14 @@ struct WristEventPage: View {
                     .animation(.easeOut(duration: 0.12), value: end)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
+                    // VoiceOver moves the end a stop a swipe, as a detent.
+                    .accessibilityLabel(strings.endLabel)
+                    .accessibilityValue(strings.clock(end))
+                    .accessibilityAdjustableAction { direction in
+                        let sign = direction == .increment ? 1 : direction == .decrement ? -1 : 0
+                        guard sign != 0 else { return }
+                        turnEnd(sign * WristEndCrown.crownLater, raw: nil)
+                    }
                 Text(strings.durationFrom(occurrence.start, end))
                     .font(.system(size: 13, weight: .medium, design: .rounded))
                     .monospacedDigit()
@@ -251,11 +251,72 @@ struct WristEventPage: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(strings.finish)
-                    .handGestureShortcut(.primaryAction)
+                    // The double tap finishes only from this page: it stays
+                    // loaded beside Today, whose double tap is not Finish.
+                    .handGestureShortcut(.primaryAction, isEnabled: isVisible)
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+}
+
+/// The crown while the event page shows: an invisible view that takes the
+/// crown's focus and reports whole detents — `delta` in the rotation's own
+/// sign (`WristEndCrown.crownLater` says which is later). Its rotation
+/// changes every frame of a turn; only this leaf redraws for it. Not
+/// active, it is not focusable, and the crown is the day's.
+struct WristCrownDetents: View {
+    let isActive: Bool
+    let onDetents: (_ delta: Int, _ raw: Double) -> Void
+
+    @State private var turned = 0.0
+    @State private var detents = 0
+    @FocusState private var focused: Bool
+    @Environment(\.scenePhase) private var scenePhase
+
+    var body: some View {
+        Color.clear
+            .focusable(isActive)
+            .focused($focused)
+            .focusEffectDisabled()
+            .digitalCrownRotation(
+                $turned, from: -100_000, through: 100_000, by: 1,
+                sensitivity: .low, isContinuous: false, isHapticFeedbackEnabled: false
+            )
+            .accessibilityHidden(true)
+            .onChange(of: turned) { _, raw in
+                let now = Int(raw.rounded())
+                let delta = now - detents
+                guard delta != 0 else { return }
+                detents = now
+                onDetents(delta, raw)
+            }
+            .onChange(of: focused) { _, focused in
+                WristGestureTrail.note("event page crown focus \(focused ? "taken" : "let go") active=\(isActive)")
+            }
+            .onAppear {
+                if isActive { takeFocus() }
+#if DEBUG
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { seedDebugTurn() }
+#endif
+            }
+            .onChange(of: isActive) { _, active in
+                if active { takeFocus() } else { focused = false }
+            }
+            // Back from the wrist going down on this page: the crown is
+            // its again. Asked once per return, never in a loop.
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active, isActive { takeFocus() }
+            }
+    }
+
+    private func takeFocus() {
+        DispatchQueue.main.async {
+            guard isActive else { return }
+            focused = true
+        }
     }
 
 #if DEBUG
@@ -266,7 +327,7 @@ struct WristEventPage: View {
     /// builds only.
     private func seedDebugTurn() {
         let arguments = ProcessInfo.processInfo.arguments
-        guard isVisible, let i = arguments.firstIndex(of: "-wristCrownSteps"), i + 1 < arguments.count,
+        guard isActive, let i = arguments.firstIndex(of: "-wristCrownSteps"), i + 1 < arguments.count,
               let steps = Int(arguments[i + 1]), steps != 0 else { return }
         // One detent at a time, as a slow turn would, faster than the rest
         // delay: one send at the end.

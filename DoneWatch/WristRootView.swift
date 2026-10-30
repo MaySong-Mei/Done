@@ -18,8 +18,9 @@ struct WristRootView: View {
     @State private var page = WristPage.initial
     /// The block selected on Today, by its range (a motion key would name
     /// another range of the event once the phone adds one before it):
-    /// shared with the event page, whose subject it is.
-    @State private var selection: WristEventSubject.Selection?
+    /// shared with the event page, whose subject it is. Held, not
+    /// observed: only those two pages redraw for a selection.
+    @State private var selectionModel = WristSelectionModel()
     @AppStorage(WristLocalSettings.zoomKey) private var zoomRaw = WristLocalSettings.Zoom.standard.rawValue
     /// Empty until a period is picked on the watch: the phone's applies.
     @AppStorage(WristLocalSettings.statsPeriodKey) private var periodRaw = ""
@@ -72,7 +73,7 @@ struct WristRootView: View {
         .onAppear {
             guard let key = WristPage.initialSelection, let snapshot = client.snapshot else { return }
             let running = runningSession(now: Date())?.occurrence
-            selection = dayBlocks(snapshot, now: Date(), currentID: running?.id).blocks
+            selectionModel.selection = dayBlocks(snapshot, now: Date(), currentID: running?.id).blocks
                 .first { $0.motionKey == key }.map { WristEventSubject.Selection($0.occurrence) }
         }
 #endif
@@ -104,15 +105,10 @@ struct WristRootView: View {
     ) -> some View {
         if let snapshot = client.snapshot {
             let day = dayBlocks(snapshot, now: now, currentID: running?.occurrence.id)
-            let subject = WristEventSubject.resolve(selection: selection, blocks: day.blocks, running: running?.occurrence)
             WristEventPage(
-                subject: subject,
-                availability: subject.map {
-                    WristEndCrown.availability(
-                        for: $0, blocks: day.blocks, takesRangeEdits: snapshot.takesRangeEdits,
-                        dayStart: day.dayStart, dayEnd: day.dayEnd, now: now, localCreates: client.localCreates
-                    )
-                },
+                selectionModel: selectionModel,
+                blocks: day.blocks, running: running?.occurrence, takesRangeEdits: snapshot.takesRangeEdits,
+                dayStart: day.dayStart, dayEnd: day.dayEnd, localCreates: client.localCreates,
                 pendingEventIDs: day.pendingIDs,
                 page: $page,
                 now: now, strings: strings,
@@ -131,7 +127,7 @@ struct WristRootView: View {
         running: (occurrence: WristOccurrence, pending: Bool)?
     ) -> some View {
         if let snapshot = client.snapshot {
-            let (timeline, pendingIDs) = WristStateReducer.overlaid(snapshot, pending: client.pending, now: now)
+            let timeline = WristStateReducer.overlaid(snapshot, pending: client.pending, now: now).occurrences
             WristTodayView(
                 occurrences: timeline, dismissed: client.dismissed, stats: stats,
                 now: now, currentID: running?.occurrence.id, strings: strings, types: snapshot.types,
@@ -139,8 +135,7 @@ struct WristRootView: View {
                 localCreates: client.localCreates, motions: snapshot.motions,
                 hourHeight: CGFloat(WristLocalSettings.Zoom(stored: zoomRaw).hourHeight),
                 takesRangeEdits: snapshot.takesRangeEdits,
-                pendingEventIDs: pendingIDs,
-                selection: $selection,
+                selectionModel: selectionModel,
                 onCreate: { type, name, start, end in
                     client.create(type, title: name.title, awaitsName: name == .later, start: start, end: end)
                 },
@@ -218,15 +213,17 @@ struct WristTodayView: View {
     var motions: WristMotionSettings = .off
     /// Points per hour (`WristLocalSettings.Zoom`).
     var hourHeight: CGFloat = CGFloat(WristLocalSettings.Zoom.standard.hourHeight)
-    /// The phone applies range edits (`WristSnapshot.takesRangeEdits`), and
-    /// the events with a command it has not answered yet.
+    /// The phone applies range edits (`WristSnapshot.takesRangeEdits`).
     var takesRangeEdits: Bool = false
-    var pendingEventIDs: Set<UUID> = []
-    /// The tapped block, by motion key — the event page's subject.
-    @Binding var selection: WristEventSubject.Selection?
+    /// The tapped block, by its range — the event page's subject.
+    @ObservedObject var selectionModel: WristSelectionModel
+    private var selection: WristEventSubject.Selection? {
+        get { selectionModel.selection }
+        nonmutating set { selectionModel.selection = newValue }
+    }
     /// Returns the created event's id.
     var onCreate: (WristType, WristDraftName, Date, Date) -> UUID? = { _, _, _, _ in nil }
-    /// A block's range moved, resized or nudged here.
+    /// A block's range moved or resized here.
     var onEditRange: (WristOccurrence, Date, Date) -> Void = { _, _, _ in }
     /// A sideways flick: -1 for the page to the left, +1 to the right. The
     /// hold-and-drag on the day is a drag gesture, and any drag gesture here
@@ -704,7 +701,8 @@ struct WristTodayView: View {
             mode: mode, anchorY: pressY
         )
         edit = Edit(motionKey: block.motionKey, occurrence: occurrence, model: model, range: model.range(currentY: pressY))
-        selection = WristEventSubject.Selection(block.occurrence)
+        let grabbed = WristEventSubject.Selection(block.occurrence)
+        if selection != grabbed { selection = grabbed }
         WKInterfaceDevice.current().play(.click)
     }
 
