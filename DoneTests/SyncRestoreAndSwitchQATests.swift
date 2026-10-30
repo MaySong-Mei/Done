@@ -643,12 +643,15 @@ final class SyncSessionDuringFullSyncQATests: SyncRestoreAndSwitchQATestCase {
         phone.scheduler.advance(by: debounce)
         cloudA.holdWhen = nil
         cloudA.releaseAll()
-        try await syncEventually("A's pass stopped for the account change") {
-            self.trailLines("sync.fullsync.stopped reason=account_changed") == 1
-        }
+        try await syncEventually("A's parked POST was answered") { cloudA.heldCount == 0 }
+        try await settle()
         try await settle()
         try await settle()
 
+        // One stop: A's pass at its next table. B's rerun reads for B and
+        // runs to its end (every table refused), it does not stop.
+        XCTAssertEqual(trailLines("sync.fullsync.stopped reason=account_changed"), 1,
+                       "A's pass read on for B, or B's own pass stopped as if it were A's")
         XCTAssertEqual(writes(cloudB).map { "\($0.verb) \($0.table)" }, [], "B's cloud was written while A's data blocks it")
         XCTAssertEqual(cloudA.requests.count, requestsToA, "A's cloud was written after the switch")
         XCTAssertNil(cloudA.row(table: "todo_lists", key: phone.store.todoLists.first?.id.uuidString ?? "-"),
