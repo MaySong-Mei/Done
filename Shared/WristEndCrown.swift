@@ -27,11 +27,47 @@ nonisolated struct WristEventSubject: Equatable, Sendable {
     /// floor ahead of now, and the page offers +15 and Finish.
     var isRunning: Bool
 
-    /// `selectedKey` is Today's selection (a block's motion key); `running`
-    /// the running session (`WristDisplayState.active`). A selection no
-    /// longer among `blocks` counts as none.
+    /// Which range of which event: the identity a selection and a turn
+    /// hold. Stable while the phone adds or removes the event's other
+    /// ranges (a motion key, "event#ordinal", is not: it then names
+    /// another range); a range whose start moves is another range.
+    struct Selection: Hashable, Sendable {
+        var eventID: UUID
+        var rangeStart: Date
+
+        init(eventID: UUID, rangeStart: Date) {
+            self.eventID = eventID
+            self.rangeStart = rangeStart
+        }
+
+        init(_ occurrence: WristOccurrence) {
+            self.init(eventID: occurrence.eventID, rangeStart: occurrence.start)
+        }
+
+        func matches(_ occurrence: WristOccurrence) -> Bool {
+            occurrence.eventID == eventID && WristTiming.sameInstant(occurrence.start, rangeStart)
+        }
+    }
+
+    /// The subject's range identity.
+    var selection: Selection { Selection(occurrence) }
+
+    /// `selection` is Today's selection; `running` the running session
+    /// (`WristDisplayState.active`). A selection no longer among `blocks`
+    /// counts as none.
+    static func resolve(selection: Selection?, blocks: [WristDayBlock], running: WristOccurrence?) -> WristEventSubject? {
+        let block = selection.flatMap { selection in blocks.first { selection.matches($0.occurrence) } }
+        return resolve(block: block, blocks: blocks, running: running)
+    }
+
+    /// The same, with the selection named by a block's motion key.
     static func resolve(selectedKey: String?, blocks: [WristDayBlock], running: WristOccurrence?) -> WristEventSubject? {
-        if let selectedKey, let block = blocks.first(where: { $0.motionKey == selectedKey }) {
+        let block = selectedKey.flatMap { key in blocks.first { $0.motionKey == key } }
+        return resolve(block: block, blocks: blocks, running: running)
+    }
+
+    private static func resolve(block: WristDayBlock?, blocks: [WristDayBlock], running: WristOccurrence?) -> WristEventSubject? {
+        if let block {
             let isRunning = running.map { $0.id == block.occurrence.id } ?? false
             return WristEventSubject(source: .selected, occurrence: block.occurrence, key: block.motionKey, isRunning: isRunning)
         }
@@ -44,9 +80,12 @@ nonisolated struct WristEventSubject: Equatable, Sendable {
 
     /// The other blocks' edges the end can stop on (the drag's magnet): their
     /// own ranges, not the day's clipped ones, and only the start of a
-    /// running timer (its end is a placeholder).
-    static func neighbourEdges(of key: String, in blocks: [WristDayBlock]) -> [Date] {
-        blocks.filter { $0.motionKey != key }.flatMap { other -> [Date] in
+    /// running timer (its end is a placeholder). Only blocks the phone has:
+    /// not the events this watch created that it has not reflected yet
+    /// (`localCreates`) — an edge the phone does not know it would round
+    /// away.
+    static func neighbourEdges(of key: String, in blocks: [WristDayBlock], localCreates: Set<UUID> = []) -> [Date] {
+        blocks.filter { $0.motionKey != key && !localCreates.contains($0.occurrence.eventID) }.flatMap { other -> [Date] in
             other.occurrence.isOpenEnded ? [other.occurrence.start] : [other.occurrence.start, other.occurrence.end]
         }
     }
@@ -138,14 +177,14 @@ nonisolated struct WristEndCrown: Equatable, Sendable {
     /// `availability` for a subject on the page.
     static func availability(
         for subject: WristEventSubject, blocks: [WristDayBlock], takesRangeEdits: Bool,
-        dayStart: Date, dayEnd: Date, now: Date
+        dayStart: Date, dayEnd: Date, now: Date, localCreates: Set<UUID> = []
     ) -> Availability {
         let occurrence = subject.occurrence
         return availability(
             start: occurrence.start, end: occurrence.end, isOpenEnded: occurrence.isOpenEnded,
             quickActionsEnabled: occurrence.quickActionsEnabled, isRunning: subject.isRunning,
             takesRangeEdits: takesRangeEdits, dayStart: dayStart, dayEnd: dayEnd, now: now,
-            edges: WristEventSubject.neighbourEdges(of: subject.key, in: blocks)
+            edges: WristEventSubject.neighbourEdges(of: subject.key, in: blocks, localCreates: localCreates)
         )
     }
 
@@ -246,7 +285,18 @@ nonisolated struct WristEndCrown: Equatable, Sendable {
         let waiting = sent.map { !WristTiming.sameInstant($0, new.end) } ?? false
         if hasUnsent || waiting {
             let keep = target
+            // The way the turn went, from the end it was made from: kept
+            // only while it still goes that way from the new end — a later
+            // turn the phone's end has reached or passed is done (or
+            // undone), never sent as a shortening, nor the other way.
+            let later = keep > anchor
+            guard !WristTiming.sameInstant(keep, new.end), (keep > new.end) == later else {
+                config = new
+                rebase()
+                return
+            }
             config = new
+            anchor = new.end
             stops = Self.stops(for: new, keeping: keep)
             index = Self.index(keeping: keep, in: stops, config: new, anchor: anchor)
         } else {
@@ -354,6 +404,8 @@ nonisolated struct WristEndCrownSession: Equatable, Sendable {
     }
 
     private(set) var key: String?
+    /// The subject's range: a turn belongs to it, and to no other.
+    private(set) var range: WristEventSubject.Selection?
     private(set) var occurrence: WristOccurrence?
     /// Nil when the crown cannot move the subject's end (or there is none).
     private(set) var crown: WristEndCrown?
@@ -371,13 +423,15 @@ nonisolated struct WristEndCrownSession: Equatable, Sendable {
         guard let subject else {
             let dropped = crown?.hasUnsent ?? false
             key = nil
+            range = nil
             occurrence = nil
             crown = nil
             return dropped
         }
-        if subject.key != key {
+        key = subject.key
+        if subject.selection != range {
             let dropped = crown?.hasUnsent ?? false
-            key = subject.key
+            range = subject.selection
             occurrence = subject.occurrence
             crown = config.map(WristEndCrown.init)
             return dropped

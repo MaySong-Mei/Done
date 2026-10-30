@@ -173,7 +173,7 @@ struct WristEventPage: View {
     private func content(_ subject: WristEventSubject) -> some View {
         let occurrence = subject.occurrence
         let accent = WristColor.color(occurrence.colorHex)
-        let crown = session.key == subject.key ? session.crown : nil
+        let crown = session.range == subject.selection ? session.crown : nil
         let end = crown?.target ?? occurrence.end
         let changed = crown?.hasUnsent ?? false
         let sending = pendingEventIDs.contains(occurrence.eventID) || (crown?.inFlight ?? false)

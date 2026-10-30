@@ -16,9 +16,10 @@ import WatchKit
 struct WristRootView: View {
     @EnvironmentObject private var client: WristSessionClient
     @State private var page = WristPage.initial
-    /// The block selected on Today, by motion key: shared with the event
-    /// page, whose subject it is.
-    @State private var selectedKey: String? = WristPage.initialSelection
+    /// The block selected on Today, by its range (a motion key would name
+    /// another range of the event once the phone adds one before it):
+    /// shared with the event page, whose subject it is.
+    @State private var selection: WristEventSubject.Selection?
     @AppStorage(WristLocalSettings.zoomKey) private var zoomRaw = WristLocalSettings.Zoom.standard.rawValue
     /// Empty until a period is picked on the watch: the phone's applies.
     @AppStorage(WristLocalSettings.statsPeriodKey) private var periodRaw = ""
@@ -67,6 +68,14 @@ struct WristRootView: View {
         .onReceive(housekeeping) { now in
             client.tick(now: now)
         }
+#if DEBUG
+        .onAppear {
+            guard let key = WristPage.initialSelection, let snapshot = client.snapshot else { return }
+            let running = runningSession(now: Date())?.occurrence
+            selection = dayBlocks(snapshot, now: Date(), currentID: running?.id).blocks
+                .first { $0.motionKey == key }.map { WristEventSubject.Selection($0.occurrence) }
+        }
+#endif
     }
 
     private func runningSession(now: Date) -> (occurrence: WristOccurrence, pending: Bool)? {
@@ -95,13 +104,13 @@ struct WristRootView: View {
     ) -> some View {
         if let snapshot = client.snapshot {
             let day = dayBlocks(snapshot, now: now, currentID: running?.occurrence.id)
-            let subject = WristEventSubject.resolve(selectedKey: selectedKey, blocks: day.blocks, running: running?.occurrence)
+            let subject = WristEventSubject.resolve(selection: selection, blocks: day.blocks, running: running?.occurrence)
             WristEventPage(
                 subject: subject,
                 availability: subject.map {
                     WristEndCrown.availability(
                         for: $0, blocks: day.blocks, takesRangeEdits: snapshot.takesRangeEdits,
-                        dayStart: day.dayStart, dayEnd: day.dayEnd, now: now
+                        dayStart: day.dayStart, dayEnd: day.dayEnd, now: now, localCreates: client.localCreates
                     )
                 },
                 pendingEventIDs: day.pendingIDs,
@@ -131,7 +140,7 @@ struct WristRootView: View {
                 hourHeight: CGFloat(WristLocalSettings.Zoom(stored: zoomRaw).hourHeight),
                 takesRangeEdits: snapshot.takesRangeEdits,
                 pendingEventIDs: pendingIDs,
-                selectedKey: $selectedKey,
+                selection: $selection,
                 onCreate: { type, name, start, end in
                     client.create(type, title: name.title, awaitsName: name == .later, start: start, end: end)
                 },
@@ -214,7 +223,7 @@ struct WristTodayView: View {
     var takesRangeEdits: Bool = false
     var pendingEventIDs: Set<UUID> = []
     /// The tapped block, by motion key — the event page's subject.
-    @Binding var selectedKey: String?
+    @Binding var selection: WristEventSubject.Selection?
     /// Returns the created event's id.
     var onCreate: (WristType, WristDraftName, Date, Date) -> UUID? = { _, _, _, _ in nil }
     /// A block's range moved, resized or nudged here.
@@ -364,7 +373,7 @@ struct WristTodayView: View {
                                         landing.eventID == block.occurrence.eventID
                                             ? place(landing.slot, landing.span.start, landing.span.end, false) : nil
                                     }
-                                    blockView(block, size: frame.size, selected: selectedKey == block.motionKey && edit == nil)
+                                    blockView(block, size: frame.size, selected: selection?.matches(block.occurrence) == true && edit == nil)
                                         // Grabbed: the block stays faded in its place while
                                         // the preview shows where it is going.
                                         .opacity(edit?.motionKey == block.motionKey ? 0.35 : 1)
@@ -497,6 +506,11 @@ struct WristTodayView: View {
                     if release == .sendEdit {
                         editLanding = true
                         onEditRange(current.occurrence, current.range.start, current.range.end)
+                        // A move gives the range a new start: the selection
+                        // goes with it.
+                        if selection?.matches(current.occurrence) == true {
+                            selection = WristEventSubject.Selection(eventID: current.occurrence.eventID, rangeStart: current.range.start)
+                        }
                         // Should the edit change nothing on the page, the next
                         // change must still tween.
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { editLanding = false }
@@ -511,7 +525,7 @@ struct WristTodayView: View {
         .onAppear { if drawn == nil { drawn = input } }
         .onChange(of: input) { _, new in
             editLanding = false
-            if let key = selectedKey, !new.blocks.contains(where: { $0.motionKey == key }) { selectedKey = nil }
+            if let current = selection, !new.blocks.contains(where: { current.matches($0.occurrence) }) { selection = nil }
             for departure in motionPlan(to: new).departures {
                 let ghost = Ghost(block: departure.block, motion: departure.motion)
                 ghosts.append(ghost)
@@ -690,7 +704,7 @@ struct WristTodayView: View {
             mode: mode, anchorY: pressY
         )
         edit = Edit(motionKey: block.motionKey, occurrence: occurrence, model: model, range: model.range(currentY: pressY))
-        selectedKey = block.motionKey
+        selection = WristEventSubject.Selection(block.occurrence)
         WKInterfaceDevice.current().play(.click)
     }
 
@@ -718,9 +732,9 @@ struct WristTodayView: View {
     private func tap(at location: CGPoint, blocks: [WristDayBlock], mapping: WristDraftMapping, top: CGFloat, height: CGFloat) {
         guard draft == nil, edit == nil, !picking, !holding, Date().timeIntervalSince(holdEndedAt) > 0.4 else { return }
         let hit = blockHit(x: location.x, dayY: Double(location.y + scrollY - top), blocks: blocks, mapping: mapping, height: height)
-        let key = hit.map(\.0.motionKey)
+        let tapped = hit.map { WristEventSubject.Selection($0.0.occurrence) }
         withAnimation(.easeOut(duration: 0.15)) {
-            selectedKey = key == selectedKey ? nil : key
+            selection = tapped == selection ? nil : tapped
         }
     }
 

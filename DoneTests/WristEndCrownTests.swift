@@ -190,17 +190,49 @@ final class WristEndCrownTests: XCTestCase {
         guard case .moves(let gone2) = crown(at(10), at(11), edges: []) else { return XCTFail() }
         down.update(gone2)
         XCTAssertEqual(down.target, at(10, 45), "the nearest below, not 11:00's other side")
-        // The way the turn went is measured from the end it was made from:
-        // shortened from 11:00 to 10:15, then the phone makes the block
-        // 10:10–10:17 — the nearest end the phone keeps for it (10:25 it
-        // would round to 10:30) is still a shortening of what was turned.
+        // The way the turn went is kept against the NEW end: shortened from
+        // 11:00 to 10:15, then the phone makes the block 10:10–10:17 — every
+        // end the phone keeps for it is later than 10:17, so the turn is
+        // dropped rather than sent as a lengthening.
         var shortened = endCrown(at(10), at(11))
         _ = turn(&shortened, -3)
         XCTAssertEqual(shortened.anchor, at(11))
         guard case .moves(let squeezed) = crown(at(10, 10), at(10, 17)) else { return XCTFail() }
         shortened.update(squeezed)
-        XCTAssertEqual(shortened.target, at(10, 30))
-        XCTAssertTrue(shortened.hasUnsent)
+        XCTAssertEqual(shortened.target, at(10, 17))
+        XCTAssertFalse(shortened.hasUnsent)
+    }
+
+    /// A later turn not sent, and the phone moves the end to it or past it:
+    /// the turn is done (or overtaken) — dropped, never sent as a shortening.
+    /// The same for an earlier turn the phone undercuts. A move that leaves
+    /// the turn ahead of the new end keeps it.
+    func testAKeptTurnStaysOnItsSideOfTheNewEnd() {
+        var later = endCrown(at(10), at(11))
+        _ = turn(&later, 1)
+        guard case .moves(let past) = crown(at(10), at(11.5)) else { return XCTFail() }
+        later.update(past)
+        XCTAssertEqual(later.target, at(11.5))
+        XCTAssertNil(later.takeUnsent())
+
+        var reached = endCrown(at(10), at(11))
+        _ = turn(&reached, 1)
+        guard case .moves(let onIt) = crown(at(10), at(11.25)) else { return XCTFail() }
+        reached.update(onIt)
+        XCTAssertNil(reached.takeUnsent())
+
+        var earlier = endCrown(at(10), at(12))
+        _ = turn(&earlier, -1)
+        guard case .moves(let under) = crown(at(10), at(11)) else { return XCTFail() }
+        earlier.update(under)
+        XCTAssertEqual(earlier.target, at(11))
+        XCTAssertNil(earlier.takeUnsent())
+
+        var ahead = endCrown(at(10), at(11))
+        _ = turn(&ahead, 3)
+        guard case .moves(let short) = crown(at(10), at(11.25)) else { return XCTFail() }
+        ahead.update(short)
+        XCTAssertEqual(ahead.takeUnsent(), WristTimeSpan(start: at(10), end: at(11.75)))
     }
 
     /// At send time the real time has passed the turned end of a running
@@ -564,6 +596,59 @@ final class WristEndCrownSessionTests: XCTestCase {
         XCTAssertTrue(dropped)
         XCTAssertNil(session.crown)
         XCTAssertNil(session.takeUnsent(now: at(10)))
+    }
+
+    /// The phone adds a range of the same event before the selected one:
+    /// the motion keys shift, the range does not — the turn stays on the
+    /// range it was made on, and the selection follows the range.
+    func testAnotherRangeOfTheEventArrivingKeepsTheTurnOnItsRange() {
+        let morning = occurrence(1, 10, 11), afternoon = occurrence(1, 14, 15)
+        var session = WristEndCrownSession()
+        let day = blocks([morning, afternoon])
+        let selection = WristEventSubject.Selection(afternoon)
+        var subject = WristEventSubject.resolve(selection: selection, blocks: day, running: nil)
+        session.show(subject, availability: availability(subject, day))
+        _ = session.turn(crownDelta: 1)
+        let early = occurrence(1, 8, 9)
+        let day2 = blocks([early, morning, afternoon])
+        XCTAssertNotEqual(day2.first { $0.occurrence.id == afternoon.id }?.motionKey, subject?.key, "the motion key moved")
+        subject = WristEventSubject.resolve(selection: selection, blocks: day2, running: nil)
+        XCTAssertEqual(subject?.occurrence, afternoon)
+        XCTAssertFalse(session.show(subject, availability: availability(subject, day2)))
+        XCTAssertEqual(session.takeUnsent(now: at(10)), .init(occurrence: afternoon, start: at(14), end: at(15.25)))
+    }
+
+    /// Named by its old motion key, the subject is now another range: the
+    /// turn is dropped, not sent for that range.
+    func testATurnIsNeverSentForAnotherRangeOfTheEvent() {
+        let morning = occurrence(1, 10, 11), afternoon = occurrence(1, 14, 15)
+        var session = WristEndCrownSession()
+        let day = blocks([morning, afternoon])
+        let key = day.first { $0.occurrence.id == afternoon.id }!.motionKey
+        var subject = WristEventSubject.resolve(selectedKey: key, blocks: day, running: nil)
+        session.show(subject, availability: availability(subject, day))
+        _ = session.turn(crownDelta: 1)
+        let day2 = blocks([occurrence(1, 8, 9), morning, afternoon])
+        subject = WristEventSubject.resolve(selectedKey: key, blocks: day2, running: nil)
+        XCTAssertEqual(subject?.occurrence, morning, "the old key names another range now")
+        XCTAssertTrue(session.show(subject, availability: availability(subject, day2)))
+        XCTAssertNil(session.takeUnsent(now: at(10)))
+    }
+
+    /// A block this watch created that the phone has not reflected yet is
+    /// no magnet: the phone does not know its edges.
+    func testLocalCreatesLendNoEdges() {
+        let me = occurrence(1, 9, 11), mine = occurrence(2, 11.1, 12)
+        let day = blocks([me, mine])
+        let key = day.first { $0.occurrence.id == me.id }!.motionKey
+        XCTAssertTrue(WristEventSubject.neighbourEdges(of: key, in: day).contains(at(11.1)))
+        XCTAssertEqual(WristEventSubject.neighbourEdges(of: key, in: day, localCreates: [mine.eventID]), [])
+        let subject = WristEventSubject.resolve(selectedKey: key, blocks: day, running: nil)!
+        guard case .moves(let config) = WristEndCrown.availability(
+            for: subject, blocks: day, takesRangeEdits: true, dayStart: dayStart, dayEnd: dayEnd, now: at(8),
+            localCreates: [mine.eventID]
+        ) else { return XCTFail() }
+        XCTAssertFalse(WristEndCrown(config).stops.contains(at(11.1)))
     }
 
     func testFinishLetsGoOfAnUnsentTurn() {
