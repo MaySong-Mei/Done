@@ -3791,9 +3791,9 @@ private extension CalendarPageView {
         }
     }
 
-    /// Closes each band side the moment it is wholly out of view, whether
-    /// the scroll is still, dragged or coasting. Called on every scroll
-    /// tick. (gh#279)
+    /// Closes each band side that is wholly out of view, once the scroll is
+    /// at rest. Called on every scroll tick and when the scroll settles.
+    /// (gh#279)
     ///
     /// `closeUnreachable`: also close a side that no scroll can take out of
     /// view any more, which a zoom-out leaves behind, or scrolling the other
@@ -3810,6 +3810,11 @@ private extension CalendarPageView {
         // band itself; closing under it would leave its next frame in the
         // old coordinates.
         guard sameDayRebounceAnimator == nil, crossDayRebounceAnimator == nil else { return }
+        // While the user scrolls, `VerticalScrollGate` holds the timeline's
+        // layout, so a close now would draw only when the scroll stops: in a
+        // later update, out of reach of this transaction and of the offset
+        // keeper. The scroll settling runs this check again.
+        guard !isVerticallyScrolling else { return }
 
         let visibility = calendarTimelineBoundaryExtensionVisibility(
             currentOffsetY: timelineVerticalScrollY,
