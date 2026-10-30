@@ -358,119 +358,118 @@ final class WristEventPageQATests: XCTestCase {
         XCTAssertGreaterThan(applied, 300)
     }
 
-    // MARK: 3. Running session
+    // MARK: 3. Running session — moved like any other event (spec change 10-30)
 
-    /// For every minute of a run: no stop other than the end it has is at or
-    /// before now, and what is sent up to a minute later still ends after
-    /// the real time it is sent at.
-    func testRunningSessionCanNeverBeEndedByTheCrown() {
-        let s = Self.at(10, 0)
-        for minute in 0..<180 {
-            let now = s.addingTimeInterval(Double(minute) * 60 + 20)
-            let e = s.addingTimeInterval(4 * 3600)
-            guard let c = config(s, e, running: true, now: now) else { return }
-            var crown = WristEndCrown(c)
-            for stop in crown.stops where stop != e {
-                XCTAssertGreaterThan(stop, now, "stop \(stop) at or before now \(now)")
-            }
-            while crown.turn(-1) == .moved {}
-            let real = now.addingTimeInterval(59)
-            if let span = crown.takeUnsent(now: real) {
-                XCTAssertGreaterThan(span.end, real, "sent an end already past at \(real)")
-                XCTAssertTrue(Self.keeps(start: s, end: e, stop: span.end, edges: []))
-            }
-        }
-        // Positive control: a non-running event may be shortened into the past.
-        guard let past = config(s, s.addingTimeInterval(4 * 3600), now: Self.at(13, 0)) else { return }
-        var p = WristEndCrown(past)
-        while p.turn(-1) == .moved {}
-        XCTAssertLessThan(p.target, Self.at(13, 0))
-    }
-
-    // MARK: 3b. Running floor — first quarter mark at least 2 minutes ahead (spec change 10-29)
-
-    /// Independent: the first 15-minute mark at or after now + 2 min.
-    private static func expectedRunningFloor(_ now: Date) -> Date {
-        let t = now.addingTimeInterval(120).timeIntervalSinceReferenceDate
-        return Date(timeIntervalSinceReferenceDate: (t / q).rounded(.up) * q)
-    }
-
-    private func runningLowest(now: Date, start: Date = at(20, 0), end: Date = at(23, 0)) -> Date? {
-        guard let c = config(start, end, running: true, now: now) else { return nil }
+    private func lowest(_ c: WristEndCrown.Config) -> Date {
         var crown = WristEndCrown(c)
         while crown.turn(-1) == .moved {}
         return crown.target
     }
 
-    /// The spec's examples and the 2-minute boundary on both sides.
-    func testRunningFloorIsTheFirstMarkTwoMinutesAhead() {
-        XCTAssertEqual(runningLowest(now: Self.at(21, 26)), Self.at(21, 30), "spec: 21:26 → 21:30")
-        XCTAssertEqual(runningLowest(now: Self.at(21, 29)), Self.at(21, 45), "spec: 21:29 → 21:45")
-        XCTAssertEqual(runningLowest(now: Self.at(21, 28)), Self.at(21, 30), "exactly 2 min ahead is allowed")
-        XCTAssertEqual(runningLowest(now: Self.at(21, 28).addingTimeInterval(1)), Self.at(21, 45), "1 s under 2 min is not")
-        XCTAssertEqual(runningLowest(now: Self.at(21, 27).addingTimeInterval(59)), Self.at(21, 30))
-        XCTAssertEqual(runningLowest(now: Self.at(21, 30)), Self.at(21, 45), "on a mark: the mark itself is 0 min ahead")
-        XCTAssertEqual(runningLowest(now: Self.at(21, 13)), Self.at(21, 15))
-        // Positive control: a non-running event still goes down to start + 15.
-        guard let c = config(Self.at(20, 0), Self.at(23, 0), now: Self.at(21, 26)) else { return }
-        var idle = WristEndCrown(c)
-        while idle.turn(-1) == .moved {}
-        XCTAssertEqual(idle.target, Self.at(20, 15))
-    }
-
-    /// Every 10 s over two hours: the lowest stop is the independent floor;
-    /// no stop other than the end it has is under it; the minimum length
-    /// still holds for a session that just started.
-    func testRunningFloorSweep() {
-        var checked = 0
-        for tick in 0..<(2 * 360) {
-            let now = Self.at(20, 0).addingTimeInterval(Double(tick) * 10)
-            let floor = Self.expectedRunningFloor(now)
-            guard let c = config(Self.at(20, 0), Self.at(23, 0), running: true, now: now) else { return }
-            let crown = WristEndCrown(c)
-            let want = max(floor, Self.at(20, 15))
-            XCTAssertEqual(crown.stops.first(where: { $0 != Self.at(23, 0) }), want, "now \(now)")
-            for stop in crown.stops where stop != Self.at(23, 0) {
-                XCTAssertGreaterThanOrEqual(stop.timeIntervalSince(now), 120 - 0.001)
-            }
-            checked += 1
+    /// Whatever now is, a running session's stops are exactly those of the
+    /// same range not running: down to start + 15 min, now never consulted.
+    func testRunningSessionStopsAreThoseOfAnyEvent() {
+        let s = Self.at(20, 0), e = Self.at(23, 0)
+        guard let plain = config(s, e) else { return }
+        let plainStops = WristEndCrown.stops(for: plain, keeping: nil)
+        for tick in 0..<(4 * 360) {
+            let now = s.addingTimeInterval(Double(tick) * 10)
+            guard let c = config(s, e, running: true, now: now) else { return }
+            XCTAssertEqual(WristEndCrown.stops(for: c, keeping: nil), plainStops, "now \(now)")
         }
-        XCTAssertEqual(checked, 720)
-        // Just started at 21:20, now 21:21: the minimum (21:35) is above the
-        // 21:30 mark and ahead of now; the phone keeps it (its snap to 21:30
-        // is lifted back to start + 15).
-        XCTAssertEqual(runningLowest(now: Self.at(21, 21), start: Self.at(21, 20)), Self.at(21, 35))
-        XCTAssertEqual(Self.phoneStores(start: Self.at(21, 20), oldEnd: Self.at(23, 0), requested: Self.at(21, 35), edges: []), Self.at(21, 35))
-        // Off-grid start 21:13, now 21:14: floor mark 21:30 ≥ 21:28 and kept by the phone.
-        XCTAssertEqual(runningLowest(now: Self.at(21, 14), start: Self.at(21, 13)), Self.at(21, 30))
+        // Independent values: the spec's old examples no longer hold.
+        for now in [Self.at(21, 26), Self.at(21, 28), Self.at(21, 29), Self.at(22, 50)] {
+            guard let c = config(s, e, running: true, now: now) else { return }
+            XCTAssertEqual(lowest(c), Self.at(20, 15), "now \(now): down to start + 15 min")
+        }
+        // Just started at 21:20 (now 21:21): start + 15 = 21:35, which the phone keeps.
+        guard let fresh = config(Self.at(21, 20), e, running: true, now: Self.at(21, 21)) else { return }
+        XCTAssertEqual(lowest(fresh), Self.at(21, 35))
+        XCTAssertEqual(Self.phoneStores(start: Self.at(21, 20), oldEnd: e, requested: Self.at(21, 35), edges: []), Self.at(21, 35))
+        // Off-grid start 21:13: start + 15 (21:28) is stored as 21:30, so 21:30.
+        guard let off = config(Self.at(21, 13), e, running: true, now: Self.at(21, 14)) else { return }
+        XCTAssertEqual(lowest(off), Self.at(21, 30))
     }
 
-    /// At send the chosen end is rechecked against the real clock: no longer
-    /// 2 minutes ahead → the next mark that is; still ahead → as chosen.
-    func testRunningSendRechecksTheRealClock() {
-        guard let c = config(Self.at(20, 0), Self.at(23, 0), running: true, now: Self.at(21, 26)) else { return }
+    /// The send is the end chosen, whenever it goes: no lift against the
+    /// real clock, even when the end is already past.
+    func testRunningSessionSendIsNotLiftedByTheClock() {
+        let s = Self.at(20, 0), e = Self.at(23, 0)
+        guard let c = config(s, e, running: true, now: Self.at(21, 26)) else { return }
         var crown = WristEndCrown(c)
-        while crown.turn(-1) == .moved {}
+        while crown.target > Self.at(21, 30) { XCTAssertEqual(crown.turn(-1), .moved) }
         XCTAssertEqual(crown.target, Self.at(21, 30))
-        var onTime = crown
-        XCTAssertEqual(onTime.takeUnsent(now: Self.at(21, 28))?.end, Self.at(21, 30), "exactly 2 min ahead at send: kept")
-        var late = crown
-        XCTAssertEqual(late.takeUnsent(now: Self.at(21, 28).addingTimeInterval(30))?.end, Self.at(21, 45), "21:30 is 90 s ahead: lifts")
-        var later = crown
-        XCTAssertEqual(later.takeUnsent(now: Self.at(21, 44))?.end, Self.at(22, 0))
-
-        // A lengthening turn of a session about to end, sent late: still never ends it.
-        guard let s = config(Self.at(20, 0), Self.at(21, 30), running: true, now: Self.at(21, 26)) else { return }
-        var ending = WristEndCrown(s)
-        XCTAssertEqual(ending.turn(1), .moved)
-        XCTAssertEqual(ending.target, Self.at(21, 45))
-        let real = Self.at(21, 44)
-        let sent = ending.takeUnsent(now: real)
-        XCTAssertNotNil(sent)
-        if let sent {
-            XCTAssertGreaterThanOrEqual(sent.end.timeIntervalSince(real), 120, "sent \(sent.end) at \(real)")
-            XCTAssertEqual(sent.end, Self.at(22, 0))
+        for real in [Self.at(21, 26), Self.at(21, 29), Self.at(21, 44), Self.at(22, 30)] {
+            var probe = crown
+            XCTAssertEqual(probe.takeUnsent(now: real)?.end, Self.at(21, 30), "sent at \(real)")
         }
+        // Through the session too (its send takes the real time).
+        let r = Self.occ(s, e)
+        let day = Day(occurrences: [r], now: Self.at(21, 26), running: r)
+        var session = WristEndCrownSession()
+        _ = day.show(&session, selected: nil)
+        for _ in 0..<20 { _ = session.turn(crownDelta: -WristEndCrown.crownLater) }
+        XCTAssertEqual(session.shownEnd, Self.at(20, 15))
+        XCTAssertEqual(session.takeUnsent(now: Self.at(22, 0))?.end, Self.at(20, 15), "a running session may be shortened into the past")
+    }
+
+    // MARK: 3b. − / + taps
+
+    /// Several taps accumulate into one send at rest: + + + − is two stops
+    /// later, sent once; nothing goes before the rest.
+    func testTapsAccumulateIntoOneSend() {
+        let a = Self.occ(Self.at(10, 0), Self.at(11, 7))
+        let day = Day(occurrences: [a])
+        var session = WristEndCrownSession()
+        _ = day.show(&session, selected: day.key(of: a.id))
+        let plus = WristEndCrown.crownLater, minus = -WristEndCrown.crownLater
+        for d in [plus, plus, plus, minus] { XCTAssertEqual(session.turn(crownDelta: d)?.moved, true) }
+        // From an off-grid 11:07: 11:15, 11:30, 11:45, back to 11:30.
+        XCTAssertEqual(session.shownEnd, Self.at(11, 30))
+        let sends = [session.takeUnsent(now: day.now), session.takeUnsent(now: day.now)].compactMap { $0 }
+        XCTAssertEqual(sends.count, 1)
+        XCTAssertEqual(sends.first?.start, Self.at(10, 0))
+        XCTAssertEqual(sends.first?.end, Self.at(11, 30))
+        // − − back past the end and + + back to it: nothing to send.
+        var back = WristEndCrownSession()
+        _ = day.show(&back, selected: day.key(of: a.id))
+        for d in [minus, minus, plus, plus] { _ = back.turn(crownDelta: d) }
+        XCTAssertEqual(back.shownEnd, Self.at(11, 7))
+        XCTAssertNil(back.takeUnsent(now: day.now))
+    }
+
+    /// A tap at a limit does nothing: + at midnight, − at the minimum; the
+    /// button reads disabled (`canStep`) and nothing is sent.
+    func testTapAtALimitDoesNothing() {
+        let late = Self.occ(Self.at(23, 0), Self.at(23, 45))
+        let day = Day(occurrences: [late])
+        var session = WristEndCrownSession()
+        _ = day.show(&session, selected: day.key(of: late.id))
+        XCTAssertTrue(session.canStep(1))
+        XCTAssertEqual(session.turn(crownDelta: WristEndCrown.crownLater)?.moved, true)
+        XCTAssertEqual(session.shownEnd, Self.utcEnd)
+        XCTAssertFalse(session.canStep(1))
+        XCTAssertTrue(session.canStep(-1))
+        XCTAssertEqual(session.turn(crownDelta: WristEndCrown.crownLater)?.moved, false)
+        XCTAssertEqual(session.shownEnd, Self.utcEnd)
+        XCTAssertEqual(session.takeUnsent(now: day.now)?.end, Self.utcEnd, "the one move before the limit is sent")
+
+        let short = Self.occ(Self.at(10, 0), Self.at(10, 15))
+        let d2 = Day(occurrences: [short])
+        var min = WristEndCrownSession()
+        _ = d2.show(&min, selected: d2.key(of: short.id))
+        XCTAssertFalse(min.canStep(-1))
+        XCTAssertEqual(min.turn(crownDelta: -WristEndCrown.crownLater)?.moved, false)
+        XCTAssertEqual(min.shownEnd, Self.at(10, 15))
+        XCTAssertNil(min.takeUnsent(now: d2.now), "a tap at the limit sends nothing")
+        // Not editable (repeating): neither button moves anything.
+        let rep = Self.occ(UUID(), id: "rep", Self.at(12, 0), Self.at(13, 0), editable: false)
+        let d3 = Day(occurrences: [rep])
+        var none = WristEndCrownSession()
+        _ = d3.show(&none, selected: d3.key(of: "rep"))
+        XCTAssertFalse(none.canStep(1)); XCTAssertFalse(none.canStep(-1))
+        XCTAssertNil(none.turn(crownDelta: 1))
+        XCTAssertNil(none.takeUnsent(now: d3.now))
     }
 
     // MARK: 4. Subject
