@@ -120,34 +120,42 @@ final class WristEndCrownTests: XCTestCase {
         XCTAssertEqual(turn(&l, -3), [at(0.25), at(0.25), at(0.25)])
     }
 
-    /// The running session is not ended by the crown — Finish does that.
-    /// The page's `now` lags the real time by up to a minute, so the end
-    /// stays on a mark at least a quarter hour after it.
-    func testARunningSessionsEndStaysAQuarterHourAhead() {
-        var l = endCrown(at(10), at(10.5), current: true, now: at(10, 16))
-        XCTAssertEqual(l.turn(-1), .limit, "10:45 is the first mark a quarter hour after 10:16")
-        var early = endCrown(at(10), at(10.75), current: true, now: at(10, 14))
-        XCTAssertEqual(turn(&early, -2), [at(10.5), at(10.5)])
-        var onMark = endCrown(at(10), at(10.75), current: true, now: at(10, 15))
-        XCTAssertEqual(turn(&onMark, -2), [at(10.5), at(10.5)])
-        XCTAssertEqual(WristEndCrown.runningFloor(at(10, 15)), at(10, 30))
-        XCTAssertEqual(WristEndCrown.runningFloor(at(10, 14)), at(10, 30))
-        XCTAssertEqual(WristEndCrown.runningFloor(at(10, 16)), at(10, 45))
+    /// The running session is not ended by the crown — Finish does that —
+    /// but it can be shortened down to the first grid mark at least two
+    /// minutes after now: 21:26 → 21:30, 21:29 → 21:45. The device case:
+    /// 工作 21:15–21:30 at 21:26, turned to 21:45, then back down to 21:30.
+    func testARunningSessionShortensToTheFirstMarkTwoMinutesAhead() {
+        var device = endCrown(at(21, 15), at(21, 30), current: true, now: at(21, 26))
+        XCTAssertEqual(turn(&device, 1), [at(21, 45)])
+        XCTAssertEqual(device.turn(-1), .moved)
+        XCTAssertEqual(device.target, at(21, 30), "back down: 21:30 is two minutes or more after 21:26")
+        XCTAssertEqual(device.turn(-1), .limit)
+
+        var l = endCrown(at(21), at(22), current: true, now: at(21, 26))
+        XCTAssertEqual(turn(&l, -3), [at(21, 45), at(21, 30), at(21, 30)])
+        var late = endCrown(at(21), at(22), current: true, now: at(21, 29))
+        XCTAssertEqual(turn(&late, -2), [at(21, 45), at(21, 45)], "21:30 is under two minutes after 21:29")
+
+        XCTAssertEqual(WristEndCrown.runningFloor(at(21, 26)), at(21, 30))
+        XCTAssertEqual(WristEndCrown.runningFloor(at(21, 28)), at(21, 30))
+        XCTAssertEqual(WristEndCrown.runningFloor(at(21, 28).addingTimeInterval(1)), at(21, 45))
+        XCTAssertEqual(WristEndCrown.runningFloor(at(21, 29)), at(21, 45))
+        XCTAssertEqual(WristEndCrown.runningFloor(at(21, 13)), at(21, 15))
     }
 
-    /// The page's minute is 10:14 but the real time is 10:14:50 and the
-    /// send goes much later: what is sent still ends ahead of the real time.
+    /// The page's minute is 10:12 but the send goes later: what is sent
+    /// still ends at least two minutes after the real time, lifted to the
+    /// next mark when it no longer would.
     func testARunningSessionsSendIsCheckedAgainstTheRealTime() {
-        var l = endCrown(at(10), at(11), current: true, now: at(10, 14))
-        _ = turn(&l, -2)
-        XCTAssertEqual(l.target, at(10.5))
-        XCTAssertEqual(l.takeUnsent(now: at(10, 14).addingTimeInterval(50)), WristTimeSpan(start: at(10), end: at(10.5)),
-                       "fifteen minutes ahead: sent as turned")
-        var late = endCrown(at(10), at(11), current: true, now: at(10, 14))
-        _ = turn(&late, -2)
-        // The page stayed up, the crown rested only at 10:29:30.
-        XCTAssertEqual(late.takeUnsent(now: at(10, 29).addingTimeInterval(30)), WristTimeSpan(start: at(10), end: at(10.75)),
-                       "no longer ahead: the first stop a quarter hour after the real time")
+        var l = endCrown(at(10), at(11), current: true, now: at(10, 12))
+        XCTAssertEqual(turn(&l, -3), [at(10.75), at(10.5), at(10.25)])
+        XCTAssertEqual(l.takeUnsent(now: at(10, 12).addingTimeInterval(50)), WristTimeSpan(start: at(10), end: at(10.25)),
+                       "still two minutes ahead: sent as turned")
+        var late = endCrown(at(10), at(11), current: true, now: at(10, 12))
+        _ = turn(&late, -3)
+        // The crown rested only at 10:13:30: 10:15 is under two minutes away.
+        XCTAssertEqual(late.takeUnsent(now: at(10, 13).addingTimeInterval(30)), WristTimeSpan(start: at(10), end: at(10.5)),
+                       "no longer two minutes ahead: lifted to the next mark, never ended")
         var notRunning = endCrown(at(10), at(11))
         _ = turn(&notRunning, -2)
         XCTAssertEqual(notRunning.takeUnsent(now: at(12)), WristTimeSpan(start: at(10), end: at(10.5)), "only a running session")
@@ -160,12 +168,12 @@ final class WristEndCrownTests: XCTestCase {
         var l = endCrown(at(10), at(11), current: true, now: at(10, 30))
         XCTAssertEqual(l.config.floor, at(10, 45))
         XCTAssertEqual(turn(&l, -1), [at(10, 45)])
-        guard case .moves(let ticked) = crown(at(10), at(11), current: true, now: at(10, 31)) else { return XCTFail() }
+        guard case .moves(let ticked) = crown(at(10), at(11), current: true, now: at(10, 44)) else { return XCTFail() }
         XCTAssertEqual(ticked.floor, at(11))
         l.update(ticked)
         XCTAssertEqual(l.target, at(11), "back to the end")
         XCTAssertFalse(l.hasUnsent)
-        XCTAssertNil(l.takeUnsent(now: at(10, 31)), "nothing sent")
+        XCTAssertNil(l.takeUnsent(now: at(10, 44)), "nothing sent")
     }
 
     /// A turn later onto a neighbour's edge, the neighbour moves and leaves
@@ -241,7 +249,7 @@ final class WristEndCrownTests: XCTestCase {
     func testTheSendRecheckNeverTurnsAShorteningIntoAnExtension() {
         var l = endCrown(at(10), at(11), current: true, now: at(10, 30))
         XCTAssertEqual(turn(&l, -1), [at(10, 45)])
-        XCTAssertNil(l.takeUnsent(now: at(10, 44).addingTimeInterval(30)))
+        XCTAssertNil(l.takeUnsent(now: at(10, 43).addingTimeInterval(30)), "10:45 is under two minutes after 10:43:30; 11:00 is no shortening")
         XCTAssertEqual(l.target, at(11))
         XCTAssertFalse(l.hasUnsent)
         // Still room below the end at the real time: the first stop that is.

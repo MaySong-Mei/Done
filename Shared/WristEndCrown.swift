@@ -157,10 +157,12 @@ nonisolated struct WristEndCrown: Equatable, Sendable {
     /// What the crown may do for an event of today's page.
     ///
     /// A running session is not ended by the crown — that is Finish — so its
-    /// end stays on a grid mark at least a quarter hour after `now`: `now`
-    /// is the page's minute, behind the real time by up to a minute, and the
-    /// end must still be ahead when it is sent. An event in from yesterday
-    /// keeps at least a quarter hour on the page.
+    /// end goes no earlier than the first grid mark at least `runningLead`
+    /// after `now` (21:26 → 21:30, 21:29 → 21:45): shortened that far, not
+    /// ended. `now` is the page's minute, behind the real time by up to a
+    /// minute, so the send checks again against the real time
+    /// (`takeUnsent(now:)`). An event in from yesterday keeps at least a
+    /// quarter hour on the page.
     static func availability(
         start: Date, end: Date, isOpenEnded: Bool, quickActionsEnabled: Bool, isRunning: Bool,
         takesRangeEdits: Bool, dayStart: Date, dayEnd: Date, now: Date, edges: [Date]
@@ -192,17 +194,18 @@ nonisolated struct WristEndCrown: Equatable, Sendable {
     static let quarter = TimeInterval(WristTiming.gridMinutes * 60)
     /// How long the crown rests before the change is sent.
     static let restDelay: TimeInterval = 0.7
-    /// How close to the real time a running session's end may be sent.
-    static let sendLeeway: TimeInterval = 60
+    /// How far ahead of now a running session's end must stay.
+    static let runningLead: TimeInterval = 2 * 60
 
     /// The first grid mark at or after `date`.
     static func markAtOrAfter(_ date: Date) -> Date {
         Date(timeIntervalSinceReferenceDate: (date.timeIntervalSinceReferenceDate / quarter).rounded(.up) * quarter)
     }
 
-    /// The earliest a running session's end may go at `now`.
+    /// The earliest a running session's end may go at `now`: the first grid
+    /// mark at least `runningLead` after it.
     static func runningFloor(_ now: Date) -> Date {
-        markAtOrAfter(now.addingTimeInterval(quarter))
+        markAtOrAfter(now.addingTimeInterval(runningLead))
     }
 
     private(set) var config: Config
@@ -254,11 +257,11 @@ nonisolated struct WristEndCrown: Equatable, Sendable {
 
     /// The change not yet sent, as the range to send, marked sent. Nil when
     /// there is none. With `now` (the real time it goes at), a running
-    /// session's end that would no longer be ahead of it goes to the first
-    /// stop that is, on the side of the end the turn went; none, and
-    /// nothing is sent.
+    /// session's end no longer `runningLead` ahead of it is lifted to the
+    /// first stop that is, on the side of the end the turn went; none, and
+    /// nothing is sent — the crown never ends the session.
     mutating func takeUnsent(now: Date? = nil) -> WristTimeSpan? {
-        if let now, config.running, target <= now.addingTimeInterval(Self.sendLeeway), hasUnsent {
+        if let now, config.running, target < now.addingTimeInterval(Self.runningLead), hasUnsent {
             let floor = Self.runningFloor(now)
             let turned = target
             if let ahead = stops.firstIndex(where: {
