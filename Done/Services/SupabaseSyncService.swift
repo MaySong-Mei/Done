@@ -4025,7 +4025,11 @@ final class SupabaseSyncService: ObservableObject {
     /// the cloud did not carry keeps the entry it had — none for a row that
     /// never reached the cloud (made while uploads were off, or still in its
     /// debounce), which therefore still reads dirty and goes up with the next
-    /// flush. A row the cloud carried without a seq takes the cloud row's
+    /// flush. A delete that has not reached the cloud (the id in the
+    /// baseline, not in the local table) keeps its entry too, whether or not
+    /// the cloud carried the row: the merge left the row out
+    /// (`pendingDeletes(in:…)`), and the entry is what makes the next flush
+    /// send the tombstone. A row the cloud carried without a seq takes the cloud row's
     /// hash as the pre-015 fallback sends it, so it reads clean only where
     /// the local row equals the cloud's. That is a guard more than a path: a
     /// real server before 015 refuses the restore fetch itself (it filters on
@@ -4158,15 +4162,19 @@ final class SupabaseSyncService: ObservableObject {
         }
     }
 
-    /// One table's replay. Only rows the device holds after the restore
-    /// enter the baseline (a row in the baseline and not local would be
-    /// tombstoned). A row the snapshot carried with a seq takes the cloud
-    /// row's hash at that seq. Otherwise, after a merge, a row carried
+    /// One table's replay. A row the snapshot carried with a seq takes the
+    /// cloud row's hash at that seq. Otherwise, after a merge, a row carried
     /// without a seq takes the cloud row's hash as the pre-015 fallback
     /// sends it (no 015 columns), at the seq already known — on a 015 server
     /// only a row whose id the replay spells differently, see
     /// `markRestoreCompleted` — and a row not carried keeps the entry it had,
     /// if any; after an overwrite, the local hash at the seq already known.
+    ///
+    /// An id in the baseline and not local is tombstoned by the next flush.
+    /// After an overwrite only the rows the device holds enter the baseline,
+    /// so no such id is left. After a merge every such id keeps the entry it
+    /// had: it is a delete made here that the merge kept, and it still goes
+    /// up.
     private func replayBaseline(table: String, local: [[String: Any]], cloud: [[String: Any]],
                                 seqs: [SyncBaselineKey: Int64], overwrite: Bool) {
         let previous = baseline.entries(table: table)
@@ -4187,6 +4195,14 @@ final class SupabaseSyncService: ObservableObject {
                 next[id] = SyncBaselineEntry(hash: Self.rowHash(Self.withholding(Self.only015Columns, from: cloudRow)),
                                              seq: previous[id]?.seq)
             } else if let kept = previous[id] {
+                next[id] = kept
+            }
+        }
+        if !overwrite {
+            // Every local id with an entry before has one in `next` by now,
+            // so what is left of `previous` is the ids the device does not
+            // hold: its pending deletes.
+            for (id, kept) in previous where next[id] == nil {
                 next[id] = kept
             }
         }

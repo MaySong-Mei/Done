@@ -655,11 +655,17 @@ final class EventTypeTemplateStore: ObservableObject {
     /// - `.merge`: union by normalized title. Cloud rows with a new title are
     ///   appended. Same-title collisions resolve to `.keepLocal` (no-op) or
     ///   `.keepCloud` (replace the local row, adopting cloud's UUID + colorHex).
+    ///   A cloud row whose UUID is in `pendingDeletes` — a type deleted here
+    ///   whose delete has not reached the cloud — takes no part: it is not
+    ///   appended, and it does not replace a local type of the same title
+    ///   (that would bring the deleted UUID back in the local one's place).
+    ///   It is set aside before the title dedupe, so a live cloud namesake
+    ///   under another UUID is merged as it would be without it.
     /// - `.cloudOverwritesLocal`: replace `templates` entirely. Cloud's own
     ///   title duplicates are collapsed before assignment so the user doesn't
     ///   inherit server-side clutter. Falls back to the built-in defaults if
     ///   cloud delivered no templates so the store is never left empty.
-    ///   `resolution` is ignored.
+    ///   `resolution` and `pendingDeletes` are ignored.
     /// Returns the number of templates added (or set, when overwriting) that
     /// actually reached the file — zero if the catalog was still frozen, which
     /// it will be whenever the restore carried no types to unfreeze it with.
@@ -668,7 +674,8 @@ final class EventTypeTemplateStore: ObservableObject {
         templates incoming: [EventTypeTemplate],
         strategy: RestoreStrategy,
         resolution: ConflictResolution,
-        perRowDecisions: [UUID: ConflictResolution]? = nil
+        perRowDecisions: [UUID: ConflictResolution]? = nil,
+        pendingDeletes: Set<UUID> = []
     ) -> Int {
         switch strategy {
         case .cloudOverwritesLocal:
@@ -687,7 +694,7 @@ final class EventTypeTemplateStore: ObservableObject {
             // duplicates (e.g., two cloud "Study" rows from different installs'
             // seed runs) don't produce last-write-wins ambiguity. Matches the
             // pre-dedup `cloudOverwritesLocal` already does on its input.
-            let dedupedIncoming = Self.dedupedByTitle(incoming)
+            let dedupedIncoming = Self.dedupedByTitle(incoming.filter { !pendingDeletes.contains($0.id) })
             var added = 0
             var didMutate = false
             for cloud in dedupedIncoming {

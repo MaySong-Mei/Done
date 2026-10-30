@@ -30,3 +30,30 @@ enum ConflictResolution: Equatable, Hashable {
     case keepLocal
     case keepCloud
 }
+
+/// The rows of a cloud snapshot whose id this device deleted without the
+/// delete having reached the cloud yet, per table. A merge restore leaves
+/// them out: what the user deleted here stays deleted, and the delete still
+/// goes up (`SupabaseSyncService.pendingDeletes(in:…)` says where the set
+/// comes from). A cloud-overwrites-local restore ignores it — there the
+/// cloud's copy wins.
+///
+/// Event types are matched by id here although a merge matches them by
+/// title: a type the user deleted stays deleted even when a local type now
+/// carries the same title.
+struct RestorePendingDeletes: Equatable {
+    var todoEvents: Set<UUID> = []
+    var calendarEvents: Set<UUID> = []
+    var logs: Set<CalendarOccurrenceKey> = []
+    var feedback: Set<CalendarOccurrenceKey> = []
+    var todoLists: Set<UUID> = []
+    var eventTypes: Set<UUID> = []
+    var skills: Set<UUID> = []
+
+    static let none = RestorePendingDeletes()
+
+    var totalCount: Int {
+        todoEvents.count + calendarEvents.count + logs.count + feedback.count
+            + todoLists.count + eventTypes.count + skills.count
+    }
+}

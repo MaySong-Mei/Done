@@ -379,6 +379,57 @@ extension SupabaseSyncService {
         if to != from { inbound?.cursorWasRewound(reason: "restore") }
     }
 
+    // MARK: Pending local deletes
+
+    /// The rows of `snapshot` whose id this device deleted without the
+    /// delete reaching the cloud. Such a delete is an id the baseline holds
+    /// that the local table no longer does — whatever kept it from going up
+    /// (uploads off, signed out, the undo window, a debounce not yet fired,
+    /// a tombstone whose answer never came) — and it is exactly what the
+    /// next flush tombstones (`pushTable`'s `deletedIds`) and what
+    /// `unsyncedChanges` counts. A merge restore leaves these rows out
+    /// (`EventStore.applyRestore`, `EventTypeTemplateStore.applyRestore`,
+    /// `SkillInsightStore.applyRestore`), and the replay keeps their
+    /// entries (`replayBaseline`), so the delete stays and is still sent.
+    ///
+    /// Reads the baseline and the stores as they are now. The apply reads
+    /// it in the main-actor turn that runs the merge and the replay, so the
+    /// three see one state.
+    func pendingDeletes(in snapshot: RestoreSnapshot, eventStore: EventStore,
+                        eventTypeStore: EventTypeTemplateStore, skillStore: SkillInsightStore) -> RestorePendingDeletes {
+        var out = RestorePendingDeletes()
+        out.todoEvents = pendingDeleteIds(table: "events", local: eventStore.events,
+                                          cloud: snapshot.todoEvents, wireId: { $0.id.uuidString }, id: \.id)
+        out.calendarEvents = pendingDeleteIds(table: "calendar_events", local: eventStore.rawCalendarEvents,
+                                              cloud: snapshot.calendarEvents, wireId: { $0.id.uuidString }, id: \.id)
+        out.logs = pendingDeleteIds(table: "event_logs", local: eventStore.calendarEventLogRecords,
+                                    cloud: snapshot.logs, wireId: { self.encodeOccurrenceKey($0.id) }, id: \.id)
+        out.feedback = pendingDeleteIds(table: "event_feedback", local: eventStore.calendarEventFeedbackRecords,
+                                        cloud: snapshot.feedback, wireId: { self.encodeOccurrenceKey($0.id) }, id: \.id)
+        out.todoLists = pendingDeleteIds(table: "todo_lists", local: eventStore.todoLists,
+                                         cloud: snapshot.todoLists, wireId: { $0.id.uuidString }, id: \.id)
+        out.eventTypes = pendingDeleteIds(table: "event_types", local: eventTypeStore.templates,
+                                          cloud: snapshot.eventTypes, wireId: { $0.id.uuidString }, id: \.id)
+        out.skills = pendingDeleteIds(table: "skill_insights", local: skillStore.insights,
+                                      cloud: snapshot.skills, wireId: { $0.id.uuidString }, id: \.id)
+        return out
+    }
+
+    /// One table of `pendingDeletes`: the cloud rows whose id, spelled as
+    /// the row projection spells it (`wireId`, the baseline's key), is in
+    /// the baseline and not among the local rows.
+    private func pendingDeleteIds<Row, ID: Hashable>(table: String, local: [Row], cloud: [Row],
+                                                     wireId: (Row) -> String, id: KeyPath<Row, ID>) -> Set<ID> {
+        let entries = baseline.entries(table: table)
+        guard !entries.isEmpty, !cloud.isEmpty else { return [] }
+        var deleted = Set(entries.keys)
+        for row in local { deleted.remove(wireId(row)) }
+        guard !deleted.isEmpty else { return [] }
+        var out = Set<ID>()
+        for row in cloud where deleted.contains(wireId(row)) { out.insert(row[keyPath: id]) }
+        return out
+    }
+
     // MARK: Events
 
     internal static func rowToEvent(_ row: [String: Any]) -> Event? {

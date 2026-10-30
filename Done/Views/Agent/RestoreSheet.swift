@@ -198,6 +198,11 @@ struct RestoreSheet: View {
                         .font(.caption).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                if preview.keptDeleted.totalCount > 0 {
+                    Text(LCount(.restoreKeptDeletesFormat, one: .restoreKeptDeletesOne, preview.keptDeleted.totalCount))
+                        .font(.caption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
 
             settingsCard("Per-table preview") {
