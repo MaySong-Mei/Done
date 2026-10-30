@@ -11,15 +11,14 @@
 //  `(hash, seq)` back under a cursor already past the newer one.
 //
 //  Each pin runs the window through `RestoreCoordinator` (the app's path)
-//  and asserts the CORRECT outcome inside `XCTExpectFailure`: the suite is
-//  green on king 7a2e382e, and a test fails ("expected failure not
-//  recorded") the moment a fix makes its outcome right, so the wrapper
-//  must then be removed. The fixture steps before the wrapper are plain
-//  assertions — the device really pulled the peer's write before the
-//  apply — so a pin cannot pass vacuously. The control at the end runs the
-//  same writes with the peer's edit landing BEFORE the fetch (`hfresh`
-//  holds) and asserts the same outcome unwrapped: the assertions are
-//  satisfiable, and only the timing differs.
+//  and asserts the correct outcome. Written against king 7a2e382e inside
+//  `XCTExpectFailure` (b4849155), where all four failed as expected; with
+//  fix/restore-stale-snapshot (the fetch's cursor mark and the rewind at
+//  the apply) the wrappers are gone and the assertions hold. The fixture
+//  steps are plain assertions — the device really pulled the peer's write
+//  before the apply — so a pin cannot pass vacuously. The control at the
+//  end runs the same writes with the peer's edit landing BEFORE the fetch
+//  (`hfresh` holds) and asserts the same outcome: only the timing differs.
 //
 //  The same four outcomes were reproduced on the real app against the
 //  local stack (QA e2e, not committed).
@@ -127,12 +126,10 @@ final class SyncRestoreStaleSnapshotQATests: SyncRestoreAndSwitchTestCase {
         // baseline (e.g. by rewinding the cursor instead).
         XCTContext.runActivity(named: "entry after the restore: \(restoredSeq.map(String.init) ?? "nil"); s0=\(s0) peer=\(peerSeq)") { _ in }
 
-        XCTExpectFailure("BUG (hfresh): the replay regresses X's entry to the snapshot's seq under a cursor past the version the device pulled; the edit is confirmed clean at that seq and never sent") {
-            XCTAssertFalse(editedClean && serverAfterEdit != "mine",
-                           "the edit reads clean while the server holds the peer's version")
-            XCTAssertTrue(serverAfterEdit == "mine" || mineShelved || local(x.id)?.note == "mine",
-                          "the edit never reached the server, and after the peer's next write it is on no device or shelf")
-        }
+        XCTAssertFalse(editedClean && serverAfterEdit != "mine",
+                       "the edit reads clean while the server holds the peer's version")
+        XCTAssertTrue(serverAfterEdit == "mine" || mineShelved || local(x.id)?.note == "mine",
+                      "the edit never reached the server, and after the peer's next write it is on no device or shelf")
     }
 
     // MARK: - Claim 2: keep cloud, or overwrite
@@ -152,9 +149,7 @@ final class SyncRestoreStaleSnapshotQATests: SyncRestoreAndSwitchTestCase {
         await puller.pullToHead()
         XCTAssertNotNil(local(y.id), "fixture: the puller still runs")
 
-        XCTExpectFailure("BUG (hfresh): keep cloud leaves the device on the snapshot's older version, clean, while the server holds the newer one") {
-            XCTAssertEqual(local(x.id)?.note, onServer(x)?["note"] as? String, "device and server disagree on X for good")
-        }
+        XCTAssertEqual(local(x.id)?.note, onServer(x)?["note"] as? String, "device and server disagree on X for good")
     }
 
     /// Overwrite after the device pulled a row a peer CREATED during the
@@ -181,9 +176,7 @@ final class SyncRestoreStaleSnapshotQATests: SyncRestoreAndSwitchTestCase {
         XCTAssertNotNil(local(y.id), "fixture: the puller still runs")
         XCTAssertNotNil(onServer(z), "fixture: the server still holds Z")
 
-        XCTExpectFailure("BUG (same cause, outside hfresh): the overwrite drops a row created after the fetch that the device had already pulled; no pull brings it back") {
-            XCTAssertNotNil(local(z.id), "a live server row is missing on the device for good")
-        }
+        XCTAssertNotNil(local(z.id), "a live server row is missing on the device for good")
     }
 
     // MARK: - Claim 3: a delete during the review
@@ -209,9 +202,7 @@ final class SyncRestoreStaleSnapshotQATests: SyncRestoreAndSwitchTestCase {
         XCTAssertNotNil(local(y.id), "fixture: the puller still runs")
         XCTAssertNotNil(server.row(table: "events", key: x.id.uuidString)?.deletedAt, "fixture: the server holds X deleted")
 
-        XCTExpectFailure("BUG (hfresh): the merge brings back a row whose delete the device had already pulled; it reads clean and stays") {
-            XCTAssertNil(local(x.id), "a row deleted on the server is live on the device for good")
-        }
+        XCTAssertNil(local(x.id), "a row deleted on the server is live on the device for good")
     }
 
     // MARK: - Control: the same writes, the peer's edit before the fetch
