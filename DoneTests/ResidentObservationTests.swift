@@ -2298,6 +2298,101 @@ final class FixWatchAttentionTests: XCTestCase {
     }
 }
 
+// MARK: - Independent QA: the 观察站 dot and the statistics switch (qa/restore-wait-and-obs-dot)
+
+/// Statistics uploads OFF, explicitly, for tests of the settings row's READ
+/// path. Since 616fc7c6 the row reads nothing when the switch is on, so a
+/// test that leaves `defaults` to the test host's standard domain covers the
+/// read only while that domain happens to hold no ON — which a simulator
+/// that ever ran the app as a TestFlight build (the default turns it on)
+/// does not.
+enum StatisticsOffDefaults {
+    static let suiteName = "QA-StatisticsOffDefaults"
+
+    static func make() -> UserDefaults {
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        defaults.set(false, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        return defaults
+    }
+}
+
+/// The settings row's dot is silenced by the STATISTICS upload switch —
+/// the one the observatory uploader gates its batches on — and by nothing
+/// else. The row in `SettingsHomeView` calls `needsAttention()` with every
+/// argument defaulted, so the default defaults are pinned here too.
+final class FixWatchAttentionSwitchQATests: XCTestCase {
+    private let later = Calendar.current.date(from: DateComponents(year: 2100, month: 1, day: 1, hour: 12))!
+
+    /// The sync master switch is a different switch: data sync on with
+    /// statistics off leaves the dot lit (and the records read); statistics
+    /// on with data sync off silences it.
+    @MainActor
+    func testTheStatisticsSwitchSilencesTheRowAndTheSyncSwitchDoesNot() throws {
+        let suite = "FixWatchAttentionSwitchQATests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let location = SpikeRunStorageLocation.ephemeral(id: UUID())
+
+        defaults.set(true, forKey: AppSettingsKeys.syncUploadsEnabled)
+        defaults.set(false, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        var reads = SpikeRunStore.wholeFileReads
+        XCTAssertTrue(FixWatchAttention.needsAttention(now: later, location: location, defaults: defaults),
+                      "data sync on, statistics off: lit")
+        XCTAssertGreaterThan(SpikeRunStore.wholeFileReads, reads, "data sync on, statistics off: the records are read")
+
+        defaults.set(false, forKey: AppSettingsKeys.syncUploadsEnabled)
+        defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        reads = SpikeRunStore.wholeFileReads
+        XCTAssertFalse(FixWatchAttention.needsAttention(now: later, location: location, defaults: defaults),
+                       "data sync off, statistics on: quiet")
+        XCTAssertEqual(SpikeRunStore.wholeFileReads, reads, "data sync off, statistics on: nothing read")
+
+        // The note sub-switch is not the gate either.
+        defaults.set(false, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        defaults.set(true, forKey: AppSettingsKeys.telemetryNoteUploadsEnabled)
+        XCTAssertTrue(FixWatchAttention.needsAttention(now: later, location: location, defaults: defaults),
+                      "only the note sub-switch on: lit")
+    }
+
+    /// The call the settings screen makes — no arguments but the clock and
+    /// the pool — reads the app's standard defaults, where the uploader
+    /// (and the 观察站 toggle's @AppStorage) write the switch.
+    @MainActor
+    func testTheSettingsRowsDefaultArgumentIsTheStandardDefaults() {
+        let key = AppSettingsKeys.telemetryUploadsEnabled
+        let saved = UserDefaults.standard.object(forKey: key)
+        defer {
+            if let saved { UserDefaults.standard.set(saved, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        let location = SpikeRunStorageLocation.ephemeral(id: UUID())
+
+        UserDefaults.standard.set(false, forKey: key)
+        XCTAssertTrue(FixWatchAttention.needsAttention(now: later, location: location),
+                      "positive control: standard defaults off — lit")
+        UserDefaults.standard.set(true, forKey: key)
+        let reads = SpikeRunStore.wholeFileReads
+        XCTAssertFalse(FixWatchAttention.needsAttention(now: later, location: location),
+                       "standard defaults on — quiet")
+        XCTAssertEqual(SpikeRunStore.wholeFileReads, reads, "standard defaults on — nothing read")
+    }
+
+    /// The deck is untouched by the switch: its OVERDUE badge reads the
+    /// same registry and the same rule with uploads on as with them off.
+    @MainActor
+    func testTheDecksOverdueBadgeDoesNotDependOnTheSwitch() throws {
+        let suite = "FixWatchAttentionSwitchQATests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        let overdue = FixObservationRegistry.all.filter { FixWatchAttention.isOverdue($0, now: later) }
+        XCTAssertEqual(overdue.count, FixObservationRegistry.all.count, "every entry is overdue by 2100, uploads on or off")
+        XCTAssertFalse(overdue.isEmpty, "fixture: there are entries")
+        XCTAssertFalse(FixWatchAttention.needsAttention(now: later, location: .ephemeral(id: UUID()), defaults: defaults),
+                       "while the row, with uploads on, is quiet over the same entries")
+    }
+}
+
 // MARK: - Independent QA: segmented timing verdicts (feat/fixwatch-segment)
 
 /// Independent QA on the segment split. Every expected string is computed
