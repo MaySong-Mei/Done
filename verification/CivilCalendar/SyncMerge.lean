@@ -204,6 +204,22 @@ it:
   with `Singleton`; the witnesses that need a live row after an undelete
   apply the id-table live rows, which are the whole-row three-way. The
   fixtures are the id tables only.
+* The local table is always the device's real rows here. In the Swift
+  a table whose file could not be read (a frozen slot, a frozen
+  event-type catalog) is empty in memory while its baseline is full, so
+  "an entry and no local row" would read every row of it as a pending
+  local delete. The Swift's merge (`fix/restore-keep-local-deletes`,
+  round 2) exempts frozen tables from the keep-deleted rule and restores
+  them as before, so where the rule applies the model's premise — the
+  local table is faithful — holds; a frozen table's restore is not
+  modelled. The Swift also keeps entries only for the pending deletes
+  read before the merge; on the id-keyed model that is the same set as
+  "no local row after the merge"
+  (`restore_merge_kept_entries_are_pending_deletes`).
+* Refused tombstones: the Swift does not keep the entry of a pending
+  delete whose tombstone the server refused (the `rejected` set, S1),
+  which the model does not have — here every pending delete's
+  `pushDelete` succeeds.
 * The undelete RPC (gh#140) is not a `ClientOp`: `tombstone_monotone`
   is scoped to ordinary writes by construction. Account erase (015's
   `pg_trigger_depth() > 1` arm) physically deletes rows; `Advances.keep`
@@ -6201,6 +6217,54 @@ theorem restore_pending_delete_sent {sys : Sys C} (h : Reachable hash sys)
   obtain ⟨bh, bs⟩ := b
   obtain ⟨row, hrow, -⟩ := (reachable_sound hash h).1.anchored i bh bs hbase
   exact pushDelete_lands sys.server _ i hl (bh, bs) hb row hrow
+
+omit [DecidableEq C] in
+/-- A merge never removes a local row: an id with no local row after it
+had none before. -/
+theorem restore_merge_never_removes (r : Replica C) (keepCloud : Id → Bool)
+    (snap : Snapshot C) (C0 : Seq) (i : Id)
+    (h : (r.restore hash false keepCloud snap C0).loc i = none) : r.loc i = none := by
+  change restoreLoc false keepCloud snap r.base r.loc i = none at h
+  simp only [restoreLoc, Bool.false_eq_true, ↓reduceIte] at h
+  cases hs : snap i with
+  | none => rw [hs] at h; simpa using h
+  | some e =>
+    obtain ⟨c, S⟩ := e
+    rw [hs] at h
+    cases hl : r.loc i with
+    | none => rfl
+    | some row =>
+      rw [hl] at h
+      by_cases hk : keepCloud i = true <;> simp [hk] at h
+
+omit [DecidableEq C] in
+/-- THEOREM (the entries a merge keeps for ids with no local row are
+exactly the pending deletes read before it): an id has no local row and
+an entry after a merge exactly when it had no local row and an entry
+before — a pending local delete — and the entry is the same. So "keep
+the entry of every id the merge leaves without a local row" (the
+replay here) and "keep the entries of the pending deletes read before
+the merge" (the Swift's round 2) keep the same entries, given a faithful
+local table before the merge (see the header on unreadable tables). -/
+theorem restore_merge_kept_entries_are_pending_deletes (r : Replica C)
+    (keepCloud : Id → Bool) (snap : Snapshot C) (C0 : Seq) (i : Id) :
+    ((r.restore hash false keepCloud snap C0).loc i = none
+        ∧ (r.restore hash false keepCloud snap C0).base i ≠ none
+      ↔ r.loc i = none ∧ r.base i ≠ none)
+      ∧ ((r.restore hash false keepCloud snap C0).loc i = none →
+          (r.restore hash false keepCloud snap C0).base i = r.base i) := by
+  have hkeep : (r.restore hash false keepCloud snap C0).loc i = none →
+      (r.restore hash false keepCloud snap C0).base i = r.base i := by
+    intro hl
+    show replayBaseline hash false snap r.base (r.restore hash false keepCloud snap C0).loc i = _
+    simp [replayBaseline, hl]
+  refine ⟨⟨fun ⟨hl, hb⟩ => ⟨restore_merge_never_removes hash r keepCloud snap C0 i hl,
+      by rw [← hkeep hl]; exact hb⟩, fun ⟨hl, hb⟩ => ?_⟩, hkeep⟩
+  cases hbi : r.base i with
+  | none => exact absurd hbi hb
+  | some b =>
+    obtain ⟨hl', hb'⟩ := restore_merge_keeps_pending_delete hash r keepCloud snap C0 i b hl hbi
+    exact ⟨hl', by rw [hb']; simp⟩
 
 /-- A restore step: from the replica, the strategy, the per-row
 decisions, the snapshot and `C0`, the replica after the restore. -/
