@@ -15262,8 +15262,8 @@ final class BoundaryBandCloseTests: XCTestCase {
 }
 
 /// A block that runs across today's 0:00 or 24:00 into an open band is drawn
-/// as one piece per side once the user scrolls, so the band closing out of
-/// view leaves today's piece exactly as it was. (gh#279)
+/// as one piece per side once nothing is being edited, so the band closing
+/// out of view leaves today's piece exactly as it was. (gh#279)
 @MainActor
 final class BoundaryBandPieceTests: XCTestCase {
     private let hourHeight: CGFloat = 56
@@ -15272,9 +15272,6 @@ final class BoundaryBandPieceTests: XCTestCase {
     func testTodaysPieceIsTheBlockTheClosedBandLeaves() {
         let crossing = occurrence(-2.25, 4.5)
         let open = makeHost([crossing], leading: band)
-        XCTAssertEqual(open.debugPieceContainers(of: crossing.id).count, 1, "whole until the user scrolls")
-
-        open.debugSplitBandPieces()
         let pieces = open.debugPieceContainers(of: crossing.id)
         XCTAssertEqual(pieces.count, 2)
         let today = try! XCTUnwrap(pieces[crossing.id])
@@ -15292,32 +15289,51 @@ final class BoundaryBandPieceTests: XCTestCase {
     func testGesturesStillHitTheWholeBlock() {
         let crossing = occurrence(-2.25, 4.5)
         let host = makeHost([crossing], leading: band)
-        let whole = try! XCTUnwrap(host.debugHitFrame(of: crossing.id))
-        host.debugSplitBandPieces()
-        XCTAssertEqual(host.debugHitFrame(of: crossing.id), whole)
+        let hit = try! XCTUnwrap(host.debugHitFrame(of: crossing.id))
         let today = try! XCTUnwrap(host.debugPieceContainers(of: crossing.id)[crossing.id])
-        XCTAssertLessThan(whole.minY, today.frame.minY, "control: the drawn piece is shorter than what is hit")
+        let bandPiece = try! XCTUnwrap(host.debugPieceContainers(of: crossing.id).first { $0.key != crossing.id }?.value)
+        XCTAssertEqual(hit.minY, bandPiece.frame.minY, accuracy: 0.01, "from the event's start")
+        XCTAssertEqual(hit.maxY, today.frame.maxY, accuracy: 0.01, "to its end")
     }
 
-    func testTheSplitGlidesAndTheCloseKeepsTodaysLayers() {
+    func testAJustDroppedBlockSplitsWhenItsHandlesGoAndGlides() {
         let crossing = occurrence(-2.25, 4.5)
-        let host = makeHost([crossing], leading: band)
-        host.debugSplitBandPieces()
+        let host = makeHost([crossing], leading: band, graceEvent: crossing.event.id)
+        XCTAssertEqual(host.debugPieceContainers(of: crossing.id).count, 1, "whole while its handles show")
+        let whole = try! XCTUnwrap(host.debugPieceContainers(of: crossing.id)[crossing.id])
+
+        host.apply(makeModel([crossing], leading: band))
+        host.layoutIfNeeded()
         let pieces = host.debugPieceContainers(of: crossing.id)
+        XCTAssertEqual(pieces.count, 2)
+        XCTAssertTrue(pieces[crossing.id] === whole, "today's piece keeps the block's layers")
         XCTAssertEqual(pieces.values.filter(isTweening).count, 2, "both pieces draw in from the whole block")
-        let today = try! XCTUnwrap(pieces[crossing.id])
 
         host.apply(makeModel([crossing], leading: 0))
         host.layoutIfNeeded()
         let after = host.debugPieceContainers(of: crossing.id)
         XCTAssertEqual(after.count, 1)
-        XCTAssertTrue(after[crossing.id] === today, "the close redraws nothing")
+        XCTAssertTrue(after[crossing.id] === whole, "the close redraws nothing")
+    }
+
+    func testTheUsersScrollSplitsABlockShowingHandlesWithNoHandleAtTheLine() {
+        let crossing = occurrence(-2.25, 4.5)
+        let host = makeHost([crossing], leading: band, graceEvent: crossing.event.id)
+        host.debugSplitBandPieces()
+        let keys = Array(host.debugPieceContainers(of: crossing.id).keys)
+        XCTAssertEqual(keys.count, 2)
+        let bandKey = try! XCTUnwrap(keys.first { $0 != crossing.id })
+        let today = try! XCTUnwrap(host.debugHandleOpacities(ofPiece: crossing.id))
+        let bandPiece = try! XCTUnwrap(host.debugHandleOpacities(ofPiece: bandKey))
+        XCTAssertEqual(today.top, 0)
+        XCTAssertGreaterThan(today.bottom, 0, "control: the event's own end keeps its handle")
+        XCTAssertEqual(bandPiece.bottom, 0)
+        XCTAssertGreaterThan(bandPiece.top, 0, "control: the event's own start keeps its handle")
     }
 
     func testABlockAcrossTodaysEndSplitsThere() {
         let crossing = occurrence(22, 25.5)
         let host = makeHost([crossing], trailing: band)
-        host.debugSplitBandPieces()
         let pieces = host.debugPieceContainers(of: crossing.id)
         XCTAssertEqual(pieces.count, 2)
         let closed = makeHost([crossing], trailing: 0)
@@ -15332,7 +15348,6 @@ final class BoundaryBandPieceTests: XCTestCase {
         let inside = occurrence(9, 10)
         let inBand = occurrence(-5, -3)
         let host = makeHost([inside, inBand], leading: band)
-        host.debugSplitBandPieces()
         XCTAssertEqual(host.debugPieceContainers(of: inside.id).count, 1)
         XCTAssertEqual(host.debugPieceContainers(of: inBand.id).count, 1)
     }
@@ -15342,6 +15357,21 @@ final class BoundaryBandPieceTests: XCTestCase {
         let host = makeHost([crossing], leading: 0)
         host.debugSplitBandPieces()
         XCTAssertEqual(host.debugPieceContainers(of: crossing.id).count, 1)
+    }
+
+    func testDoneStaysOnTheDayAnEventRunsIntoFromTheBandAbove() {
+        XCTAssertTrue(calendarCreatedEventStaysOnSelectedDay(
+            startDayOffset: -1, endDayOffset: 0, selectedDayOffset: 0, leadingBandHours: 12
+        ))
+        XCTAssertFalse(calendarCreatedEventStaysOnSelectedDay(
+            startDayOffset: -1, endDayOffset: -1, selectedDayOffset: 0, leadingBandHours: 12
+        ), "wholly the day before: page there")
+        XCTAssertFalse(calendarCreatedEventStaysOnSelectedDay(
+            startDayOffset: -1, endDayOffset: 0, selectedDayOffset: 0, leadingBandHours: 0
+        ), "no band showing its start")
+        XCTAssertFalse(calendarCreatedEventStaysOnSelectedDay(
+            startDayOffset: -2, endDayOffset: 0, selectedDayOffset: 0, leadingBandHours: 12
+        ))
     }
 
     // MARK: Fixtures
@@ -15364,18 +15394,24 @@ final class BoundaryBandPieceTests: XCTestCase {
     }
 
     private func makeHost(
-        _ occurrences: [CalendarLayout.EventOccurrence], leading: Int = 0, trailing: Int = 0
+        _ occurrences: [CalendarLayout.EventOccurrence],
+        leading: Int = 0,
+        trailing: Int = 0,
+        graceEvent: UUID? = nil
     ) -> DayLayerHostView {
         let host = DayLayerHostView(frame: CGRect(x: 0, y: 0, width: 360, height: 3200))
-        host.apply(makeModel(occurrences, leading: leading, trailing: trailing))
+        host.apply(makeModel(occurrences, leading: leading, trailing: trailing, graceEvent: graceEvent))
         host.layoutIfNeeded()
         return host
     }
 
     private func makeModel(
-        _ occurrences: [CalendarLayout.EventOccurrence], leading: Int = 0, trailing: Int = 0
+        _ occurrences: [CalendarLayout.EventOccurrence],
+        leading: Int = 0,
+        trailing: Int = 0,
+        graceEvent: UUID? = nil
     ) -> DayLayerHostView.Model {
-        DayLayerHostView.Model(
+        var model = DayLayerHostView.Model(
             date: day,
             occurrences: occurrences,
             contentWidth: 360,
@@ -15397,5 +15433,7 @@ final class BoundaryBandPieceTests: XCTestCase {
             isPinchActive: false,
             frozenSlotMinutes: nil
         )
+        model.graceResizeEventID = graceEvent
+        return model
     }
 }

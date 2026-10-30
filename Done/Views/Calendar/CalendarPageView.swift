@@ -132,6 +132,21 @@ func calendarPendingEventCreationCompletionNavigation(
     return .stayOnAnchorVisibleDate
 }
 
+/// Whether a created event is already in view on the day on screen, so
+/// Done stays there instead of paging to the day it starts: one that starts
+/// the day before and runs into this day shows whole, its first part in the
+/// band above. Paging would show it cut at that day's end. (gh#279)
+func calendarCreatedEventStaysOnSelectedDay(
+    startDayOffset: Int,
+    endDayOffset: Int,
+    selectedDayOffset: Int,
+    leadingBandHours: Int
+) -> Bool {
+    leadingBandHours > 0
+        && startDayOffset == selectedDayOffset - 1
+        && endDayOffset >= selectedDayOffset
+}
+
 // Extracted for regression tests: resolve the final moved range using the same Y-snap rule as drag preview.
 func calendarDroppedRangeFromDrag(
     draggedRange: Event.TimeRange,
@@ -6074,7 +6089,15 @@ private extension CalendarPageView {
 
         switch pendingCreate?.completionNavigation ?? .focusCreatedEvent {
         case .focusCreatedEvent:
-            calendarState.selectedDayOffset = offset
+            let staysOnScreen = calendarCreatedEventStaysOnSelectedDay(
+                startDayOffset: offset,
+                endDayOffset: dayOffset(for: preferredRange.end.addingTimeInterval(-1)),
+                selectedDayOffset: calendarState.selectedDayOffset,
+                leadingBandHours: timelineBoundaryExtensionState.leadingHours
+            )
+            if !staysOnScreen {
+                calendarState.selectedDayOffset = offset
+            }
             let occurrenceID = calendarResolvedFocusedOccurrenceID(
                 event: event,
                 preferredRange: preferredRange
