@@ -928,10 +928,17 @@ final class SupabaseSyncService: ObservableObject {
     /// the same rows. Claimed in the caller's turn (`startFullSync`), so two
     /// starts before the pass's task runs still make one pass.
     private var fullSyncInFlight = false
-    /// The master switch came on while a pass was running: the pass may
-    /// have met the switch off at a table it has since passed, so it runs
-    /// once more when it ends (switch and session permitting).
+    /// Owed when the master switch comes on, or a new session begins, while
+    /// a pass runs. Edits made meanwhile to a table the pass had already
+    /// read were flagged by nothing — refused by the switch, or made while
+    /// signed out — so the pass runs once more when it ends, for the session
+    /// then current (switch and session permitting). A token refresh is not
+    /// a new session and owes nothing: the session's own deliveries during
+    /// the pass are flagged (`deliveryMayFlush`) and sent when it ends.
     private var fullSyncRerunOwed = false
+    /// The uid the running pass reads the tables for: it stops at the next
+    /// table once the session holds another one (`fullSyncStopReason`).
+    private var fullSyncUid = ""
 
     init(
         url: String = SupabaseSyncConfig.url,
@@ -1023,7 +1030,8 @@ final class SupabaseSyncService: ObservableObject {
     /// cloud with all the local changes that accumulated while uploads were
     /// paused. With a fullSync already in flight (e.g. rapid OFF→ON→OFF→ON)
     /// the puller still starts, and the running pass is owed one more run:
-    /// it may have met the switch off at a table it has already passed.
+    /// an edit made while the switch was off, to a table the pass had
+    /// already read, was refused and flagged by nothing.
     func userDidEnableUploads() {
         guard canUpload, !userId.isEmpty else { return }
         guard let es = attachedEventStore,
@@ -1139,8 +1147,10 @@ final class SupabaseSyncService: ObservableObject {
                         // Mark "ready" so any code gated on isFullSyncDone still
                         // works as expected. No fullSync — that runs when the
                         // toggle flips on (see `userDidEnableUploads`) or when
-                        // the next debounced sink fires with the toggle on.
-                        self.isFullSyncDone = true
+                        // the next debounced sink fires with the toggle on. A
+                        // pass still running marks it when it ends: until then
+                        // a delivery is owed to the pass, not sent beside it.
+                        if !self.fullSyncInFlight { self.isFullSyncDone = true }
                         return
                     }
                     // Every emission, a token refresh included (design §6.4):
@@ -1354,6 +1364,9 @@ final class SupabaseSyncService: ObservableObject {
         // §6.4): nothing is dropped, nothing is re-read.
         if userId == self.userId, !userId.isEmpty { return }
         self.userId = userId
+        // A pass running now read its tables for the session before this one:
+        // this session gets a complete pass of its own when it ends.
+        if fullSyncInFlight { fullSyncRerunOwed = true }
         feedAvailability = .unknown
         baseline = SyncBaselineStore(defaults: defaults, userId: userId)
         cursor = SyncCursorStore(defaults: defaults, userId: userId)
@@ -2165,8 +2178,8 @@ final class SupabaseSyncService: ObservableObject {
     /// the caller's turn. While the pass runs, a debounced delivery owes its
     /// table a flush (`deliveryMayFlush`) and the chain at head leaves owed
     /// tables to it (`flushPendingTables`); when it ends — after the rerun a
-    /// switch turned on meanwhile asked for — it sends them, I1 permitting,
-    /// and otherwise the chain that reaches head does.
+    /// switch turned on or a session begun meanwhile asked for — it sends
+    /// them, I1 permitting, and otherwise the chain that reaches head does.
     private func startFullSync(
         eventStore: EventStore,
         eventTypeStore: EventTypeTemplateStore,
@@ -2179,8 +2192,9 @@ final class SupabaseSyncService: ObservableObject {
         Task {
             repeat {
                 self.fullSyncRerunOwed = false
+                self.fullSyncUid = self.userId
                 await self.fullSync(eventStore: eventStore, eventTypeStore: eventTypeStore, skillStore: skillStore)
-            } while self.fullSyncRerunOwed && self.fullSyncMayContinue
+            } while self.fullSyncRerunOwed && self.fullSyncMayStart
             self.fullSyncRerunOwed = false
             self.isFullSyncDone = true
             self.fullSyncInFlight = false
@@ -2190,11 +2204,20 @@ final class SupabaseSyncService: ObservableObject {
         }
     }
 
-    /// Whether a running pass goes on to its next table: the switch is on
-    /// and the session stands. Turned off, the pass stops at the next
-    /// table rather than run on with every table refused.
-    private var fullSyncMayContinue: Bool {
+    /// Whether a pass (or its rerun) may start: signed in, switch on.
+    private var fullSyncMayStart: Bool {
         !userId.isEmpty && uploadsSwitchOn
+    }
+
+    /// Why a running pass stops at its next table, nil while it goes on: the
+    /// session ended or now holds another account than the one the pass
+    /// reads for, or the switch is off. It stops rather than run on with
+    /// every table refused, or read for an account it did not start for.
+    private var fullSyncStopReason: String? {
+        if userId.isEmpty { return "signed_out" }
+        if userId != fullSyncUid { return "account_changed" }
+        if !uploadsSwitchOn { return "uploads_off" }
+        return nil
     }
 
     private func fullSync(
@@ -2222,8 +2245,9 @@ final class SupabaseSyncService: ObservableObject {
             { await self.syncAgentConversations() },
         ]
         for table in tables {
-            guard fullSyncMayContinue else {
-                logger.notice("Full sync stopped: uploads off or signed out")
+            if let reason = fullSyncStopReason {
+                DiagnosticTrail.record("Sync", "sync.fullsync.stopped reason=\(reason)")
+                logger.notice("Full sync stopped: \(reason, privacy: .public)")
                 return
             }
             await table()
