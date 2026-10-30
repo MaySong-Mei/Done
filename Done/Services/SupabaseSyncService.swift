@@ -4025,9 +4025,16 @@ final class SupabaseSyncService: ObservableObject {
     /// the cloud did not carry keeps the entry it had — none for a row that
     /// never reached the cloud (made while uploads were off, or still in its
     /// debounce), which therefore still reads dirty and goes up with the next
-    /// flush. A row the cloud carried without a seq (a server before 015)
-    /// takes the cloud row's hash as the fallback sends it, so it reads clean
-    /// only where the local row equals the cloud's.
+    /// flush. A row the cloud carried without a seq takes the cloud row's
+    /// hash as the pre-015 fallback sends it, so it reads clean only where
+    /// the local row equals the cloud's. That is a guard more than a path: a
+    /// real server before 015 refuses the restore fetch itself (it filters on
+    /// `deleted_at` and orders by `seq`, `fetchAllQuery`), so only the fake
+    /// pre-015 server in the tests hands the replay seq-less rows. On a 015
+    /// server every row has a seq, and a row reaches this case only when the
+    /// replay spells its id differently from the server — a log or feedback
+    /// row stored under the old date-bearing occurrence id, whose seq is
+    /// keyed by that id while the replay re-encodes the current one.
     ///
     /// "Cloud overwrites local" keeps the replay it always had: every local
     /// row reads clean — the cloud's version where the snapshot has a seq,
@@ -4088,8 +4095,9 @@ final class SupabaseSyncService: ObservableObject {
 
         // Settings: the cloud blob's per-key hashes at the cloud seq, so a
         // key the merge kept local reads dirty and every other key clean.
-        // A blob without a seq (a server before 015) is read the same way
-        // after a merge, at the seq already known. Without a cloud row a
+        // A blob without a seq is read the same way after a merge, at the seq
+        // already known (only the fake pre-015 server in the tests answers
+        // the restore fetch without seqs, see above). Without a cloud row a
         // merge leaves the entry as it was; an overwrite takes the current
         // local state, as before — restore writes back to UserDefaults,
         // which fires didChangeNotification, and the next debounced settings
@@ -4108,7 +4116,8 @@ final class SupabaseSyncService: ObservableObject {
         // The two blob tables (#2 + #3 from the full-backup audit): same
         // rule — the cloud row's hash at its seq when the cloud carried one,
         // so restored bytes are not re-uploaded for no change; without a seq
-        // the cloud row's hash after a merge; without a cloud row a merge
+        // (the fake pre-015 server's case) the cloud row's hash after a
+        // merge; without a cloud row a merge
         // leaves the entry as it was and an overwrite takes the local row's.
         let preferencesKey = Self.restoreSingletonKey("agent_preferences")
         let cloudPreferencesRow = agentPreferencesRow(rules: cloud.agentRules ?? [], decisionHistory: cloud.agentDecisionHistory ?? [])
@@ -4138,9 +4147,10 @@ final class SupabaseSyncService: ObservableObject {
     /// tombstoned). A row the snapshot carried with a seq takes the cloud
     /// row's hash at that seq. Otherwise, after a merge, a row carried
     /// without a seq takes the cloud row's hash as the pre-015 fallback
-    /// sends it (no 015 columns), at the seq already known, and a row not
-    /// carried keeps the entry it had, if any; after an overwrite, the local
-    /// hash at the seq already known.
+    /// sends it (no 015 columns), at the seq already known — on a 015 server
+    /// only a row whose id the replay spells differently, see
+    /// `markRestoreCompleted` — and a row not carried keeps the entry it had,
+    /// if any; after an overwrite, the local hash at the seq already known.
     private func replayBaseline(table: String, local: [[String: Any]], cloud: [[String: Any]],
                                 seqs: [SyncBaselineKey: Int64], overwrite: Bool) {
         let previous = baseline.entries(table: table)
