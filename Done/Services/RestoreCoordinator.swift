@@ -492,9 +492,10 @@ final class RestoreCoordinator: ObservableObject {
         // mutations above, before the upload sinks' debounce timer fires, so
         // the next sync sends only what differs from the cloud — after a
         // merge that includes the rows the cloud never had. It also takes
-        // the pull cursor back to where the fetch began and asks for a pull
-        // at once, which re-delivers whatever changed on the server since
-        // the snapshot was read, the user's review time included.
+        // the pull cursor back to where the fetch began and, when that moved
+        // it, asks for a pull at once, which re-delivers whatever changed on
+        // the server since the snapshot was read, the user's review time
+        // included.
         syncService?.markRestoreCompleted(
             eventStore: eventStore,
             eventTypeStore: eventTypeStore,

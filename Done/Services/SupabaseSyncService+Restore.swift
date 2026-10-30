@@ -356,9 +356,9 @@ extension SupabaseSyncService {
     /// The restore's half of the cursor (see `RestoreFetchMark`): called by
     /// `markRestoreCompleted` once the baseline holds the replayed snapshot,
     /// in the same main-actor turn, and persists that baseline. Moves the
-    /// cursor back to the fetch's starting position, never forward, and has
-    /// the puller abandon any chain that began before the move and pull
-    /// again at once. A mark that no longer matches the device moves
+    /// cursor back to the fetch's starting position, never forward; when it
+    /// did move, has the puller abandon any chain that began before the move
+    /// and pull again at once. A mark that no longer matches the device moves
     /// nothing (the coordinator refuses such an apply before it mutates
     /// anything; this covers any other caller).
     func rewindCursorAfterRestore(to mark: RestoreFetchMark) {
@@ -371,7 +371,11 @@ extension SupabaseSyncService {
         cursor.rewind(to: mark.cursor, baseline: baseline)
         let to = cursor.value
         DiagnosticTrail.record("Sync", "sync.cursor.restore_rewind from=\(from.map(String.init) ?? "none") to=\(to.map(String.init) ?? "none")")
-        inbound?.cursorWasRewound(reason: "restore")
+        // Only a cursor that moved back owes a re-delivery. One that did not
+        // move means nothing was pulled since the fetch began: the snapshot
+        // replaced no version the device had pulled, and a chain in flight
+        // asked for its pages from this same position.
+        if to != from { inbound?.cursorWasRewound(reason: "restore") }
     }
 
     // MARK: Events

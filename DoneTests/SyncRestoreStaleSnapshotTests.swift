@@ -130,6 +130,28 @@ final class SyncRestoreStaleSnapshotTests: SyncRestoreAndSwitchTestCase {
         XCTAssertTrue(shelved(x.id).isEmpty, "keep cloud left nothing local to shelve")
     }
 
+    /// Nothing pulled between the fetch and the apply: the cursor is where
+    /// the fetch began, the rewind leaves it there, and the restore asks for
+    /// no pull — the snapshot replaced no version the device had pulled.
+    /// The pull a moved cursor asks for: `testKeepCloud_…`.
+    func testACursorThatDidNotMoveAsksForNoPull() async throws {
+        let x = makeEvent("X", note: "v1")
+        let s0 = try await seedAndPull(x)
+        let c = coordinator()
+        try await fetch(c)
+        let pullsBefore = server.requests(.pull).count
+        DiagnosticTrail.clear()
+
+        await c.applyOverwrite()
+        guard case .finished = c.phase else { return XCTFail("the restore did not finish: \(c.phase)") }
+        try await settle()
+
+        XCTAssertEqual(trailLines("sync.cursor.restore_rewind from=\(s0) to=\(s0)").count, 1,
+                       "positive control: the rewind ran and left the cursor")
+        XCTAssertEqual(server.requests(.pull).count, pullsBefore, "the restore asked for a pull it owed nothing to")
+        XCTAssertEqual(service.cursor.value, s0)
+    }
+
     /// A chain that asked for a page from its own (later) cursor before the
     /// rewind, and gets the answer after it: the page is not applied, the
     /// chain ends `rewound`, and the rerun pulls from the rewound cursor.
