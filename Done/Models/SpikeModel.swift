@@ -342,9 +342,16 @@ nonisolated struct SpikeRun: Codable, Identifiable, Equatable {
     /// The erase epoch this value was born in (`LocalDataEraseEpoch`), taken
     /// when it is built or decoded and carried by every copy. A run armed
     /// before "erase all local data" and closed after it is the erased
-    /// owner's, and `SpikeRunStore` refuses any record whose epoch is older
-    /// than the current one. Memory only: never written, never compared.
-    @SpikeRunBirthEpoch var eraseEpoch: Int = LocalDataEraseEpoch.capture()
+    /// owner's, and `SpikeRunStore` refuses any record whose epoch is not the
+    /// current one (`LocalDataEraseEpoch.isStale`). Memory only: never
+    /// written, never compared.
+    var eraseEpoch: Int {
+        get { birthEpoch.value }
+        set { birthEpoch.value = newValue }
+    }
+
+    /// `eraseEpoch`'s storage; see `SpikeRunBirthEpoch`.
+    var birthEpoch = SpikeRunBirthEpoch()
 
     var isOpen: Bool { endedAt == nil }
 }
@@ -356,16 +363,19 @@ nonisolated struct SpikeRun: Codable, Identifiable, Equatable {
 /// names the fields it named before the field existed) and decoding stamps
 /// the epoch current at the read. Its own `Codable` conformance exists only
 /// for that synthesis to type-check.
-@propertyWrapper
+///
+/// A stored property of this type, not a property wrapper: `SpikeRun` is
+/// `nonisolated`, and a wrapped property in it draws "'nonisolated' cannot
+/// be applied to mutable stored properties", an error in Swift 6 mode.
 nonisolated struct SpikeRunBirthEpoch: Codable, Equatable {
-    var wrappedValue: Int
+    var value: Int
 
-    init(wrappedValue: Int) {
-        self.wrappedValue = wrappedValue
+    init(value: Int = LocalDataEraseEpoch.capture()) {
+        self.value = value
     }
 
     init(from decoder: Decoder) throws {
-        wrappedValue = LocalDataEraseEpoch.capture()
+        value = LocalDataEraseEpoch.capture()
     }
 
     func encode(to encoder: Encoder) throws {}
@@ -375,7 +385,7 @@ nonisolated struct SpikeRunBirthEpoch: Codable, Equatable {
 
 nonisolated extension KeyedDecodingContainer {
     func decode(_ type: SpikeRunBirthEpoch.Type, forKey key: Key) throws -> SpikeRunBirthEpoch {
-        SpikeRunBirthEpoch(wrappedValue: LocalDataEraseEpoch.capture())
+        SpikeRunBirthEpoch()
     }
 }
 
