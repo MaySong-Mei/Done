@@ -332,6 +332,21 @@ final class SpikeEraseQAAccountSwitchTests: XCTestCase {
         XCTAssertNil(probe(coordinator.runner195))
     }
 
+    /// The implementer pins this for #201 only. A #195 run that reached its
+    /// forty characters before the erase is the erased owner's too, and the
+    /// Developer page reads it from the runner.
+    func testA195RunCompletedBeforeTheEraseIsForgottenByTheRunner() throws {
+        coordinator.runner195.start(store: store)
+        let completed = try armedID(Spike195Runner.spikeID, on: coordinator)
+        typeNote(40)
+        XCTAssertEqual(coordinator.runner195.lastCompletedRun?.id, completed, "rig: completed before the erase")
+
+        eraser.resetAllLocalData(keepingSession: false)
+
+        XCTAssertNil(coordinator.runner195.lastCompletedRun)
+        assertPoolHolds(none: [completed.uuidString], "the wipe took the record")
+    }
+
     /// A run completed before the erase, and an orphaned open record a past
     /// process left: the note writer and the launch reconcile re-read the
     /// disk, so after the erase they have nothing to write. Positive control:
