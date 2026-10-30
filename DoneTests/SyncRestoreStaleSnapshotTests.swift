@@ -338,25 +338,118 @@ final class SyncRestoreStaleSnapshotTests: SyncRestoreAndSwitchTestCase {
     }
 
     /// `markRestoreCompleted` reached without the coordinator's check (its
-    /// other callers): a mark that no longer matches moves no cursor, and
-    /// the replayed baseline is still persisted.
-    func testMarkRestoreCompletedWithAMarkThatNoLongerMatchesMovesNoCursor() async throws {
+    /// other callers): a mark that no longer matches replays nothing into
+    /// the baseline, in memory or on disk, and moves no cursor. X's entry
+    /// names the peer's version the device pulled; a replay would have put
+    /// the snapshot's older version there.
+    func testMarkRestoreCompletedWithAMarkThatNoLongerMatchesTouchesNeitherBaselineNorCursor() async throws {
         let x = makeEvent("X", note: "v1")
-        _ = try await seedAndPull(x)
+        let s0 = try await seedAndPull(x)
         let snapshot = try await service.fetchRestoreSnapshot()
+        XCTAssertEqual(snapshot.cloudSeqs[SyncBaselineKey(table: "calendar_events", id: x.id.uuidString)], s0,
+                       "fixture: the snapshot carries X at its first version")
         let peerSeq = try await peerEditPulled(x, note: "peer")
+        let entriesBefore = service.baseline.entries(table: "calendar_events")
+        XCTAssertEqual(entriesBefore[x.id.uuidString]?.seq, peerSeq, "fixture: X's entry names the peer's version")
         try LocalDataEraseEpoch.withIsolatedEpoch {
             LocalDataEraseEpoch.bump()
             DiagnosticTrail.clear()
             service.markRestoreCompleted(eventStore: store, eventTypeStore: device.types, skillStore: device.skills,
                                          snapshot: snapshot, strategy: .merge)
+            XCTAssertEqual(trailLines("restore.replay_skipped reason=erase").count, 1)
+            XCTAssertEqual(service.baseline.entries(table: "calendar_events"), entriesBefore,
+                           "the snapshot from before the erase was replayed into the baseline")
+            XCTAssertEqual(SyncBaselineStore(defaults: defaults, userId: uid).entries(table: "calendar_events"), entriesBefore,
+                           "the snapshot from before the erase was persisted as the baseline")
             XCTAssertEqual(service.cursor.value, peerSeq, "the cursor moved under a mark from before an erase")
-            XCTAssertEqual(trailLines("sync.cursor.restore_rewind skipped reason=erase").count, 1)
-            let reloaded = SyncBaselineStore(defaults: defaults, userId: uid)
-            XCTAssertEqual(reloaded.entry(table: "calendar_events", id: x.id.uuidString)?.seq,
-                           snapshot.cloudSeqs[SyncBaselineKey(table: "calendar_events", id: x.id.uuidString)],
-                           "the replayed baseline was not persisted")
         }
+    }
+
+    // MARK: - A fetch that saw no epoch
+
+    /// A device whose first pull has not read the server's epoch yet: the
+    /// launch chain is parked on that read.
+    private func deviceBeforeItsFirstEpochRead() async throws -> SyncSwitchTestDevice {
+        let phone = SyncSwitchTestDevice(server: server, uid: uid, start: Self.t0, switchOnAtAttach: false)
+        phone.defaults.set(true, forKey: AppSettingsKeys.syncUploadsEnabled)
+        server.holdWhen = { verb, _ in verb == .epoch }
+        phone.puller.beginSession(autoPull: false)
+        phone.puller.requestPull(reason: "launch")
+        try await syncEventually("the first pull waits on its epoch read") { self.server.heldCount == 1 }
+        XCTAssertNil(phone.service.cursor.epoch, "fixture: no epoch recorded yet")
+        return phone
+    }
+
+    private func fetchedWithNoEpoch(on phone: SyncSwitchTestDevice) async throws -> RestoreCoordinator {
+        let c = RestoreCoordinator(waitForLoadingFrame: {})
+        c.configure(syncService: phone.service, eventStore: phone.store, eventTypeStore: phone.types,
+                    skillStore: phone.skills, preferenceStore: phone.prefs)
+        await c.startFetch()
+        guard case .ready(let snapshot) = c.phase else {
+            throw FixtureFailure(description: "the restore fetch did not finish: \(c.phase)")
+        }
+        XCTAssertNotNil(snapshot.fetchMark, "fixture: a fetched snapshot carries its mark")
+        XCTAssertNil(snapshot.fetchMark?.epoch, "fixture: the fetch saw no epoch")
+        return c
+    }
+
+    /// The fetch ran before the first pull read the server's epoch; during
+    /// the review that pull recorded it, and then the server's history was
+    /// reset and the device took the reset (every entry stale, the cursor
+    /// dropped, a catch-up). The snapshot may be from the old history, and
+    /// replaying it would put old-history entries over the reset's stale
+    /// markers. The apply is refused and changes nothing. The device cannot
+    /// tell this from a first sighting alone, so any epoch recorded since a
+    /// fetch that saw none refuses (`restoreApplyRefusal`).
+    func testAFetchThatSawNoEpoch_thenTheFirstEpochAndAReset_isRefused() async throws {
+        let x = makeEvent("X, before the reset", note: "v1")
+        server.seed(table: "events", rows: [row(x)])
+        let phone = try await deviceBeforeItsFirstEpochRead()
+        defer { phone.tearDown() }
+        let c = try await fetchedWithNoEpoch(on: phone)
+
+        server.holdWhen = nil
+        server.releaseAll()
+        await phone.puller.pullToHead()
+        let first = try XCTUnwrap(phone.service.cursor.epoch, "fixture: the first pull recorded the epoch")
+        server.reenable()
+        server.unpause()
+        await phone.puller.pullToHead()
+        XCTAssertNotEqual(phone.service.cursor.epoch, first, "fixture: the device took the reset")
+        let rowsBefore = phone.store.rawCalendarEvents
+        let entriesBefore = phone.service.baseline.entries(table: "calendar_events")
+        let cursorBefore = phone.service.cursor.value
+        DiagnosticTrail.clear()
+
+        await c.applyOverwrite()
+
+        XCTAssertEqual(c.phase, .failed(L(.restoreSnapshotOutdated)), "the apply was not refused")
+        XCTAssertEqual(trailLines("restore REFUSED reason=epoch").count, 1)
+        XCTAssertEqual(trailLines("restore APPLY").count, 0, "the restore ran")
+        XCTAssertEqual(phone.store.rawCalendarEvents, rowsBefore, "the refused apply changed the store")
+        XCTAssertEqual(phone.service.baseline.entries(table: "calendar_events"), entriesBefore,
+                       "the refused apply changed the baseline")
+        XCTAssertEqual(phone.service.cursor.value, cursorBefore, "the refused apply moved the cursor")
+    }
+
+    /// The positive control: the same fetch with no epoch, applied while
+    /// the device still has none recorded (the first epoch read is still
+    /// parked). Nothing it identifies has changed, and the overwrite runs.
+    func testControl_aFetchThatSawNoEpoch_appliedWithNoneRecordedSince_applies() async throws {
+        let x = makeEvent("X", note: "v1")
+        server.seed(table: "events", rows: [row(x)])
+        let phone = try await deviceBeforeItsFirstEpochRead()
+        defer { phone.tearDown() }
+        let c = try await fetchedWithNoEpoch(on: phone)
+        XCTAssertFalse(phone.store.rawCalendarEvents.contains { $0.id == x.id }, "fixture: X is not on the device yet")
+        DiagnosticTrail.clear()
+
+        await c.applyOverwrite()
+
+        guard case .finished = c.phase else { return XCTFail("the restore did not finish: \(c.phase)") }
+        XCTAssertNil(phone.service.cursor.epoch, "fixture: still no epoch recorded")
+        XCTAssertEqual(trailLines("restore REFUSED").count, 0)
+        XCTAssertTrue(phone.store.rawCalendarEvents.contains { $0.id == x.id }, "the overwrite landed the cloud's X")
     }
 }
 

@@ -363,10 +363,12 @@ final class RestoreCoordinator: ObservableObject {
         // replay below hands the baseline the snapshot's versions and
         // `markRestoreCompleted` takes the cursor back to that position
         // (`RestoreFetchMark`). If the device's feed is no longer the one
-        // that position was taken in — another account, a reset server
-        // epoch, an erase — nothing is applied: checked here, after the
-        // wait and before the first mutation, with no suspension between
-        // this check and `markRestoreCompleted`.
+        // that position was taken in — another account, an erase, or a
+        // server epoch other than the one recorded at the fetch (a reset, or
+        // a first epoch recorded after a fetch that saw none) — nothing is
+        // applied: checked here, after the wait and before the first
+        // mutation, with no suspension between this check and
+        // `markRestoreCompleted`.
         if let syncService, let mark = snapshot.fetchMark,
            let refusal = syncService.restoreApplyRefusal(mark) {
             let refusedLine = "restore REFUSED reason=\(refusal.rawValue) strategy=\(String(describing: strategy)) resolution=\(String(describing: resolution))"
@@ -663,9 +665,9 @@ final class RestoreCoordinator: ObservableObject {
 /// Counted in display refreshes (`CADisplayLink`), not in time: a changed
 /// frame is committed to the render server between one refresh and the
 /// next, and the continuation resumed from a refresh's callback runs only
-/// after the main thread has finished that pass. Two refreshes rather than
-/// one, so a change SwiftUI defers to the next main-queue turn is covered
-/// as well as one it applies at once — at any refresh rate. Once
+/// after the main thread has finished that pass. More than one refresh,
+/// so a change SwiftUI defers to the next main-queue turn is covered as
+/// well as one it applies at once — at any refresh rate. Once
 /// committed, the render server draws the frame, and turns the spinner,
 /// without the main thread.
 ///

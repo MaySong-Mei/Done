@@ -4076,6 +4076,15 @@ final class SupabaseSyncService: ObservableObject {
     ) {
         let cloud = snapshot ?? lastRestoreSnapshot ?? .empty
         lastRestoreSnapshot = nil
+        // A snapshot fetched under another account, before an erase, or
+        // under another server epoch says nothing about this baseline:
+        // nothing is replayed, nothing persisted, the cursor stays
+        // (`restoreApplyRefusal`). The coordinator refuses such an apply
+        // before it touches the stores; this covers any other caller.
+        if let mark = cloud.fetchMark, let refusal = restoreApplyRefusal(mark) {
+            DiagnosticTrail.record("Sync", "restore.replay_skipped reason=\(refusal.rawValue)")
+            return
+        }
         let seqs = cloud.cloudSeqs
         let overwrite = strategy == .cloudOverwritesLocal
 

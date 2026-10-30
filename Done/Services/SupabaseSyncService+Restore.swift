@@ -69,10 +69,11 @@ struct RestoreSnapshot {
 /// the account, the server epoch the cursor key records, and the count of
 /// local-data erases.
 ///
-/// Why the apply needs it (Lean `restore_fresh_of_read_above_cursor`,
-/// formal/restore-replay): the fetch reads every row after `cursor` was
-/// taken, so any version of a snapshot row newer than the one the snapshot
-/// carries was written above `cursor`. The apply replays the snapshot's
+/// Why the apply needs it (Lean, formal/restore-replay: the restore step
+/// with the rewind, `reachInv_restore` and `baseCovers_restore`, resting on
+/// `restore_fresh_of_read_above_cursor`): the fetch reads every row after
+/// `cursor` was taken, so any version of a snapshot row newer than the one
+/// the snapshot carries was written above `cursor`. The apply replays the snapshot's
 /// (hash, seq) into the baseline — possibly older versions than the device
 /// pulled during the user's review — and then moves the cursor back to
 /// `cursor`, so the next pull re-delivers every such version and the
@@ -96,8 +97,10 @@ struct RestoreFetchMark: Equatable {
 enum RestoreApplyRefusal: String {
     /// Another account (or none) is signed in.
     case account
-    /// The cursor key records another server epoch: the server's history
-    /// was reset under the device (design §6.6), or the record is gone.
+    /// The cursor key records another server epoch than at the fetch: the
+    /// server's history was reset under the device (design §6.6), the
+    /// record is gone, or the fetch saw none and one has been recorded
+    /// since (`restoreApplyRefusal`).
     case epoch
     /// Local data was erased.
     case erase
@@ -342,14 +345,18 @@ extension SupabaseSyncService {
     }
 
     /// Nil when `mark` still names a position in this device's feed: the
-    /// same account, no erase since, and the epoch the cursor key recorded
-    /// then still recorded now. A cursor key that had no epoch then and
-    /// has one now is the first sighting of the server's epoch
-    /// (`SyncCursorStore.recordEpoch`), which resets nothing, so it passes.
+    /// same account, no erase since, and exactly the epoch the cursor key
+    /// recorded then — none if it had none. A fetch that saw no epoch is
+    /// refused once any has been recorded: the first sighting
+    /// (`SyncCursorStore.recordEpoch`) resets nothing, but a reset can
+    /// follow it within the same review, and once that reset's catch-up has
+    /// finished nothing on the device tells the two apart. Refusing both
+    /// costs a second fetch only when the review straddled the session's
+    /// first epoch read.
     func restoreApplyRefusal(_ mark: RestoreFetchMark) -> RestoreApplyRefusal? {
         if mark.userId != userId { return .account }
         if LocalDataEraseEpoch.isStale(mark.eraseToken) { return .erase }
-        if let fetched = mark.epoch, fetched != cursor.epoch { return .epoch }
+        if mark.epoch != cursor.epoch { return .epoch }
         return nil
     }
 
@@ -358,15 +365,9 @@ extension SupabaseSyncService {
     /// in the same main-actor turn, and persists that baseline. Moves the
     /// cursor back to the fetch's starting position, never forward; when it
     /// did move, has the puller abandon any chain that began before the move
-    /// and pull again at once. A mark that no longer matches the device moves
-    /// nothing (the coordinator refuses such an apply before it mutates
-    /// anything; this covers any other caller).
+    /// and pull again at once. Only for a mark `restoreApplyRefusal` passes:
+    /// `markRestoreCompleted` checks before it replays anything.
     func rewindCursorAfterRestore(to mark: RestoreFetchMark) {
-        if let refusal = restoreApplyRefusal(mark) {
-            baseline.persistAll()
-            DiagnosticTrail.record("Sync", "sync.cursor.restore_rewind skipped reason=\(refusal.rawValue)")
-            return
-        }
         let from = cursor.value
         cursor.rewind(to: mark.cursor, baseline: baseline)
         let to = cursor.value
