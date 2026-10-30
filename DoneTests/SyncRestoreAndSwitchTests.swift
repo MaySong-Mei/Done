@@ -10,9 +10,17 @@
 //  2. The master switch turned off and on while a full sync ran: the puller
 //     stayed stopped; a delivery during the pass to a table it had passed
 //     was dropped; an edit made while the switch was off to a table it had
-//     passed was not sent when the switch came back on.
+//     passed was not sent when the switch came back on. The same through
+//     the session: an edit made while signed out during a pass was not sent
+//     after the sign-in.
 //
-//  The restores run through `RestoreCoordinator`, the path the app takes.
+//  The restores run through `RestoreCoordinator`, the path the app takes,
+//  except the pre-015 settings test, which calls `markRestoreCompleted`
+//  directly (the coordinator writes a restored settings blob into
+//  `UserDefaults.standard`, not the engine's suite). The pre-015 tests use
+//  the fake server's pre-015 mode, which answers the restore fetch; a real
+//  server before 015 refuses it (`fetchAllQuery` filters on `deleted_at`
+//  and orders by `seq`), so they pin the replay's guard, not a live path.
 //
 
 import XCTest
@@ -20,7 +28,8 @@ import XCTest
 
 /// One device on a fake server: the engine, its stores, its puller, and an
 /// `AuthService` holding an injected session whose refresh the transport
-/// answers with a new token (a refresh re-runs the session sink).
+/// answers with a new token (a refresh re-runs the session sink). `gateway`
+/// replaces the server's own connection (a router between two accounts).
 @MainActor
 final class SyncSwitchTestDevice {
     let defaults: UserDefaults
@@ -36,7 +45,7 @@ final class SyncSwitchTestDevice {
     private let prefsDirectory: URL
     private let shelfDirectory: URL
 
-    init(server: SyncFakeServer, uid: String, start: Date, switchOnAtAttach: Bool) {
+    init(server: SyncFakeServer, gateway: SyncGateway? = nil, uid: String, start: Date, switchOnAtAttach: Bool) {
         suite = "SyncRestoreAndSwitchTests-\(UUID().uuidString)"
         let location = TestStorage.reset(suite)
         defaults = UserDefaults(suiteName: suite)!
@@ -48,7 +57,7 @@ final class SyncSwitchTestDevice {
         prefsDirectory = scratch.appendingPathComponent("SyncRestoreAndSwitchTests-prefs-\(UUID().uuidString)", isDirectory: true)
         shelfDirectory = scratch.appendingPathComponent("SyncRestoreAndSwitchTests-shelf-\(UUID().uuidString)", isDirectory: true)
         prefs = AgentPreferenceStore(directoryURL: prefsDirectory)
-        service = SupabaseSyncService(gateway: server.connection(), userId: uid, defaults: defaults,
+        service = SupabaseSyncService(gateway: gateway ?? server.connection(), userId: uid, defaults: defaults,
                                       scheduler: scheduler, environment: .local)
         service.attachStores(eventStore: store, eventTypeStore: types, skillStore: skills, preferenceStore: prefs)
         puller = service.installInbound(shelf: ConflictShelf(directory: shelfDirectory))
@@ -71,6 +80,14 @@ final class SyncSwitchTestDevice {
                            launchEnvironment: ["SYNC_DEBUG_SESSION": session], syncEnvironment: .local)
         defaults.set(switchOnAtAttach, forKey: AppSettingsKeys.syncUploadsEnabled)
         service.attach(authService: auth, eventStore: store, eventTypeStore: types, skillStore: skills, preferenceStore: prefs)
+    }
+
+    /// An interactive sign-in as `uid` (the injected-session path).
+    @discardableResult
+    func signIn(_ uid: String) -> Bool {
+        let expiresAt = Date().addingTimeInterval(3600).timeIntervalSince1970
+        let session = #"{"access_token":"at-\#(UUID().uuidString)","refresh_token":"r-\#(UUID().uuidString)","user_id":"\#(uid)","email":"switch@example.com","expires_at":\#(expiresAt)}"#
+        return auth.adoptInjectedSessionIfPresent(launchEnvironment: ["SYNC_DEBUG_SESSION": session], syncEnvironment: .local)
     }
 
     func tearDown() {
@@ -626,6 +643,144 @@ final class SyncSwitchDuringFullSyncTests: SyncRestoreAndSwitchTestCase {
             self.server.row(table: "user_settings", key: self.uid) != nil
         }
         XCTAssertEqual(server.requests(.insert, table: "skill_insights").count, 1, "the skill row was sent twice")
+    }
+
+    /// The session instead of the switch: signed out and back in to the same
+    /// account while a pass is parked. An edit made while signed out is
+    /// flagged by nothing (there is no session to owe it to) and the pass
+    /// had already read its table, so the new session owes a rerun.
+    func testAnEditMadeWhileSignedOutDuringAFullSyncIsSentAfterTheSameAccountSignsBackIn() async throws {
+        try await parkAPass { self.service.userDidEnableUploads() }
+        device.auth.signOut()
+        XCTAssertEqual(service.userId, "", "fixture: the session ended")
+        let signedOut = makeEvent("made while signed out")
+        store.addCalendarEvent(signedOut)
+        scheduler.advance(by: debounce)
+        try await settle()
+        XCTAssertTrue(service.needsFlush.isEmpty, "positive control: nothing flagged the edit")
+
+        XCTAssertTrue(device.signIn(uid), "fixture: signed in again")
+        XCTAssertEqual(server.heldCount, 1, "fixture: the pass is still parked")
+        try await releaseThePass()
+        try await syncEventually("the edit made while signed out reached the cloud") { self.onServer(signedOut) != nil }
+    }
+
+    /// A switch to another account while a pass of the first is parked
+    /// (the account card's "Switch Anyway": the erase, then the new
+    /// session). The pass stops at its next table instead of reading on for
+    /// the new account, the new account gets a pass of its own, and nothing
+    /// of the first account reaches the second's cloud.
+    func testASwitchToAnotherAccountDuringAFullSyncStopsThePass_andTheNewAccountGetsAPassOfItsOwn() async throws {
+        let uidB = "55555555-6666-4777-8888-999999999999"
+        let cloudA = SyncFakeServer(userId: uid), cloudB = SyncFakeServer(userId: uidB)
+        let router = SyncAccountRouter(cloudA)
+        let phone = SyncSwitchTestDevice(server: cloudA, gateway: router, uid: uid, start: Self.t0, switchOnAtAttach: false)
+        defer {
+            cloudA.holdWhen = nil
+            cloudA.releaseAll()
+            phone.tearDown()
+        }
+        phone.defaults.set(true, forKey: AppSettingsKeys.syncUploadsEnabled)
+        phone.puller.beginSession(autoPull: false)
+        await phone.puller.pullToHead()
+        // What the app's eraser does, as far as the engine can see it.
+        phone.service.ownerSwitchEraser = { [unowned phone] in
+            phone.store.clearAllLocalData()
+            phone.skills.clearAll()
+            SupabaseSyncService.wipeAllPersistedHashes(phone.defaults)
+            phone.puller.shelf.wipe()
+            phone.defaults.set(false, forKey: AppSettingsKeys.syncUploadsEnabled)
+        }
+        let rowA = makeEvent("account A's"), skillA = makeSkill("account A's")
+        phone.store.addCalendarEvent(rowA)
+        phone.skills.add(skillA)
+        cloudA.holdWhen = { verb, table in verb == .insert && table == "skill_insights" }
+        phone.service.userDidEnableUploads()
+        try await syncEventually("A's pass is parked on skills") { cloudA.heldCount == 1 }
+        XCTAssertNotNil(cloudA.row(table: "events", key: rowA.id.uuidString), "positive control: A's pass read the calendar for A")
+        // The trail is process-wide, lives across runs and rotates, dropping
+        // its older file: the count below starts from an empty trail.
+        DiagnosticTrail.clear()
+        let requestsToABefore = cloudA.requests.count
+
+        phone.auth.signOut()
+        router.current = cloudB
+        XCTAssertTrue(phone.signIn(uidB), "fixture: B signed in")
+        if case .blocked = phone.service.ownerState { phone.service.switchAnyway() }
+        XCTAssertEqual(phone.service.ownerState, .active(uid: uidB), "fixture: the device switched to B")
+        let rowB = makeEvent("account B's")
+        phone.store.addCalendarEvent(rowB)
+        cloudA.holdWhen = nil
+        cloudA.releaseAll()
+
+        try await syncEventually("B's own pass sent B's row") { cloudB.row(table: "events", key: rowB.id.uuidString) != nil }
+        try await settle()
+        XCTAssertEqual(Self.trailLines("sync.fullsync.stopped reason=account_changed"), 1,
+                       "A's pass read on into its next table for B")
+        XCTAssertEqual(cloudA.requests.count, requestsToABefore, "A's cloud was written after the switch")
+        let sentToB = cloudB.requests.filter { Self.writeVerbs.contains($0.verb) }
+        let bodiesToB = sentToB.compactMap { $0.body as? [[String: Any]] }.flatMap { $0 }
+            + sentToB.compactMap { $0.body as? [String: Any] }
+        XCTAssertFalse(bodiesToB.isEmpty, "positive control: B's cloud was written")
+        XCTAssertEqual(Set(bodiesToB.compactMap { $0["user_id"] as? String }), [uidB], "a row went to B's cloud under another account")
+        let idsA = Set([rowA.id.uuidString, skillA.id.uuidString].map { $0.lowercased() })
+        XCTAssertFalse(sentToB.contains { !idsA.isDisjoint(with: $0.keys.map { $0.lowercased() }) }, "A's rows reached B's cloud")
+    }
+
+    /// With the switch off, a token refresh during a pass took the session
+    /// sink's switch-off branch, which marked the full sync done while the
+    /// pass still ran. Back on, a delivery to the row the pass has in
+    /// flight went to its own flush beside the pass and sent that row a
+    /// second time. It stays owed to the pass until the pass ends.
+    func testWithTheSwitchOffATokenRefreshDuringAFullSyncLeavesTheNextDeliveryOwedToThePass() async throws {
+        let inFlight = makeEvent("in flight", note: "v1")
+        store.addCalendarEvent(inFlight)
+        server.holdWhen = { verb, table in verb == .insert && table == "events" }
+        service.userDidEnableUploads()
+        try await syncEventually("the pass is parked on its calendar POST") { self.server.heldCount == 1 }
+        switchOff()
+        let tokenBefore = device.auth.accessToken
+        await device.auth.forceRefreshToken()
+        XCTAssertNotEqual(device.auth.accessToken, tokenBefore, "positive control: the refresh re-published the session")
+        switchOn()
+
+        var edited = inFlight
+        edited.note = "v2"
+        store.updateCalendarEvent(edited)
+        scheduler.advance(by: debounce)
+        try await settle()
+        XCTAssertTrue(service.needsFlush.contains("calendar_events"), "the delivery was not owed to the running pass")
+        XCTAssertEqual(server.heldCount, 1, "the delivery sent the row beside the pass")
+
+        server.holdWhen = nil
+        server.releaseAll()
+        try await syncEventually("the edit reached the cloud") { self.onServer(inFlight)?["note"] as? String == "v2" }
+        try await settle()
+        XCTAssertEqual(server.requests(.insert, table: "events").filter { names($0, inFlight.id) }.count, 1,
+                       "the row was POSTed twice")
+    }
+
+    /// A token refresh is not a new session: during a pass it owes no second
+    /// pass, which would hash every table again on the main thread. (Green
+    /// before this change too: it pins the choice.)
+    func testATokenRefreshDuringAFullSyncOwesNoSecondPass() async throws {
+        let displaced = FollowerTiming.recorder
+        let recorder = FollowerTimingRecorder()
+        FollowerTiming.recorder = recorder
+        defer { FollowerTiming.recorder = displaced }
+        try await parkAPass { self.service.userDidEnableUploads() }
+        XCTAssertEqual(recorder.dailySnapshot()[.syncCalendarBuild].count, 1, "fixture: the pass read the calendar once")
+        let tokenBefore = device.auth.accessToken
+        await device.auth.forceRefreshToken()
+        XCTAssertNotEqual(device.auth.accessToken, tokenBefore, "positive control: the refresh re-published the session")
+
+        try await releaseThePass()
+        try await settle()
+        XCTAssertEqual(recorder.dailySnapshot()[.syncCalendarBuild].count, 1, "a token refresh ran a second pass")
+    }
+
+    static func trailLines(_ text: String) -> Int {
+        DiagnosticTrail.combinedText().split(separator: "\n").filter { $0.contains(text) }.count
     }
 
     /// Evidence, not a regression test (green before the fix as well): the
