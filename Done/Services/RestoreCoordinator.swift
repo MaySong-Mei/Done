@@ -448,14 +448,17 @@ final class RestoreCoordinator: ObservableObject {
             }
         }
 
-        // Re-seed the sync service's diff baseline with hashes computed from the
-        // newly-restored local state. Must happen on the same MainActor tick as
-        // the store mutations above, before the upload sinks' debounce timer
-        // fires, so the next sync sees zero diff and doesn't churn the server.
+        // Re-seed the sync service's diff baseline from the snapshot just
+        // applied. Must happen on the same MainActor tick as the store
+        // mutations above, before the upload sinks' debounce timer fires, so
+        // the next sync sends only what differs from the cloud — after a
+        // merge that includes the rows the cloud never had.
         syncService?.markRestoreCompleted(
             eventStore: eventStore,
             eventTypeStore: eventTypeStore,
-            skillStore: skillStore
+            skillStore: skillStore,
+            snapshot: snapshot,
+            strategy: strategy
         )
 
         // After structured restore, pull any cloud-backed image binaries

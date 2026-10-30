@@ -3929,16 +3929,27 @@ final class SupabaseSyncService: ObservableObject {
     /// `hash(cloud row)@cloud seq`, the cloud row projected exactly as this
     /// device would send it. A row restored from the cloud therefore reads
     /// clean, and a keepLocal collision row — local content, cloud version —
-    /// reads dirty and goes out as a conditional PATCH on the cloud seq. A
-    /// row the cloud did not carry keeps the legacy shape: the hash of the
-    /// local row with whatever seq was already known for it.
+    /// reads dirty and goes out as a conditional PATCH on the cloud seq.
+    ///
+    /// After a merge, the baseline says no more than the cloud told it. A row
+    /// the cloud did not carry keeps the entry it had — none for a row that
+    /// never reached the cloud (made while uploads were off, or still in its
+    /// debounce), which therefore still reads dirty and goes up with the next
+    /// flush. A row the cloud carried without a seq (a server before 015)
+    /// takes the cloud row's hash as the fallback sends it, so it reads clean
+    /// only where the local row equals the cloud's.
+    ///
+    /// "Cloud overwrites local" keeps the replay it always had: every local
+    /// row reads clean — the cloud's version where the snapshot has a seq,
+    /// the local hash otherwise.
     ///
     /// `snapshot` defaults to the one `fetchRestoreSnapshot` last returned.
     func markRestoreCompleted(
         eventStore: EventStore,
         eventTypeStore: EventTypeTemplateStore,
         skillStore: SkillInsightStore,
-        snapshot: RestoreSnapshot? = nil
+        snapshot: RestoreSnapshot? = nil,
+        strategy: RestoreStrategy = .merge
     ) {
         markRestoreCompleted(
             todoEvents: eventStore.events,
@@ -3948,7 +3959,8 @@ final class SupabaseSyncService: ObservableObject {
             todoLists: eventStore.todoLists,
             eventTypes: eventTypeStore.templates,
             skills: skillStore.insights,
-            snapshot: snapshot
+            snapshot: snapshot,
+            strategy: strategy
         )
     }
 
@@ -3962,33 +3974,42 @@ final class SupabaseSyncService: ObservableObject {
         todoLists: [TodoList],
         eventTypes: [EventTypeTemplate],
         skills: [SkillInsight],
-        snapshot: RestoreSnapshot? = nil
+        snapshot: RestoreSnapshot? = nil,
+        strategy: RestoreStrategy = .merge
     ) {
         let cloud = snapshot ?? lastRestoreSnapshot ?? .empty
         lastRestoreSnapshot = nil
         let seqs = cloud.cloudSeqs
+        let overwrite = strategy == .cloudOverwritesLocal
 
         replayBaseline(table: "events", local: todoEvents.map { eventToRow($0, kind: "todo") },
-                       cloud: cloud.todoEvents.map { eventToRow($0, kind: "todo") }, seqs: seqs)
+                       cloud: cloud.todoEvents.map { eventToRow($0, kind: "todo") }, seqs: seqs, overwrite: overwrite)
         replayBaseline(table: "calendar_events", local: calendarEvents.map { eventToRow($0, kind: "calendar") },
-                       cloud: cloud.calendarEvents.map { eventToRow($0, kind: "calendar") }, seqs: seqs)
-        replayBaseline(table: "event_logs", local: logs.map(logToRow), cloud: cloud.logs.map(logToRow), seqs: seqs)
-        replayBaseline(table: "event_feedback", local: feedback.map(feedbackToRow), cloud: cloud.feedback.map(feedbackToRow), seqs: seqs)
-        replayBaseline(table: "todo_lists", local: todoLists.map(todoListToRow), cloud: cloud.todoLists.map(todoListToRow), seqs: seqs)
-        replayBaseline(table: "event_types", local: eventTypes.map(eventTypeToRow), cloud: cloud.eventTypes.map(eventTypeToRow), seqs: seqs)
-        replayBaseline(table: "skill_insights", local: skills.map(skillToRow), cloud: cloud.skills.map(skillToRow), seqs: seqs)
+                       cloud: cloud.calendarEvents.map { eventToRow($0, kind: "calendar") }, seqs: seqs, overwrite: overwrite)
+        replayBaseline(table: "event_logs", local: logs.map(logToRow), cloud: cloud.logs.map(logToRow), seqs: seqs, overwrite: overwrite)
+        replayBaseline(table: "event_feedback", local: feedback.map(feedbackToRow), cloud: cloud.feedback.map(feedbackToRow),
+                       seqs: seqs, overwrite: overwrite)
+        replayBaseline(table: "todo_lists", local: todoLists.map(todoListToRow), cloud: cloud.todoLists.map(todoListToRow),
+                       seqs: seqs, overwrite: overwrite)
+        replayBaseline(table: "event_types", local: eventTypes.map(eventTypeToRow), cloud: cloud.eventTypes.map(eventTypeToRow),
+                       seqs: seqs, overwrite: overwrite)
+        replayBaseline(table: "skill_insights", local: skills.map(skillToRow), cloud: cloud.skills.map(skillToRow),
+                       seqs: seqs, overwrite: overwrite)
 
         // Settings: the cloud blob's per-key hashes at the cloud seq, so a
         // key the merge kept local reads dirty and every other key clean.
-        // Without a cloud row: the current local state, as before — restore
-        // writes back to UserDefaults, which fires didChangeNotification,
-        // and the next debounced settings sink must see zero diff.
+        // A blob without a seq (a server before 015) is read the same way
+        // after a merge, at the seq already known. Without a cloud row a
+        // merge leaves the entry as it was; an overwrite takes the current
+        // local state, as before — restore writes back to UserDefaults,
+        // which fires didChangeNotification, and the next debounced settings
+        // sink must see zero diff.
         let settingsKey = Self.restoreSingletonKey(SyncBaselineStore.settingsTable)
         if let blob = cloud.settings, let seq = seqs[settingsKey] {
-            let known = blob.filter { SyncedSettings.allKeys.contains($0.key) && !($0.value is NSNull) }
-            let zone = known[CalendarOccurrenceKey.referenceTimeZoneDefaultsKey] as? String
-            baseline.setSettings(.versioned(seq: seq, keys: Self.settingsKeyHashes(known), zone: zone))
-        } else {
+            baseline.setSettings(Self.restoredSettings(blob, seq: seq))
+        } else if let blob = cloud.settings, !overwrite {
+            baseline.setSettings(Self.restoredSettings(blob, seq: baseline.settings?.seq))
+        } else if overwrite {
             let settings = baseline.settings
             let blob = Self.settingsBlobForUpload(local: SyncedSettings.currentSnapshot(defaults), serverZone: settings?.zone)
             baseline.setSettings(.versioned(seq: settings?.seq, keys: Self.settingsKeyHashes(blob), zone: settings?.zone))
@@ -3996,20 +4017,25 @@ final class SupabaseSyncService: ObservableObject {
 
         // The two blob tables (#2 + #3 from the full-backup audit): same
         // rule — the cloud row's hash at its seq when the cloud carried one,
-        // the local row's hash otherwise, so restored bytes are not
-        // re-uploaded for no change.
+        // so restored bytes are not re-uploaded for no change; without a seq
+        // the cloud row's hash after a merge; without a cloud row a merge
+        // leaves the entry as it was and an overwrite takes the local row's.
         let preferencesKey = Self.restoreSingletonKey("agent_preferences")
+        let cloudPreferencesRow = agentPreferencesRow(rules: cloud.agentRules ?? [], decisionHistory: cloud.agentDecisionHistory ?? [])
         if let seq = seqs[preferencesKey] {
-            let row = agentPreferencesRow(rules: cloud.agentRules ?? [], decisionHistory: cloud.agentDecisionHistory ?? [])
-            baseline.setEntry(SyncBaselineEntry(hash: Self.rowHash(row), seq: seq), table: "agent_preferences", id: userId)
-        } else if let preferenceStore = attachedPreferenceStore {
+            baseline.setEntry(SyncBaselineEntry(hash: Self.rowHash(cloudPreferencesRow), seq: seq), table: "agent_preferences", id: userId)
+        } else if cloud.agentRules != nil || cloud.agentDecisionHistory != nil, !overwrite {
+            replaySingleton(table: "agent_preferences", hash: Self.rowHash(cloudPreferencesRow))
+        } else if overwrite, let preferenceStore = attachedPreferenceStore {
             replaySingleton(table: "agent_preferences", hash: Self.rowHash(agentPreferencesToRow(preferenceStore)))
         }
         let conversationsKey = Self.restoreSingletonKey("agent_conversations")
+        let cloudConversationsRow = agentConversationsRow(conversations: cloud.agentConversationsBlob ?? [Any]())
         if let seq = seqs[conversationsKey] {
-            let row = agentConversationsRow(conversations: cloud.agentConversationsBlob ?? [Any]())
-            baseline.setEntry(SyncBaselineEntry(hash: Self.rowHash(row), seq: seq), table: "agent_conversations", id: userId)
-        } else {
+            baseline.setEntry(SyncBaselineEntry(hash: Self.rowHash(cloudConversationsRow), seq: seq), table: "agent_conversations", id: userId)
+        } else if cloud.agentConversationsBlob != nil, !overwrite {
+            replaySingleton(table: "agent_conversations", hash: Self.rowHash(cloudConversationsRow))
+        } else if overwrite {
             replaySingleton(table: "agent_conversations", hash: Self.rowHash(agentConversationsToRow()))
         }
         // Persist the just-restored baseline so the next launch starts from
@@ -4019,26 +4045,44 @@ final class SupabaseSyncService: ObservableObject {
 
     /// One table's replay. Only rows the device holds after the restore
     /// enter the baseline (a row in the baseline and not local would be
-    /// tombstoned). Each takes the cloud row's hash and seq when the
-    /// snapshot carried that id with a seq; otherwise the local hash and the
-    /// seq already known.
-    private func replayBaseline(table: String, local: [[String: Any]], cloud: [[String: Any]], seqs: [SyncBaselineKey: Int64]) {
+    /// tombstoned). A row the snapshot carried with a seq takes the cloud
+    /// row's hash at that seq. Otherwise, after a merge, a row carried
+    /// without a seq takes the cloud row's hash as the pre-015 fallback
+    /// sends it (no 015 columns), at the seq already known, and a row not
+    /// carried keeps the entry it had, if any; after an overwrite, the local
+    /// hash at the seq already known.
+    private func replayBaseline(table: String, local: [[String: Any]], cloud: [[String: Any]],
+                                seqs: [SyncBaselineKey: Int64], overwrite: Bool) {
         let previous = baseline.entries(table: table)
-        var cloudHashes: [String: String] = [:]
+        var cloudRows: [String: [String: Any]] = [:]
         for row in cloud {
             guard let id = row["id"] as? String else { continue }
-            cloudHashes[id] = Self.rowHash(row)
+            cloudRows[id] = row
         }
         var next: [String: SyncBaselineEntry] = [:]
         for row in local {
             guard let id = row["id"] as? String else { continue }
-            if let cloudHash = cloudHashes[id], let seq = seqs[SyncBaselineKey(table: table, id: id)] {
-                next[id] = SyncBaselineEntry(hash: cloudHash, seq: seq)
-            } else {
+            let cloudRow = cloudRows[id]
+            if let cloudRow, let seq = seqs[SyncBaselineKey(table: table, id: id)] {
+                next[id] = SyncBaselineEntry(hash: Self.rowHash(cloudRow), seq: seq)
+            } else if overwrite {
                 next[id] = SyncBaselineEntry(hash: Self.rowHash(row), seq: previous[id]?.seq)
+            } else if let cloudRow {
+                next[id] = SyncBaselineEntry(hash: Self.rowHash(Self.withholding(Self.only015Columns, from: cloudRow)),
+                                             seq: previous[id]?.seq)
+            } else if let kept = previous[id] {
+                next[id] = kept
             }
         }
         baseline.replaceEntries(table: table, with: next)
+    }
+
+    /// The settings baseline a restored cloud blob names: its per-key hashes
+    /// over the keys this build syncs, and its reference zone.
+    private static func restoredSettings(_ blob: [String: Any], seq: Int64?) -> SyncSettingsBaseline {
+        let known = blob.filter { SyncedSettings.allKeys.contains($0.key) && !($0.value is NSNull) }
+        let zone = known[CalendarOccurrenceKey.referenceTimeZoneDefaultsKey] as? String
+        return .versioned(seq: seq, keys: settingsKeyHashes(known), zone: zone)
     }
 
     private func replaySingleton(table: String, hash: String) {
