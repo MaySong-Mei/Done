@@ -406,6 +406,10 @@ struct SettingsHomeView: View {
                 // date) shows HERE, on the row, so it cannot hide behind a
                 // page nobody opens. Passive read of the same evaluator
                 // output the deck renders — no new state in the resident.
+                // With statistics uploads on, the records are analysed from
+                // the cloud: no dot, and the read is skipped
+                // (`FixWatchAttention.needsAttention`). Refreshed on appear,
+                // so flipping the switch on 观察站 shows on the way back.
                 NavigationLink {
                     FixWatchView()
                 } label: {

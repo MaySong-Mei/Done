@@ -4076,6 +4076,15 @@ final class SupabaseSyncService: ObservableObject {
     ) {
         let cloud = snapshot ?? lastRestoreSnapshot ?? .empty
         lastRestoreSnapshot = nil
+        // A snapshot fetched under another account, before an erase, or
+        // under another server epoch says nothing about this baseline:
+        // nothing is replayed, nothing persisted, the cursor stays
+        // (`restoreApplyRefusal`). The coordinator refuses such an apply
+        // before it touches the stores; this covers any other caller.
+        if let mark = cloud.fetchMark, let refusal = restoreApplyRefusal(mark) {
+            DiagnosticTrail.record("Sync", "restore.replay_skipped reason=\(refusal.rawValue)")
+            return
+        }
         let seqs = cloud.cloudSeqs
         let overwrite = strategy == .cloudOverwritesLocal
 
@@ -4138,8 +4147,15 @@ final class SupabaseSyncService: ObservableObject {
             replaySingleton(table: "agent_conversations", hash: Self.rowHash(agentConversationsToRow()))
         }
         // Persist the just-restored baseline so the next launch starts from
-        // here, not from an empty map that would re-upload everything.
-        baseline.persistAll()
+        // here, not from an empty map that would re-upload everything. A
+        // snapshot from `fetchRestoreSnapshot` also takes the cursor back to
+        // where the fetch began, persisting the baseline first (see
+        // `RestoreFetchMark`).
+        if let mark = cloud.fetchMark {
+            rewindCursorAfterRestore(to: mark)
+        } else {
+            baseline.persistAll()
+        }
     }
 
     /// One table's replay. Only rows the device holds after the restore

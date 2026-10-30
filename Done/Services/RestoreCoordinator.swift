@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import SwiftUI
+import QuartzCore
 import os
 
 /// Shares the `Persistence` category with `EventStore`'s durability trail so a
@@ -177,7 +178,19 @@ final class RestoreCoordinator: ObservableObject {
     private weak var preferenceStore: AgentPreferenceStore?
     private weak var imageBackupCoordinator: ImageBackupCoordinator?
 
-    init() {}
+    /// Runs after a phase that shows the loading view is published and
+    /// before the synchronous work that follows it, which on a large
+    /// account holds the main thread long enough to notice. Without it the
+    /// loading view never reaches the screen: SwiftUI draws after the
+    /// current main-actor work returns, and the restore's work would run
+    /// first — the user saw the previous page frozen instead of "正在恢复…".
+    /// Injectable so a test can hold it and look at what has and has not
+    /// happened by then.
+    private let waitForLoadingFrame: @MainActor () async -> Void
+
+    init(waitForLoadingFrame: @escaping @MainActor () async -> Void = { await DisplayedFrameWait.wait() }) {
+        self.waitForLoadingFrame = waitForLoadingFrame
+    }
 
     /// Wire up dependencies after init. Must be called before `startFetch()`;
     /// allows the coordinator to be a `@StateObject` whose deps are created later.
@@ -336,10 +349,38 @@ final class RestoreCoordinator: ObservableObject {
     ) async {
         guard let eventStore, let eventTypeStore, let skillStore else { return }
 
+        // Before the wait, with no suspension in between: every entry point
+        // guards on a phase that is not `.applying`, so a second tap while
+        // the spinner comes up starts nothing.
+        phase = .applying(strategy)
+        // The spinner reaches the screen first; it keeps turning while the
+        // work below holds the main thread (the system animates it). The
+        // wait goes BEFORE the store mutations, never between them — see
+        // `markRestoreCompleted` below.
+        await waitForLoadingFrame()
+
+        // The snapshot was read above the cursor its fetch recorded; the
+        // replay below hands the baseline the snapshot's versions and
+        // `markRestoreCompleted` takes the cursor back to that position
+        // (`RestoreFetchMark`). If the device's feed is no longer the one
+        // that position was taken in — another account, an erase, or a
+        // server epoch other than the one recorded at the fetch (a reset, or
+        // a first epoch recorded after a fetch that saw none) — nothing is
+        // applied: checked here, after the wait and before the first
+        // mutation, with no suspension between this check and
+        // `markRestoreCompleted`.
+        if let syncService, let mark = snapshot.fetchMark,
+           let refusal = syncService.restoreApplyRefusal(mark) {
+            let refusedLine = "restore REFUSED reason=\(refusal.rawValue) strategy=\(String(describing: strategy)) resolution=\(String(describing: resolution))"
+            persistenceLogger.log("\(refusedLine, privacy: .public)")
+            DiagnosticTrail.record("Persistence", refusedLine)
+            phase = .failed(L(.restoreSnapshotOutdated))
+            return
+        }
+
         let restoreLine = "restore APPLY strategy=\(String(describing: strategy)) resolution=\(String(describing: resolution)) cloudCalendarRows=\(snapshot.calendarEvents.count) localBefore=\(eventStore.rawCalendarEvents.count)"
         persistenceLogger.log("\(restoreLine, privacy: .public)")
         DiagnosticTrail.record("Persistence", restoreLine)
-        phase = .applying(strategy)
         var summary = eventStore.applyRestore(
             snapshot,
             strategy: strategy,
@@ -452,7 +493,11 @@ final class RestoreCoordinator: ObservableObject {
         // applied. Must happen on the same MainActor tick as the store
         // mutations above, before the upload sinks' debounce timer fires, so
         // the next sync sends only what differs from the cloud — after a
-        // merge that includes the rows the cloud never had.
+        // merge that includes the rows the cloud never had. It also takes
+        // the pull cursor back to where the fetch began and, when that moved
+        // it, asks for a pull at once, which re-delivers whatever changed on
+        // the server since the snapshot was read, the user's review time
+        // included.
         syncService?.markRestoreCompleted(
             eventStore: eventStore,
             eventTypeStore: eventTypeStore,
@@ -609,4 +654,82 @@ final class RestoreCoordinator: ObservableObject {
         return result
     }
 
+}
+
+// MARK: - Waiting for a frame
+
+/// Suspends until the display has been handed the frames that follow the
+/// call, so whatever was published just before it is on the screen before
+/// the caller holds the main thread.
+///
+/// Counted in display refreshes (`CADisplayLink`), not in time: a changed
+/// frame is committed to the render server between one refresh and the
+/// next, and the continuation resumed from a refresh's callback runs only
+/// after the main thread has finished that pass. More than one refresh,
+/// so a change SwiftUI defers to the next main-queue turn is covered as
+/// well as one it applies at once — at any refresh rate. Once
+/// committed, the render server draws the frame, and turns the spinner,
+/// without the main thread.
+///
+/// `ceiling` bounds the wait when no refresh comes (the app moved to the
+/// background, the screen is off): the caller's work then runs anyway, as
+/// it did before there was a wait.
+@MainActor
+enum DisplayedFrameWait {
+    nonisolated static let frames = 2
+    nonisolated static let ceiling: Duration = .milliseconds(500)
+
+    static func wait(frames: Int = frames, ceiling: Duration = ceiling) async {
+        #if os(iOS)
+        await Ticker(frames: frames).run(ceiling: ceiling)
+        #else
+        // The Mac target compiles the restore coordinator but presents no
+        // restore UI, so there is no loading view to wait for.
+        #endif
+    }
+
+    #if os(iOS)
+    /// One wait: a display link that resumes the waiter after `frames`
+    /// refreshes, or when `ceiling` passes, whichever comes first — once.
+    private final class Ticker: NSObject {
+        private var remaining: Int
+        private var link: CADisplayLink?
+        private var continuation: CheckedContinuation<Void, Never>?
+        private var timeout: Task<Void, Never>?
+
+        init(frames: Int) {
+            remaining = frames
+        }
+
+        func run(ceiling: Duration) async {
+            guard remaining > 0 else { return }
+            await withCheckedContinuation { continuation in
+                self.continuation = continuation
+                let link = CADisplayLink(target: self, selector: #selector(tick))
+                link.add(to: .main, forMode: .common)
+                self.link = link
+                timeout = Task { [weak self] in
+                    try? await Task.sleep(for: ceiling)
+                    guard !Task.isCancelled else { return }
+                    self?.finish()
+                }
+            }
+        }
+
+        @objc private func tick(_ link: CADisplayLink) {
+            remaining -= 1
+            if remaining <= 0 { finish() }
+        }
+
+        private func finish() {
+            // The link retains its target; invalidating releases the cycle.
+            link?.invalidate()
+            link = nil
+            timeout?.cancel()
+            timeout = nil
+            continuation?.resume()
+            continuation = nil
+        }
+    }
+    #endif
 }
