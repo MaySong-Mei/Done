@@ -111,6 +111,41 @@ final class SyncRestoreStaleSnapshotFixQATests: SyncRestoreAndSwitchTestCase {
         XCTAssertEqual(entry(x)?.seq, peerSeq)
     }
 
+    /// The same with an EMPTY page (the device was at head when the chain
+    /// asked): no page guard comes after the epoch read, so only the guard
+    /// there keeps the chain from ending `head` and running its head work
+    /// (pending-verify, the flush, I1) on a pull that never covered the
+    /// rewound range. With a non-empty page the guard after the ancestry
+    /// read shadows it (QA mutant survived the test above).
+    func testAChainParkedAtItsEpochReadWithAnEmptyPage_givesUpWithoutHeadWork() async throws {
+        let x = makeEvent("X", note: "v1")
+        let s0 = try await seedAndPull(x)
+        let c = coordinator()
+        try await fetch(c)
+        let peerSeq = try await peerEditPulled(x, note: "peer")
+        final class Lines { var all: [String] = [] }
+        let traced = Lines()
+        puller.trace = { traced.all.append($0) }
+        DiagnosticTrail.clear()
+
+        var hold = true
+        server.holdWhen = { verb, _ in verb == .epoch && hold }
+        puller.requestPull(reason: "doorbell")
+        try await syncEventually("the chain read an empty page and parked at the epoch read") { self.server.heldCount == 1 }
+        XCTAssertEqual(server.requests(.pull).last?.baseSeq, peerSeq, "fixture: the page was asked for from the head")
+
+        try await keepCloud(c)
+        guard case .finished = c.phase else { return XCTFail("the restore did not finish: \(c.phase)") }
+        XCTAssertEqual(service.cursor.value, s0, "fixture: the rewind ran")
+
+        hold = false
+        server.releaseAll()
+        try await syncEventually("the rerun brought the peer's X back") { self.local(x.id)?.note == "peer" }
+        XCTAssertEqual(trailLines("sync.pull reason=doorbell pages=0 rows=0 status=rewound").count, 1,
+                       "the parked chain ended as if at head: \(traced.all)")
+        XCTAssertEqual(traced.all.first, "chain doorbell rewound", "the parked chain's first trace: \(traced.all)")
+    }
+
     // MARK: - Refusals the implementer's tests reach only through another check
 
     /// Another account whose cursor key records the same server epoch (it
