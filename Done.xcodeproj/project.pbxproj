@@ -391,6 +391,7 @@
 		DRAFTMAP00000000000000B01 /* WristDraftMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DRAFTMAP00000000000000F01 /* WristDraftMappingTests.swift */; };
 		WSETCMD000000000000000B01 /* WristSettingsCommandTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WSETCMD000000000000000F01 /* WristSettingsCommandTests.swift */; };
 		WBLKEDIT00000000000000B01 /* WristBlockEditTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WBLKEDIT00000000000000F01 /* WristBlockEditTests.swift */; };
+		QAEVPAGE0000000000000B01 /* WristEventPageQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QAEVPAGE0000000000000F01 /* WristEventPageQATests.swift */; };
 		WHOLDTST00000000000000B01 /* WristHoldTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WHOLDTST00000000000000F01 /* WristHoldTests.swift */; };
 		WATCH000000000000000B015 /* WristStateReducerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F013 /* WristStateReducerTests.swift */; };
 		WATCH000000000000000B016 /* WristSnapshotBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000F014 /* WristSnapshotBuilderTests.swift */; };
@@ -828,6 +829,7 @@
 		DRAFTMAP00000000000000F01 /* WristDraftMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristDraftMappingTests.swift; sourceTree = "<group>"; };
 		WSETCMD000000000000000F01 /* WristSettingsCommandTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristSettingsCommandTests.swift; sourceTree = "<group>"; };
 		WBLKEDIT00000000000000F01 /* WristBlockEditTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristBlockEditTests.swift; sourceTree = "<group>"; };
+		QAEVPAGE0000000000000F01 /* WristEventPageQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristEventPageQATests.swift; sourceTree = "<group>"; };
 		WHOLDTST00000000000000F01 /* WristHoldTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristHoldTests.swift; sourceTree = "<group>"; };
 		WATCH000000000000000F013 /* WristStateReducerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristStateReducerTests.swift; sourceTree = "<group>"; };
 		WATCH000000000000000F014 /* WristSnapshotBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WristSnapshotBuilderTests.swift; sourceTree = "<group>"; };
@@ -913,6 +915,7 @@
 				DRAFTMAP00000000000000F01 /* WristDraftMappingTests.swift */,
 				WSETCMD000000000000000F01 /* WristSettingsCommandTests.swift */,
 				WBLKEDIT00000000000000F01 /* WristBlockEditTests.swift */,
+				QAEVPAGE0000000000000F01 /* WristEventPageQATests.swift */,
 				WHOLDTST00000000000000F01 /* WristHoldTests.swift */,
 				WENDCRWN00000000000000F02 /* WristEndCrownTests.swift */,
 				WATCHTTL0000000000000F02 /* WristTitleSuggestionTests.swift */,
@@ -1759,6 +1762,7 @@
 				DRAFTMAP00000000000000B01 /* WristDraftMappingTests.swift in Sources */,
 				WSETCMD000000000000000B01 /* WristSettingsCommandTests.swift in Sources */,
 				WBLKEDIT00000000000000B01 /* WristBlockEditTests.swift in Sources */,
+				QAEVPAGE0000000000000B01 /* WristEventPageQATests.swift in Sources */,
 				WHOLDTST00000000000000B01 /* WristHoldTests.swift in Sources */,
 				WENDCRWN00000000000000B03 /* WristEndCrownTests.swift in Sources */,
 				WATCHTTL0000000000000B03 /* WristTitleSuggestionTests.swift in Sources */,
