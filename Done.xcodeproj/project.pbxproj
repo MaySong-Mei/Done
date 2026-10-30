@@ -153,6 +153,7 @@
 		BBCC00062F70000000000006 /* LaTeXSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = BBCC00042F70000000000004 /* LaTeXSwiftUI */; };
 		BKSN10012FE2000000000006 /* BackupSnapshotService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BKSN00012FE2000000000006 /* BackupSnapshotService.swift */; };
 		BX55E00012F70000000000001 /* Calendar/BoundaryExtensionScrollAnimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BX55E00002F70000000000001 /* Calendar/BoundaryExtensionScrollAnimator.swift */; };
+		BX55E00012F70000000000002 /* Calendar/BoundaryBandOffsetKeeper.swift in Sources */ = {isa = PBXBuildFile; fileRef = BX55E00002F70000000000002 /* Calendar/BoundaryBandOffsetKeeper.swift */; };
 		C0DE10032F90000000000003 /* SnapshotTesting in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE10052F90000000000005 /* SnapshotTesting */; };
 		CA1E00022FD0000000000042 /* Calendar/Components/CalendarListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA1E00012FD0000000000042 /* Calendar/Components/CalendarListView.swift */; };
 		CADA00012F90000000000001 /* Calendar/Components/Timeline/CalendarDayLayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CADA00022F90000000000002 /* Calendar/Components/Timeline/CalendarDayLayerView.swift */; };
@@ -631,6 +632,7 @@
 		BADA55002FC0000000000001 /* Calendar/Components/Month/MonthOverviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Month/MonthOverviewView.swift; sourceTree = "<group>"; };
 		BKSN00012FE2000000000006 /* BackupSnapshotService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupSnapshotService.swift; sourceTree = "<group>"; };
 		BX55E00002F70000000000001 /* Calendar/BoundaryExtensionScrollAnimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/BoundaryExtensionScrollAnimator.swift; sourceTree = "<group>"; };
+		BX55E00002F70000000000002 /* Calendar/BoundaryBandOffsetKeeper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/BoundaryBandOffsetKeeper.swift; sourceTree = "<group>"; };
 		CA1E00012FD0000000000042 /* Calendar/Components/CalendarListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/CalendarListView.swift; sourceTree = "<group>"; };
 		CADA00022F90000000000002 /* Calendar/Components/Timeline/CalendarDayLayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/CalendarDayLayerView.swift; sourceTree = "<group>"; };
 		DE1E00022FA0000000000002 /* Calendar/Components/Timeline/EventDeletionMotion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/EventDeletionMotion.swift; sourceTree = "<group>"; };
@@ -1280,6 +1282,7 @@
 				DFAA00002F80000000000001 /* Calendar/CalendarComposerDraft.swift */,
 				AAAA00102F30000000000002 /* Calendar/CalendarPageHandlerHelpers.swift */,
 				BX55E00002F70000000000001 /* Calendar/BoundaryExtensionScrollAnimator.swift */,
+				BX55E00002F70000000000002 /* Calendar/BoundaryBandOffsetKeeper.swift */,
 				EEEEFA8F2F200000000397C6 /* Calendar/CalendarViewState.swift */,
 				EEEEFA912F200000000397C6 /* Calendar/CalendarFocusState.swift */,
 				EEEEFA1F2F16B200000397C6 /* Calendar/CalendarLayout.swift */,
@@ -1693,6 +1696,7 @@
 				DFAA00012F80000000000001 /* Calendar/CalendarComposerDraft.swift in Sources */,
 				AAAA00112F30000000000002 /* Calendar/CalendarPageHandlerHelpers.swift in Sources */,
 				BX55E00012F70000000000001 /* Calendar/BoundaryExtensionScrollAnimator.swift in Sources */,
+				BX55E00012F70000000000002 /* Calendar/BoundaryBandOffsetKeeper.swift in Sources */,
 				EEEEFA902F200000000397C6 /* Calendar/CalendarViewState.swift in Sources */,
 				EEEEFA922F200000000397C6 /* Calendar/CalendarFocusState.swift in Sources */,
 				EEEEFA252F16B200000397C6 /* Calendar/CalendarLayout.swift in Sources */,

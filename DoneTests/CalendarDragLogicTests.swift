@@ -15087,3 +15087,113 @@ final class CalendarDayColumnPreviewTests: XCTestCase {
         XCTAssertNil(resolved?.title)
     }
 }
+
+/// gh#279: a band closes only once it is wholly out of view, and a band
+/// above today closes with the offset moved in the same layout pass.
+@MainActor
+final class BoundaryBandCloseTests: XCTestCase {
+    private let hourHeight: CGFloat = 44
+    private let topInset: CGFloat = 80
+    private let header: CGFloat = 14
+    private let viewport: CGFloat = 500
+
+    private func visibility(offsetY: CGFloat, leading: Int = 12, trailing: Int = 0)
+        -> (leadingVisible: Bool, trailingVisible: Bool) {
+        calendarTimelineBoundaryExtensionVisibility(
+            currentOffsetY: offsetY,
+            viewportHeight: viewport,
+            contentTopInset: topInset,
+            allDayHeight: 0,
+            headerHeight: header,
+            hourHeight: hourHeight,
+            state: TimelineBoundaryExtensionState(leadingHours: leading, trailingHours: trailing, source: nil)
+        )
+    }
+
+    /// Today's 0:00 in content coordinates while the band above is open.
+    private var todayStartY: CGFloat { topInset + header + 12 * hourHeight }
+
+    func testBandAboveStaysWhileAnySliverShows() {
+        // One hour of the band still on screen: the old rule closed it here.
+        XCTAssertTrue(visibility(offsetY: todayStartY - hourHeight).leadingVisible)
+        XCTAssertTrue(visibility(offsetY: todayStartY - 2).leadingVisible)
+    }
+
+    func testBandAboveClosesOnceTodayStartCrossesTheTopEdge() {
+        XCTAssertFalse(visibility(offsetY: todayStartY).leadingVisible)
+        XCTAssertFalse(visibility(offsetY: todayStartY + 3 * hourHeight).leadingVisible)
+    }
+
+    func testBandBelowClosesOnceTodayEndCrossesTheBottomEdge() {
+        // Band below open, none above: today's 24:00 sits at origin + 24 h.
+        let todayEndY = topInset + header + 24 * hourHeight
+        XCTAssertTrue(visibility(offsetY: todayEndY - viewport + 2, leading: 0, trailing: 12).trailingVisible)
+        XCTAssertFalse(visibility(offsetY: todayEndY - viewport, leading: 0, trailing: 12).trailingVisible)
+    }
+
+    private func scrollView(contentHeight: CGFloat, offsetY: CGFloat) -> UIScrollView {
+        let view = UIScrollView(frame: CGRect(x: 0, y: 0, width: 375, height: viewport))
+        view.contentSize = CGSize(width: 375, height: contentHeight)
+        view.contentOffset = CGPoint(x: 0, y: offsetY)
+        return view
+    }
+
+    func testKeeperMovesTheOffsetInsideTheContentShrink() {
+        let band = 12 * hourHeight
+        let view = scrollView(contentHeight: 2000, offsetY: 700)
+        let keeper = BoundaryBandOffsetKeeper()
+        keeper.attach(view)
+        XCTAssertTrue(keeper.expect(heightChange: -band))
+        view.contentSize.height = 2000 - band
+        XCTAssertEqual(view.contentOffset.y, 700 - band, accuracy: 0.01)
+    }
+
+    func testKeeperShiftsOnlyOnce() {
+        let band = 12 * hourHeight
+        let view = scrollView(contentHeight: 2000, offsetY: 700)
+        let keeper = BoundaryBandOffsetKeeper()
+        keeper.attach(view)
+        XCTAssertTrue(keeper.expect(heightChange: -band))
+        view.contentSize.height = 2000 - band
+        view.contentSize.height = 2000 - 2 * band
+        XCTAssertEqual(view.contentOffset.y, 700 - band, accuracy: 0.01)
+    }
+
+    func testKeeperWaitsOutChangesThatAreNotTheBandClosing() {
+        let band = 12 * hourHeight
+        let view = scrollView(contentHeight: 2000, offsetY: 700)
+        let keeper = BoundaryBandOffsetKeeper()
+        keeper.attach(view)
+        XCTAssertTrue(keeper.expect(heightChange: -band))
+        view.contentSize.height = 2100          // grows: something else
+        view.contentSize.height = 2100 - 20     // barely shrinks: something else
+        XCTAssertEqual(view.contentOffset.y, 700, accuracy: 0.01)
+        view.contentSize.height = 2080 - band   // the band
+        XCTAssertEqual(view.contentOffset.y, 700 - band, accuracy: 0.01)
+    }
+
+    func testKeeperDoesNothingUnarmed() {
+        let view = scrollView(contentHeight: 2000, offsetY: 700)
+        let keeper = BoundaryBandOffsetKeeper()
+        keeper.attach(view)
+        view.contentSize.height = 1400
+        XCTAssertEqual(view.contentOffset.y, 700, accuracy: 0.01)
+    }
+
+    func testKeeperWithoutAScrollViewLeavesTheCallerToScroll() {
+        XCTAssertFalse(BoundaryBandOffsetKeeper().expect(heightChange: -528))
+    }
+
+    func testKeeperArmedShiftExpires() {
+        let band = 12 * hourHeight
+        let view = scrollView(contentHeight: 2000, offsetY: 700)
+        let keeper = BoundaryBandOffsetKeeper()
+        keeper.attach(view)
+        XCTAssertTrue(keeper.expect(heightChange: -band))
+        let waited = expectation(description: "past the arm window")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { waited.fulfill() }
+        wait(for: [waited], timeout: 2)
+        view.contentSize.height = 2000 - band
+        XCTAssertEqual(view.contentOffset.y, 700, accuracy: 0.01)
+    }
+}
