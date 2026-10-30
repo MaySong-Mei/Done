@@ -6,8 +6,8 @@
 //  data", then the run completes. The closing record used to land after the
 //  erase: the pre-erase id and gestures, revision 1, stamped with whoever was
 //  signed in by then, and the uploader sent it. The erase here is the real
-//  `LocalDataEraser`; every erase test has a twin without the erase that
-//  writes and uploads exactly as before.
+//  `LocalDataEraser`. The #201 and #195 erase tests each have a control
+//  without the erase that writes and uploads exactly as before.
 //
 
 import XCTest
