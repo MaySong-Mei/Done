@@ -15260,3 +15260,142 @@ final class BoundaryBandCloseTests: XCTestCase {
         XCTAssertEqual(view.contentOffset.y, 700, accuracy: 0.01)
     }
 }
+
+/// A block that runs across today's 0:00 or 24:00 into an open band is drawn
+/// as one piece per side once the user scrolls, so the band closing out of
+/// view leaves today's piece exactly as it was. (gh#279)
+@MainActor
+final class BoundaryBandPieceTests: XCTestCase {
+    private let hourHeight: CGFloat = 56
+    private let band = 12
+
+    func testTodaysPieceIsTheBlockTheClosedBandLeaves() {
+        let crossing = occurrence(-2.25, 4.5)
+        let open = makeHost([crossing], leading: band)
+        XCTAssertEqual(open.debugPieceContainers(of: crossing.id).count, 1, "whole until the user scrolls")
+
+        open.debugSplitBandPieces()
+        let pieces = open.debugPieceContainers(of: crossing.id)
+        XCTAssertEqual(pieces.count, 2)
+        let today = try! XCTUnwrap(pieces[crossing.id])
+        let bandPiece = try! XCTUnwrap(pieces.first { $0.key != crossing.id }?.value)
+
+        let closed = makeHost([crossing], leading: 0)
+        let closedFrame = try! XCTUnwrap(closed.debugPieceContainers(of: crossing.id)[crossing.id]).frame
+        let shift = CGFloat(band) * hourHeight
+        XCTAssertEqual(today.frame.offsetBy(dx: 0, dy: -shift), closedFrame)
+        XCTAssertEqual(bandPiece.frame.minX, today.frame.minX)
+        XCTAssertEqual(bandPiece.frame.width, today.frame.width)
+        XCTAssertEqual(today.frame.minY - bandPiece.frame.maxY, 3, accuracy: 0.01, "the usual gap between blocks")
+    }
+
+    func testGesturesStillHitTheWholeBlock() {
+        let crossing = occurrence(-2.25, 4.5)
+        let host = makeHost([crossing], leading: band)
+        let whole = try! XCTUnwrap(host.debugHitFrame(of: crossing.id))
+        host.debugSplitBandPieces()
+        XCTAssertEqual(host.debugHitFrame(of: crossing.id), whole)
+        let today = try! XCTUnwrap(host.debugPieceContainers(of: crossing.id)[crossing.id])
+        XCTAssertLessThan(whole.minY, today.frame.minY, "control: the drawn piece is shorter than what is hit")
+    }
+
+    func testTheSplitGlidesAndTheCloseKeepsTodaysLayers() {
+        let crossing = occurrence(-2.25, 4.5)
+        let host = makeHost([crossing], leading: band)
+        host.debugSplitBandPieces()
+        let pieces = host.debugPieceContainers(of: crossing.id)
+        XCTAssertEqual(pieces.values.filter(isTweening).count, 2, "both pieces draw in from the whole block")
+        let today = try! XCTUnwrap(pieces[crossing.id])
+
+        host.apply(makeModel([crossing], leading: 0))
+        host.layoutIfNeeded()
+        let after = host.debugPieceContainers(of: crossing.id)
+        XCTAssertEqual(after.count, 1)
+        XCTAssertTrue(after[crossing.id] === today, "the close redraws nothing")
+    }
+
+    func testABlockAcrossTodaysEndSplitsThere() {
+        let crossing = occurrence(22, 25.5)
+        let host = makeHost([crossing], trailing: band)
+        host.debugSplitBandPieces()
+        let pieces = host.debugPieceContainers(of: crossing.id)
+        XCTAssertEqual(pieces.count, 2)
+        let closed = makeHost([crossing], trailing: 0)
+        XCTAssertEqual(
+            pieces[crossing.id]?.frame,
+            closed.debugPieceContainers(of: crossing.id)[crossing.id]?.frame,
+            "nothing above moves when a band below closes"
+        )
+    }
+
+    func testBlocksThatDontCrossStayWhole() {
+        let inside = occurrence(9, 10)
+        let inBand = occurrence(-5, -3)
+        let host = makeHost([inside, inBand], leading: band)
+        host.debugSplitBandPieces()
+        XCTAssertEqual(host.debugPieceContainers(of: inside.id).count, 1)
+        XCTAssertEqual(host.debugPieceContainers(of: inBand.id).count, 1)
+    }
+
+    func testNoSplitWithTheBandClosed() {
+        let crossing = occurrence(-2.25, 4.5)
+        let host = makeHost([crossing], leading: 0)
+        host.debugSplitBandPieces()
+        XCTAssertEqual(host.debugPieceContainers(of: crossing.id).count, 1)
+    }
+
+    // MARK: Fixtures
+
+    private var day: Date { Calendar.current.startOfDay(for: Date()) }
+
+    private func occurrence(_ start: Double, _ end: Double) -> CalendarLayout.EventOccurrence {
+        let range = Event.TimeRange(
+            start: day.addingTimeInterval(start * 3600), end: day.addingTimeInterval(end * 3600)
+        )
+        let event = Event(title: "A", timeRanges: [range], type: "Study")
+        return CalendarLayout.EventOccurrence(
+            id: "\(event.id.uuidString)-\(range.start.timeIntervalSince1970)-\(range.end.timeIntervalSince1970)",
+            event: event, range: range
+        )
+    }
+
+    private func isTweening(_ layer: CALayer) -> Bool {
+        layer.animationKeys()?.contains(where: { $0.hasPrefix("resizeTween.") }) == true
+    }
+
+    private func makeHost(
+        _ occurrences: [CalendarLayout.EventOccurrence], leading: Int = 0, trailing: Int = 0
+    ) -> DayLayerHostView {
+        let host = DayLayerHostView(frame: CGRect(x: 0, y: 0, width: 360, height: 3200))
+        host.apply(makeModel(occurrences, leading: leading, trailing: trailing))
+        host.layoutIfNeeded()
+        return host
+    }
+
+    private func makeModel(
+        _ occurrences: [CalendarLayout.EventOccurrence], leading: Int = 0, trailing: Int = 0
+    ) -> DayLayerHostView.Model {
+        DayLayerHostView.Model(
+            date: day,
+            occurrences: occurrences,
+            contentWidth: 360,
+            headerHeight: 16,
+            hourHeight: hourHeight,
+            eventHorizontalInset: 8,
+            leadingExtendedHours: leading,
+            trailingExtendedHours: trailing,
+            drawableLeadingHours: leading,
+            drawableTrailingHours: trailing,
+            useImperativeDayLayerModel: false,
+            showEventText: true,
+            isWeekMode: false,
+            isThreeDayMode: false,
+            titleFontSizeSetting: 13,
+            showTimeBelowTitle: true,
+            multiTypeEnabled: false,
+            nearFutureHorizonDays: 7,
+            isPinchActive: false,
+            frozenSlotMinutes: nil
+        )
+    }
+}
