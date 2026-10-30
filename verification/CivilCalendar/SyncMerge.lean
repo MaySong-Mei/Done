@@ -56,7 +56,8 @@ after a server rollback (§6.6, D10); the failure classes and the
 `rejected` table (S1); the owner guard (S5); the cursor generations
 (S11). v1.5's single-flight pulls (I9) agree with this model's
 sequential pulls; its restore replay writing `hash(cloud row)@cloud seq`
-(S6) is the writing `restore_replay_local_hash_witness` argues for.
+(S6), with 7a2e382e's merge rule for the rows the cloud did not carry, is
+`Reachable.restore` (below).
 
 Also modelled: the §4 invariants I3, I4, I6, I7 and I8 (I1 enters as the
 `Chain` of T5'), and the row-level semantics of
@@ -100,15 +101,56 @@ it:
   row-hash encoding (the state T9a starts from) is outside it, and on
   reachable states the verify pass's confirm branch never fires
   (`reachable_verify_is_pull`).
-* Restore's baseline replay (`markRestoreCompleted` → `replayBaseline`),
-  which the design names as a baseline writer (§4 I2, §6 上传形状), is
-  not a `Reachable` constructor: `reachable_sound` and
-  `clean_iff_matches_server` say nothing about a replica after a
-  restore. The writing slice 1 has (and the round-nine §13 row
-  describes) — `(hash(local row), previous seq)` — is the never-held
-  pair; `restore_replay_local_hash_witness` shows a keepLocal row reading
-  clean while the server holds the cloud row. v1.5 (S6) replaces it with
-  `hash(cloud row)@cloud seq`, the writing that witness reads dirty.
+* Restore IS a `Reachable` constructor: `EventStore.applyRestore`
+  (merge with per-row keepLocal / keepCloud, or overwrite) on the id
+  tables, then 7a2e382e's `markRestoreCompleted` → `replayBaseline`,
+  then the REWIND — the cursor becomes `min(cursor, C0)`, `C0` the
+  cursor captured before the first table is fetched — which the Swift
+  as of 7a2e382e does not have and the fix in progress adds
+  (`Reachable.restore`; `reachable_sound`, `clean_iff_matches_server`,
+  `synced_below_of_clean` and the convergence theorems cover restored
+  replicas). Two premises on the snapshot, both what the keyset-walk
+  fetch run after `C0` was captured guarantees: `hread`, every snapshot
+  row is a live row some state of the run at or above `C0` held at its
+  seq (each page is read at whatever state the server is then in — not
+  one consistent snapshot); `hall`, the snapshot carries, at its version
+  there, every row live at one such state (the one the last page was
+  read at; a row rewritten during the walk is read again at its new seq
+  and the later copy wins). `hall` is used only for `BaseCoversBelow`;
+  the truthfulness half (`reachInv_restore`) needs `hread` alone. A
+  snapshot missing a live row — an undecodable row the decoder skips,
+  the walk's safety cap — is outside `Reachable`; a merge of one drops
+  a pending local delete with nothing flagging it
+  (`restore_incomplete_snapshot_witness`). Without the rewind
+  (`unfixedStep`, the Swift as of 7a2e382e) the same premises admit a
+  snapshot older than a version the replica already pulled, and an edit
+  is lost (`restore_stale_snapshot_witness`) or a row the replica pulled
+  is dropped by an overwrite with nothing flagging it
+  (`overwrite_drops_pulled_row_control`). Not covered of the fix: a pull
+  whose page was requested before the rewind and is saved after it.
+  `pull` here is atomic — the page fetched and applied in one step — so
+  the race the fix closes by stopping such a pull from saving its cursor
+  is outside the model, and nothing here says the fix closes it. The
+  account / epoch check before the apply is outside too (one account, no
+  epoch here). Not modelled of the restore:
+  the singleton tables' replay (user_settings, agent_preferences,
+  agent_conversations); event_types, which `EventTypeTemplateStore`
+  restores by normalized title, not by id; a cloud row carried without
+  a seq (`Snapshot`) and an id the replay spells differently from the
+  server; the entry's `?` marker, version id and catch-up marker, which
+  the replay drops or keeps but the model's baseline does not have.
+  Where the Swift's late-response guard (the whole `?@sentSeq` entry)
+  and the model's (`Replica.recv`, the seq only) part ways after a
+  restore that wrote the PATCH's own seq from an older snapshot: the
+  model applies the late `[row]`, the Swift drops it and settles through
+  one more `[]` and the pull; both are sound. The replays before
+  7a2e382e are positive controls, each reaching a state a theorem rules
+  out: `pre_merge_unsent_row_clean_control` (the shipped bug — a merge's
+  row the cloud never had reads clean, `unsent_row_never_clean`),
+  `pre_merge_previous_seq_control` (`BaseHeld`), and slice 1's
+  `slice1_collision_clean_control` (`BaseHashSound`,
+  `clean_iff_matches_server`; `restore_replay_local_hash_witness` is its
+  state without the run).
 * The shelf is a list of `(id, content)`: the shelf row's seq (the
   incoming row's, also for a tombstone's local version) and the
   `(uid, table, id, seq)` dedup are not represented — re-application
@@ -1160,12 +1202,14 @@ baseline hash) or it is now on the shelf. There is no third exit. What
 "clean" is worth: on every reachable state the baseline is a live
 version some server state of the run held at that seq, with that hash
 (`BaseHeld`, `reachable_sound`) — for the baseline writers the model
-has; restore's baseline replay is not one of them
-(`restore_replay_local_hash_witness`), and an ineligible verify pass or
-an unguarded late `[row]` would break it
+has, a restore under its premises among them; the replay before
+7a2e382e breaks it and loses an edit this way
+(`pre_merge_previous_seq_control`), and so would an ineligible verify
+pass, an unguarded late `[row]`, or a restore without the rewind
 (`ineligible_verify_loses_witness`,
-`late_row_response_regresses_witness`). The absent-local half (a
-pending delete) is `pending_delete_kept`. -/
+`late_row_response_regresses_witness`,
+`restore_stale_snapshot_witness`). The absent-local half (a pending
+delete) is `pending_delete_kept`. -/
 theorem no_silent_loss (r : Replica C) (fr : FeedRow C) (old : C)
     (hold : r.loc fr.id = some old)
     (hchg : (applyRow hash r fr).loc fr.id ≠ some old) :
@@ -1498,12 +1542,13 @@ row's content. Every baseline writer the model has maintains it — a
 `[row]` response (`hash sent`, the server now holds `sent`; a late one
 under the guard), every non-skip row of the table (`hash incoming`, the
 conflict and pending-delete rows included), the pending-verify rewrite
-(`sentHash`, which a `[]` at that seq vouches for) — so it holds on
-every reachable state (`reachable_sound`). It speaks only while the
-server row still carries the baseline's seq; the past-tense form is
+(`sentHash`, which a `[]` at that seq vouches for), the restore replay
+(`hash(cloud row)` at the cloud's seq, or the entry the id had) — so it
+holds on every reachable state (`reachable_sound`). It speaks only while
+the server row still carries the baseline's seq; the past-tense form is
 `BaseHeld`. The superseded conflict writing broke it
-(`keep_hash_state_not_sound`), and so does the restore replay's
-local-hash writing (`restore_replay_local_hash_witness`). -/
+(`keep_hash_state_not_sound`), and so does slice 1's restore replay
+(`restore_replay_local_hash_witness`, `slice1_collision_clean_control`). -/
 def BaseHashSound (hash : C → Hash) (s : Server C) (r : Replica C) : Prop :=
   ∀ id h S row, r.base id = some (h, S) → s.rows id = some row → row.seq = S →
     h = hash row.content
@@ -1518,7 +1563,9 @@ def BaseTracksFeed (s : Server C) (r : Replica C) : Prop :=
 
 /-- Local content equals the server's live content at every id whose
 server row (if any) is at or below the cursor — "in sync below the
-cursor", carried across pages. -/
+cursor", carried across pages. Not an invariant (a dirty row differs by
+design); on reachable states it holds of every all-clean replica
+(`synced_below_of_clean`). -/
 def SyncedBelow (s : Server C) (r : Replica C) : Prop :=
   ∀ i, (∀ row, s.rows i = some row → row.seq ≤ r.cursor) → r.loc i = s.live i
 
@@ -4026,7 +4073,24 @@ or `[]` response may arrive after other operations ("两者并存是常态",
   after every `[]` it clears, a peer's write or a push of ours landing
   between the fetch and the apply: the text's `pullIssue` orders the
   issue, not the apply, so it allows that pass; `Reachable` does not
-  contain it, and `reachable_sound` says nothing about it.
+  contain it, and `reachable_sound` says nothing about it;
+* `restore` — a restore with the rewind (`Replica.restore`:
+  `EventStore.applyRestore`, the baseline replay as of 7a2e382e, then the
+  cursor set to `min(cursor, C0)`), merge with any per-row decisions or
+  overwrite, with pending entries and PATCHes in flight allowed. `C0` is
+  the cursor captured before the fetch; the snapshot rows are live rows
+  states of the run at or above `C0` held (`hread`), not necessarily one
+  consistent snapshot nor the current server, and the snapshot carries
+  every row live at one such state (`hall`). The same restore WITHOUT the
+  rewind — the Swift as of 7a2e382e, which applies the snapshot after the
+  user's review while the puller runs — is NOT a `Reachable` step;
+  `restore_stale_snapshot_witness` and
+  `overwrite_drops_pulled_row_control` are what it lets through.
+
+`init` asks that a fresh replica's cursor sit below every live server
+row (a fresh device has no cursor and pulls everything first, I1); with
+it, every live server row at or below the cursor has an entry on every
+reachable state (`baseCovers_of_reachable`).
 
 What holds on every reachable state (`reachable_sound`): `Inv`;
 `BaseHashSound`; `BaseTracksFeed`; `BaseHeld` — every baseline entry
@@ -4035,8 +4099,8 @@ with hash `h`, the past-tense sentence of the design; every pending entry
 is stale (`PendingStale`: the server row for the id carries a seq above
 the sent one); every outstanding PATCH response is sound for a later
 `recv`. These are facts about the writers the model has; the writers it
-does not have are listed in the header (restore's baseline replay among
-them).
+does not have are listed in the header (the singleton tables' and
+event_types' restore replay among them).
 
 Two things the reachable set does NOT contain, so that nothing here is
 read as covering them. `Reachable` fixes ONE `hash`: a build that
@@ -4519,6 +4583,153 @@ advances from it. -/
 def PastOK (s : Server C) (past : List (Server C)) : Prop :=
   ∀ s' ∈ past, s'.WF ∧ Advances s' s
 
+/-! ### Restore — `applyRestore`, then the baseline replay, then the rewind
+
+A restore is a step of the replica alone: it writes no server row and
+does not touch the shelf, and it leaves the pending-verify set and the
+PATCHes in flight as they are — nothing in the Swift path
+(`RestoreCoordinator.applyInternal` → `EventStore.applyRestore` →
+`markRestoreCompleted` → `replayBaseline` → `replaceEntries`) waits for
+them or clears them. As of 7a2e382e that path moves no cursor either
+(`Replica.restoreUnfixed`), and a snapshot older than a version the
+replica already pulled then loses an edit
+(`restore_stale_snapshot_witness`). The fix the model takes as the
+restore step (`Replica.restore`): the cursor `C0` is captured before the
+first table is fetched, and the apply sets the cursor to
+`min(cursor, C0)` in the same turn as the store mutations and the
+replay, so every row a pull applied since the fetch began is pulled
+again and meets the restored baseline through the §6 table. -/
+
+/-- The cloud snapshot a restore applies, per id: the row the restore
+fetch returned and the seq it carried (`RestoreSnapshot`, its
+`cloudSeqs`). The fetch is a keyset walk over LIVE rows in seq order,
+page by page, the copy read last winning for an id read twice; each page
+is read at whatever state the server is in when it is asked, and the
+user reviews the result before it is applied. So the model asks of a
+snapshot row only that SOME state of the run held it live at that seq
+(`Reachable.restore`'s `hread`) — not one consistent snapshot, not the
+current server — and that it misses no row live at the state the last
+page was read at (`hall`). Every row here carries a seq: the Swift's
+seq-less branch (a cloud row without `seq`) has no representation. -/
+abbrev Snapshot (C : Type) := Id → Option (C × Seq)
+
+omit [DecidableEq C] in
+/-- `EventStore.applyRestore` on one id table — the local rows after the
+restore:
+
+* overwrite (`cloudOverwritesLocal`): the table becomes the snapshot;
+* merge (`mergeByID`): a row only the cloud has is appended; on a
+  collision the local row stays unless the row's decision is `keepCloud`
+  (`perRowDecisions?[cid] ?? resolution`, both folded into `keepCloud`);
+  a row the cloud did not carry is left as it is.
+
+A pending local delete (no local row, the baseline still has the id) is,
+to `mergeByID`, a row only the cloud has whenever the cloud carried it:
+it is appended (`restore_merge_undoes_pending_delete_instance`). -/
+def restoreLoc (overwrite : Bool) (keepCloud : Id → Bool) (snap : Snapshot C)
+    (loc : Id → Option C) : Id → Option C := fun i =>
+  if overwrite then (snap i).map Prod.fst
+  else
+    match snap i, loc i with
+    | some (cloudRow, _), none => some cloudRow
+    | some (cloudRow, _), some row => if keepCloud i then some cloudRow else some row
+    | none, row => row
+
+/-- A baseline replay rule: from the strategy (`true` = overwrite), the
+snapshot, the baseline before the restore (`previous`) and the local rows
+after it, the baseline after it. -/
+abbrev Replay (C : Type) :=
+  Bool → Snapshot C → (Id → Option (Hash × Seq)) → (Id → Option C) → Id → Option (Hash × Seq)
+
+/-- What stands in for the seq of a seq-less entry `SyncBaselineEntry(hash:
+…, seq: nil)`, which the model's baseline cannot hold (it has no hash
+without a seq). Only the rules below that write such an entry use it,
+and a witness that does reads only the hash half — the row is clean —
+where the Swift pusher, too, reads nothing else of the entry
+(`base.hash == hash` → nothing is sent). -/
+def seqlessStandIn : Seq := 0
+
+omit [DecidableEq C] in
+/-- `replayBaseline` as of 7a2e382e, one id at a time, branch for branch:
+
+* the id is not a local row after the restore → no entry (only local
+  rows enter the baseline, `replaceEntries`);
+* `if let cloudRow, let seq` — the snapshot carried it with a seq →
+  `(hash cloudRow, seq)`;
+* `else if overwrite` → `(hash row, previous seq)`, a seq-less entry
+  when there is no previous one (`seqlessStandIn`). Never taken here: an
+  overwrite's local rows are the snapshot's, each carried with a seq;
+* `else if let cloudRow` (carried WITHOUT a seq) → not representable, see
+  `Snapshot`;
+* `else if let kept = previous[id]` → `kept`; otherwise no entry.
+
+The rule this replaced is `replayBaselinePre`; slice 1's is
+`replayBaselineSlice1`. -/
+def replayBaseline (hash : C → Hash) : Replay C := fun overwrite snap previous loc i =>
+  match loc i with
+  | none => none
+  | some row =>
+    match snap i with
+    | some (cloudRow, seq) => some (hash cloudRow, seq)
+    | none =>
+      if overwrite then some (hash row, ((previous i).map Prod.snd).getD seqlessStandIn)
+      else previous i
+
+omit [DecidableEq C] in
+/-- `replayBaseline` before 7a2e382e (from 0a14f5d2): a row the snapshot
+carried with a seq → `(hash cloudRow, seq)`; EVERY other local row —
+after a merge too — → `(hash row, previous seq)`, seq-less when there is
+no previous entry. A merge's row the cloud never had therefore reads
+clean and is never uploaded (the bug 7a2e382e fixed:
+`pre_merge_unsent_row_clean_control`). -/
+def replayBaselinePre (hash : C → Hash) : Replay C := fun _ snap previous loc i =>
+  match loc i with
+  | none => none
+  | some row =>
+    match snap i with
+    | some (cloudRow, seq) => some (hash cloudRow, seq)
+    | none => some (hash row, ((previous i).map Prod.snd).getD seqlessStandIn)
+
+omit [DecidableEq C] in
+/-- Slice 1's `replayBaseline` (a95690be): every local row →
+`(hash row, previous seq)`, the snapshot unread — a keepLocal collision
+row reads clean against the cloud's version
+(`slice1_collision_clean_control`, `restore_replay_local_hash_witness`). -/
+def replayBaselineSlice1 (hash : C → Hash) : Replay C := fun _ _ previous loc i =>
+  match loc i with
+  | none => none
+  | some row => some (hash row, ((previous i).map Prod.snd).getD seqlessStandIn)
+
+omit [DecidableEq C] in
+/-- A restore with the baseline replay `replay` and no rewind: the local
+rows become `restoreLoc`'s, the baseline becomes `replay`'s over them;
+the cursor and the shelf stay. -/
+def Replica.restoreWith (replay : Replay C) (r : Replica C) (overwrite : Bool)
+    (keepCloud : Id → Bool) (snap : Snapshot C) : Replica C :=
+  let loc' := restoreLoc overwrite keepCloud snap r.loc
+  { r with loc := loc', base := replay overwrite snap r.base loc' }
+
+omit [DecidableEq C] in
+/-- The same, then the rewind: the cursor becomes `min(cursor, C0)`, `C0`
+the cursor captured before the fetch began. -/
+def Replica.restoreFixedWith (replay : Replay C) (r : Replica C) (overwrite : Bool)
+    (keepCloud : Id → Bool) (snap : Snapshot C) (C0 : Seq) : Replica C :=
+  { r.restoreWith replay overwrite keepCloud snap with cursor := min r.cursor C0 }
+
+omit [DecidableEq C] in
+/-- The restore as the Swift has it at 7a2e382e: the replay, no rewind.
+A control (`restore_stale_snapshot_witness`,
+`overwrite_drops_pulled_row_control`), not a `Reachable` step. -/
+def Replica.restoreUnfixed (r : Replica C) (overwrite : Bool) (keepCloud : Id → Bool)
+    (snap : Snapshot C) : Replica C :=
+  r.restoreWith (replayBaseline hash) overwrite keepCloud snap
+
+omit [DecidableEq C] in
+/-- The restore step of `Reachable`: 7a2e382e's replay, then the rewind. -/
+def Replica.restore (r : Replica C) (overwrite : Bool) (keepCloud : Id → Bool)
+    (snap : Snapshot C) (C0 : Seq) : Replica C :=
+  r.restoreFixedWith (replayBaseline hash) overwrite keepCloud snap C0
+
 /-- A system state: the server, this replica, the pending-verify entries
 filed since the last verify pass, the PATCHes whose response is still
 on its way, and the server states the run passed through (newest
@@ -4534,7 +4745,9 @@ structure Sys (C : Type) where
 header for what each constructor is and is not). -/
 inductive Reachable : Sys C → Prop
   | init (s : Server C) (r : Replica C) (hwf : s.WF) (hb : ∀ i, r.base i = none)
-      (hc : r.cursor ≤ s.counter) : Reachable ⟨s, r, [], [], []⟩
+      (hc : r.cursor ≤ s.counter)
+      (hfresh0 : ∀ i row, s.rows i = some row → row.seq ≤ r.cursor → row.deleted = true) :
+      Reachable ⟨s, r, [], [], []⟩
   | peer (sys : Sys C) (op : Server.ClientOp C) :
       Reachable sys →
       Reachable { sys with server := sys.server.step op, past := sys.server :: sys.past }
@@ -4583,6 +4796,22 @@ inductive Reachable : Sys C → Prop
       Reachable { sys with
         replica := pullVerify hash sys.replica page sys.pending
         pending := [] }
+  /-- A restore with the rewind (`Replica.restore`), merge with any
+  per-row decisions or overwrite, pending entries and PATCHes in flight
+  allowed. `C0` is the cursor captured before the fetch: every page is
+  read after it, at a state whose counter is at or above it. `hread`:
+  every snapshot row is a live row some such state of the run held at
+  its seq. `hall`: the snapshot carries, at its version there, every row
+  live at one such state (the one the walk's last page was read at). -/
+  | restore (sys : Sys C) (overwrite : Bool) (keepCloud : Id → Bool) (snap : Snapshot C)
+      (C0 : Seq)
+      (hread : ∀ i c S, snap i = some (c, S) →
+        ∃ s' ∈ sys.server :: sys.past, s'.rows i = some ⟨c, S, false⟩ ∧ C0 ≤ s'.counter)
+      (hall : ∃ s' ∈ sys.server :: sys.past, C0 ≤ s'.counter ∧
+        ∀ i row, s'.rows i = some row → row.deleted = false →
+          snap i = some (row.content, row.seq)) :
+      Reachable sys →
+      Reachable { sys with replica := sys.replica.restore hash overwrite keepCloud snap C0 }
 
 /-- What `reachable_sound` carries through the induction. -/
 structure ReachInv (sys : Sys C) : Prop where
@@ -4888,6 +5117,111 @@ theorem flights_split {pre post : List (Flight C)} {q : Flight C}
   · exact hx q' h q (by simp)
   · exact Ne.symm (hq q' h)
 
+/-! ### The restore step's transfer lemmas -/
+
+omit [DecidableEq C] in
+/-- An entry the restore leaves is either the snapshot row's own
+`(hash, seq)` or the entry the id had before. The third writing of
+`replayBaseline` (overwrite, not carried) never fires: an overwrite's
+local rows are the snapshot's. -/
+theorem restore_base (r : Replica C) (overwrite : Bool) (keepCloud : Id → Bool)
+    (snap : Snapshot C) (C0 : Seq) (i : Id) (h : Hash) (S : Seq)
+    (hb : (r.restore hash overwrite keepCloud snap C0).base i = some (h, S)) :
+    (∃ c, snap i = some (c, S) ∧ h = hash c) ∨ r.base i = some (h, S) := by
+  simp only [Replica.restore, Replica.restoreFixedWith, Replica.restoreWith,
+    replayBaseline] at hb
+  split at hb
+  · cases hb
+  · rename_i row hl
+    split at hb
+    · rename_i cloudRow seq hs
+      simp only [Option.some.injEq, Prod.mk.injEq] at hb
+      obtain ⟨rfl, rfl⟩ := hb
+      exact Or.inl ⟨cloudRow, hs, rfl⟩
+    · rename_i hs
+      cases hov : overwrite
+      · rw [hov] at hb
+        exact Or.inr hb
+      · exfalso
+        simp only [restoreLoc, hov, ↓reduceIte, hs, Option.map_none] at hl
+        cases hl
+
+omit [DecidableEq C] in
+theorem restore_cursor (r : Replica C) (overwrite : Bool) (keepCloud : Id → Bool)
+    (snap : Snapshot C) (C0 : Seq) :
+    (r.restore hash overwrite keepCloud snap C0).cursor = min r.cursor C0 := rfl
+
+omit [DecidableEq C] in
+theorem restore_shelf (r : Replica C) (overwrite : Bool) (keepCloud : Id → Bool)
+    (snap : Snapshot C) (C0 : Seq) :
+    (r.restore hash overwrite keepCloud snap C0).shelf = r.shelf := rfl
+
+omit [DecidableEq C] in
+/-- A row the snapshot carried, after a restore of either strategy: it is
+a local row, and its entry is the cloud row's `(hash, seq)`. -/
+theorem restore_carried_base (r : Replica C) (overwrite : Bool) (keepCloud : Id → Bool)
+    (snap : Snapshot C) (C0 : Seq) (i : Id) (c : C) (S : Seq) (hs : snap i = some (c, S)) :
+    (r.restore hash overwrite keepCloud snap C0).base i = some (hash c, S)
+      ∧ ∃ l, (r.restore hash overwrite keepCloud snap C0).loc i = some l := by
+  have hl : ∃ l, (r.restore hash overwrite keepCloud snap C0).loc i = some l := by
+    show ∃ l, restoreLoc overwrite keepCloud snap r.loc i = some l
+    unfold restoreLoc
+    cases overwrite
+    · simp only [Bool.false_eq_true, ↓reduceIte]
+      rw [hs]
+      cases r.loc i with
+      | none => exact ⟨c, rfl⟩
+      | some row => cases keepCloud i <;> simp
+    · simp [hs]
+  obtain ⟨l, hl'⟩ := hl
+  refine ⟨?_, l, hl'⟩
+  show replayBaseline hash overwrite snap r.base
+    (r.restore hash overwrite keepCloud snap C0).loc i = _
+  simp only [replayBaseline, hl', hs]
+
+omit [DecidableEq C] in
+/-- A live row some state of the run held, seen from the current server:
+its seq was handed out, the server's row for the id is at or above it,
+and a server row for the id carrying that seq IS that row. -/
+theorem held_row_now {s : Server C} {past : List (Server C)} (hp : PastOK s past)
+    (hwf : s.WF) {i : Id} {c : C} {S : Seq}
+    (hheld : ∃ s' ∈ s :: past, s'.rows i = some ⟨c, S, false⟩) :
+    S ≤ s.counter ∧ (∃ row, s.rows i = some row ∧ S ≤ row.seq)
+      ∧ ∀ row, s.rows i = some row → row.seq = S → row = ⟨c, S, false⟩ := by
+  obtain ⟨s', hmem, hrow⟩ := hheld
+  obtain ⟨hwf', a⟩ := hist_ok hp hwf hmem
+  have hS : S ≤ s'.counter := hwf' i _ hrow
+  refine ⟨Nat.le_trans hS a.mono, ?_, ?_⟩
+  · obtain ⟨row', hrow'⟩ := a.keep i _ hrow
+    refine ⟨row', hrow', ?_⟩
+    rcases a.rows i row' hrow' with hold | hnew
+    · rw [hrow] at hold; cases hold; exact Nat.le_refl _
+    · exact Nat.le_of_lt (Nat.lt_of_le_of_lt hS hnew)
+  · intro row hrow' hseq
+    rcases a.rows i row hrow' with hold | hnew
+    · rw [hrow] at hold; cases hold; rfl
+    · rw [hseq] at hnew; exact absurd (Nat.lt_of_le_of_lt hS hnew) (Nat.lt_irrefl _)
+
+omit [DecidableEq C] in
+/-- The rewind's whole content: a snapshot row read from a state whose
+counter is at or above the cursor has no newer version at or below it —
+a newer version carries a seq above that state's counter. So after a
+restore whose cursor is at most `C0`, and whose rows were read at states
+at or above `C0`, a server row for a snapshot id at or below the cursor
+carries the snapshot's seq: the entry the replay writes tracks the feed. -/
+theorem restore_fresh_of_read_above_cursor {s : Server C} {past : List (Server C)}
+    (hp : PastOK s past) (hwf : s.WF) (cursor : Seq) (snap : Snapshot C)
+    (hread : ∀ i c S, snap i = some (c, S) →
+      ∃ s' ∈ s :: past, s'.rows i = some ⟨c, S, false⟩ ∧ cursor ≤ s'.counter) :
+    ∀ i c S, snap i = some (c, S) → ∀ row, s.rows i = some row → row.seq ≤ cursor →
+      row.seq = S := by
+  intro i c S hs row hrow hle
+  obtain ⟨s', hmem, hrow', hcur⟩ := hread i c S hs
+  obtain ⟨-, a⟩ := hist_ok hp hwf hmem
+  rcases a.rows i row hrow with hold | hnew
+  · rw [hrow'] at hold; cases hold; rfl
+  · exact absurd (Nat.lt_of_le_of_lt (Nat.le_trans hle hcur) hnew) (Nat.lt_irrefl _)
+
 /-! ### The verify pass on reachable states -/
 
 omit [DecidableEq C] in
@@ -4939,12 +5273,101 @@ theorem pullVerify_eq_pull_of_stale {s : Server C} {r : Replica C} (hinv : Inv s
     simp [hne]
   · rfl
 
+/-! ### The restore step keeps the invariant -/
+
+omit [DecidableEq C] in
+/-- The restore case of the induction, on its own: it needs `hread`
+only — not `hall`, which only `baseCovers_of_reachable` uses — so the
+truthfulness half holds for a snapshot missing rows too. The entries
+the replay writes are the snapshot rows' own `(hash, seq)`, held at
+states at or above `C0`; the rewound cursor is at most `C0`, so no newer
+version of such a row sits at or below it
+(`restore_fresh_of_read_above_cursor`); every other entry is one the id
+had, and lowering the cursor only shrinks what `BaseTracksFeed` and a
+flight's `tracks` speak about. -/
+theorem reachInv_restore {sys : Sys C} (ih : ReachInv hash sys) (overwrite : Bool)
+    (keepCloud : Id → Bool) (snap : Snapshot C) (C0 : Seq)
+    (hread : ∀ i c S, snap i = some (c, S) →
+      ∃ s' ∈ sys.server :: sys.past, s'.rows i = some ⟨c, S, false⟩ ∧ C0 ≤ s'.counter) :
+    ReachInv hash { sys with replica := sys.replica.restore hash overwrite keepCloud snap C0 } := by
+  have hwf := ih.inv.wf
+  have hle0 : min sys.replica.cursor C0 ≤ sys.replica.cursor := Nat.min_le_left _ _
+  have hnow : ∀ i c S, snap i = some (c, S) →
+      S ≤ sys.server.counter ∧ (∃ row, sys.server.rows i = some row ∧ S ≤ row.seq)
+        ∧ ∀ row, sys.server.rows i = some row → row.seq = S → row = ⟨c, S, false⟩ :=
+    fun i c S hs =>
+      held_row_now ih.past hwf (let ⟨s', hm, hr, _⟩ := hread i c S hs; ⟨s', hm, hr⟩)
+  have hfresh : ∀ i c S, snap i = some (c, S) → ∀ row, sys.server.rows i = some row →
+      row.seq ≤ min sys.replica.cursor C0 → row.seq = S :=
+    restore_fresh_of_read_above_cursor ih.past hwf _ snap fun i c S hs =>
+      let ⟨s', hm, hr, hC⟩ := hread i c S hs
+      ⟨s', hm, hr, Nat.le_trans (Nat.min_le_right _ _) hC⟩
+  have hb := restore_base hash sys.replica overwrite keepCloud snap C0
+  refine ⟨⟨hwf, ?_, ?_, ?_, Nat.le_trans hle0 ih.inv.cursorBounded⟩, ?_, ?_, ?_, ih.past,
+    ih.pending, ?_, ih.distinct⟩
+  · -- bounded
+    intro i h S hbase
+    rcases hb i h S hbase with ⟨c, hs, -⟩ | hold
+    · exact (hnow i c S hs).1
+    · exact ih.inv.bounded i h S hold
+  · -- noDead
+    intro i h S row hbase hrow hseq
+    rcases hb i h S hbase with ⟨c, hs, -⟩ | hold
+    · rw [(hnow i c S hs).2.2 row hrow hseq]
+    · exact ih.inv.noDead i h S row hold hrow hseq
+  · -- anchored
+    intro i h S hbase
+    rcases hb i h S hbase with ⟨c, hs, -⟩ | hold
+    · exact (hnow i c S hs).2.1
+    · exact ih.inv.anchored i h S hold
+  · -- hashSound
+    intro i h S row hbase hrow hseq
+    rcases hb i h S hbase with ⟨c, hs, rfl⟩ | hold
+    · rw [(hnow i c S hs).2.2 row hrow hseq]
+    · exact ih.hashSound i h S row hold hrow hseq
+  · -- tracks: the snapshot's own seq by the rewind, the rest under a lower cursor
+    intro i h S row hbase hrow hle
+    rcases hb i h S hbase with ⟨c, hs, -⟩ | hold
+    · exact hfresh i c S hs row hrow hle
+    · exact ih.tracks i h S row hold hrow (Nat.le_trans hle hle0)
+  · -- held
+    intro i h S hbase
+    rcases hb i h S hbase with ⟨c, hs, rfl⟩ | hold
+    · obtain ⟨s', hs', hrow, -⟩ := hread i c S hs
+      exact ⟨s', hs', _, hrow, rfl, rfl, rfl⟩
+    · exact ih.held i h S hold
+  · -- flights: every field but `tracks` is about the server and the run;
+    -- an entry the restore wrote at the PATCH's seq is the snapshot's,
+    -- and the server's row for the id is past that seq, hence past the
+    -- rewound cursor
+    intro q hq
+    have hfs := ih.flights q hq
+    refine ⟨hfs.empty, hfs.live, hfs.sent, hfs.fresh, hfs.bounded, hfs.held, hfs.anchored,
+      hfs.same, ?_⟩
+    intro row hresp hcas row' hrow' hle
+    cases hbq : (sys.replica.restore hash overwrite keepCloud snap C0).base q.id with
+    | none => rw [hbq] at hcas; cases hcas
+    | some e =>
+      obtain ⟨h, S⟩ := e
+      rw [hbq] at hcas
+      simp only [Option.map_some, Option.some.injEq] at hcas
+      subst hcas
+      rcases hb q.id h q.sentSeq hbq with ⟨c, hs, -⟩ | hold
+      · exfalso
+        have hseq := hfresh q.id c q.sentSeq hs row' hrow' hle
+        obtain ⟨row'', hrow'', hanc⟩ := hfs.anchored row hresp
+        rw [hrow'] at hrow''
+        cases hrow''
+        rw [hseq] at hanc
+        exact absurd (Nat.lt_of_lt_of_le (hfs.fresh row hresp) hanc) (Nat.lt_irrefl _)
+      · exact hfs.tracks row hresp (by rw [hold]; rfl) row' hrow' (Nat.le_trans hle hle0)
+
 /-! ### The invariant -/
 
 /-- THE INDUCTION: every reachable state satisfies `ReachInv`. -/
 theorem reachInv_of_reachable {sys : Sys C} (h : Reachable hash sys) : ReachInv hash sys := by
   induction h with
-  | init s r hwf hb hc =>
+  | init s r hwf hb hc _ =>
     refine ⟨inv_initial s r hwf hb hc, ?_, baseTracksFeed_initial s r hb, ?_, ?_, by simp,
       by simp, List.Pairwise.nil⟩
     · intro i hh S row hbase; rw [hb i] at hbase; cases hbase
@@ -5171,9 +5594,12 @@ theorem reachInv_of_reachable {sys : Sys C} (h : Reachable hash sys) : ReachInv 
     · exact baseHeld_pull hash hmem ih.held page hsound
     · exact fun q hq => flightSound_pull hash (ih.flights q hq) hwf (advances_refl _) hc _ page
         hfeed'
+  | restore sys overwrite keepCloud snap C0 hread _ _ ih =>
+    exact reachInv_restore hash ih overwrite keepCloud snap C0 hread
 
 /-- THEOREM (every reachable state tells the truth): on every state
-`Reachable` reaches — late PATCH responses under the guard included —
+`Reachable` reaches — late PATCH responses under the guard and restores
+included —
 the reachability invariant, `BaseHashSound` with no exception,
 `BaseTracksFeed`, `BaseHeld` (every baseline entry is a live version a
 state of the run held at that seq, with that hash), and every pending
@@ -5203,9 +5629,11 @@ theorem reachable_verify_is_pull {sys : Sys C} (h : Reachable hash sys) (page : 
 /-- THEOREM (clean means equal to the server — "本机脏 ⟺ 本地 ≠ 服务端",
 for the six id tables): on a reachable state, at an id whose server row
 still carries the baseline's seq, the id is clean exactly when the local
-row is the server's live content. Under the superseded writing this
-fails right after a conflict and a revert
-(`conflict_then_revert_reads_clean_witness`, `keep_hash_state_not_sound`). -/
+row is the server's live content — after a restore too. Under the
+superseded writing this fails right after a conflict and a revert
+(`conflict_then_revert_reads_clean_witness`, `keep_hash_state_not_sound`),
+and under slice 1's restore replay right after the restore
+(`slice1_collision_clean_control`). -/
 theorem clean_iff_matches_server (hinj : HashInjective hash) {sys : Sys C}
     (hreach : Reachable hash sys) (i : Id) (h : Hash) (S : Seq) (row : Row C)
     (hbase : sys.replica.base i = some (h, S)) (hrow : sys.server.rows i = some row)
@@ -5230,16 +5658,310 @@ theorem clean_iff_matches_server (hinj : HashInjective hash) {sys : Sys C}
     rw [hl]
     rfl
 
-/-- THEOREM T5 on reachable states: a reachable replica with no dirty id,
-in sync below its cursor, pulling one head page lands on the server's
-live content at every id, shelf untouched, every id clean, every page
-row's baseline landed. The truthfulness premises of
-`clean_replica_converges` are theorems here (`reachable_sound`), so every
-reachable clean replica is covered — one that took a conflict and has
-pushed since included (`clean_replica_converges_reachable_instance`). -/
+/-! ### In sync below the cursor
+
+`SyncedBelow` — the local row is the server's live content at every id
+whose server row is at or below the cursor — is not true of every
+reachable replica: a dirty row (an edit not yet sent, a keepLocal
+collision a restore left) differs from the server by design. What is
+true of every reachable replica is the clean half of it
+(`clean_synced_at`), which rests on one more invariant: every live
+server row at or below the cursor has an entry (`BaseCoversBelow`). So an
+all-clean reachable replica is in sync below its cursor
+(`synced_below_of_clean`), and T5 / T5' on reachable states need no
+`SyncedBelow` premise. -/
+
+omit [DecidableEq C] in
+/-- Every LIVE server row at or below the cursor has a baseline entry.
+With `BaseTracksFeed`, `BaseHashSound` and `NoDeadBase` it makes the
+baseline below the cursor a description of the server there. A restore
+without the rewind breaks it (`overwrite_drops_pulled_row_control`). -/
+def BaseCoversBelow (s : Server C) (r : Replica C) : Prop :=
+  ∀ i row, s.rows i = some row → row.seq ≤ r.cursor → row.deleted = false → r.base i ≠ none
+
+omit [DecidableEq C] in
+/-- A server write, a cursor that does not move up, and entries lost only
+where the new server row is not a live row below the new cursor. -/
+theorem baseCovers_transfer {s s' : Server C} {r r' : Replica C} (h : BaseCoversBelow s r)
+    (hc : r.cursor ≤ s.counter) (a : Advances s s') (hcur : r'.cursor ≤ r.cursor)
+    (hkeep : ∀ i row, s'.rows i = some row → row.seq ≤ r'.cursor → row.deleted = false →
+      r.base i ≠ none → r'.base i ≠ none) :
+    BaseCoversBelow s' r' := by
+  intro i row hrow hle hlive
+  rcases a.rows i row hrow with hold | hnew
+  · exact hkeep i row hrow hle hlive (h i row hold (Nat.le_trans hle hcur) hlive)
+  · exact absurd (Nat.lt_of_le_of_lt (Nat.le_trans (Nat.le_trans hle hcur) hc) hnew)
+      (Nat.lt_irrefl _)
+
+omit [DecidableEq C] in
+/-- A pull of a page of a state the server advances from: a live row the
+new cursor passes is either below the old cursor (its entry stays — the
+page does not carry it) or in the page (applying it, or skipping it,
+leaves an entry). -/
+theorem baseCovers_pull {s₀ s : Server C} {r : Replica C} (hwf₀ : s₀.WF) (a : Advances s₀ s)
+    (hc : r.cursor ≤ s₀.counter) (bound : Seq) (page : List (FeedRow C))
+    (hfeed : IsPageFeed s₀ r.cursor bound page) (h : BaseCoversBelow s r) :
+    BaseCoversBelow s (pull hash r page) := by
+  intro i row hrow hle hlive
+  have hcur0 := pull_page_cursor_le_counter hash hwf₀ hc bound page hfeed
+  have hcur1 := pull_page_cursor_le hash s₀ r bound page hfeed
+  have hrow0 : s₀.rows i = some row := by
+    rcases a.rows i row hrow with hold | hnew
+    · exact hold
+    · exact absurd (Nat.lt_of_le_of_lt (Nat.le_trans hle hcur0) hnew) (Nat.lt_irrefl _)
+  have hbase : (pull hash r page).base = (page.foldl (applyRow hash) r).base := by
+    simp only [pull, hfeed.filter_self]
+  rw [hbase]
+  by_cases hin : ∃ fr ∈ page, fr.id = i
+  · obtain ⟨fr, hfr, hid⟩ := hin
+    have hb := (foldl_self_of_mem hash page r fr hfeed.distinct hfr).2
+    subst hid
+    rw [hb]
+    have hs := (hfeed.sound fr hfr).1
+    rw [hrow0] at hs
+    cases hs
+    cases hst : staleOrSeen (r.base fr.id) fr.seq
+    · rw [applyRow_base_noskip hash r fr hst]
+      simp only at hlive
+      simp [hlive]
+    · rw [applyRow_skip hash r fr hst]
+      obtain ⟨h', S', hb', -⟩ := (staleOrSeen_true_iff _ _).mp hst
+      rw [hb']
+      simp
+  · have hin' : ∀ fr ∈ page, fr.id ≠ i := fun fr hfr hid => hin ⟨fr, hfr, hid⟩
+    rw [(foldl_frame hash page r i hin').2]
+    rcases Nat.lt_or_ge r.cursor row.seq with hlt | hge
+    · exfalso
+      have hbd : row.seq ≤ bound := le_bound_of_le_max (Nat.le_trans hle hcur1) hlt
+      obtain ⟨fr, hfr, hfrid⟩ := hfeed.complete i row hrow0 hlt hbd
+      exact hin' fr hfr hfrid
+    · exact h i row hrow hge hlive
+
+/-- Our push: the dead-row hit drops the entry, and only for a row the
+server now holds dead. -/
+theorem baseCovers_pushRow {s : Server C} {r : Replica C} (h : BaseCoversBelow s r)
+    (hc : r.cursor ≤ s.counter) (id : Id) :
+    BaseCoversBelow (pushRow hash s r id).server (pushRow hash s r id).replica := by
+  obtain ⟨hfr, hcur, -⟩ := pushRow_frame hash s r id
+  refine baseCovers_transfer h hc (pushRow_advances hash s r id) (Nat.le_of_eq hcur) ?_
+  intro i row hrow _ hlive hb
+  by_cases hi : i = id
+  · subst hi
+    rcases pushRow_cases hash s r i with ⟨-, hp⟩
+      | ⟨c, row0, bh, bseq, -, -, -, -, -, hp⟩
+      | ⟨c, row0, bh, bseq, -, -, -, -, hd, hp⟩
+      | ⟨c, bh, bseq, -, -, -, hp⟩ | ⟨c, -, -, -, hp⟩ | ⟨c, -, -, hp⟩ <;> rw [hp] at hrow ⊢
+    · exact hb
+    · simp [Replica.setBase]
+    · exfalso
+      simp only [Server.setRow, ↓reduceIte, Option.some.injEq] at hrow
+      subst hrow
+      simp only at hlive
+      rw [hd] at hlive
+      cases hlive
+    · exact hb
+    · simp [Replica.setBase]
+    · exact hb
+  · rw [hfr i hi]; exact hb
+
+/-- Our pushed delete: the entry goes only where the server's row is now
+dead, or where there is none. -/
+theorem baseCovers_pushDelete {s : Server C} {r : Replica C} (h : BaseCoversBelow s r)
+    (hc : r.cursor ≤ s.counter) (id : Id) :
+    BaseCoversBelow (pushDelete s r id).server (pushDelete s r id).replica := by
+  refine baseCovers_transfer h hc (pushDelete_advances s r id)
+    (Nat.le_of_eq (pushDelete_frame s r id).2) ?_
+  intro i row hrow _ hlive hb
+  by_cases hi : i = id
+  · subst hi
+    cases hs : s.rows i with
+    | none =>
+      exfalso
+      have e : (pushDelete s r i).server.rows i = none := by
+        unfold pushDelete; split <;> simp [Server.tombstone, hs]
+      rw [e] at hrow; cases hrow
+    | some row0 =>
+      cases hl : r.loc i with
+      | some c =>
+        have e : pushDelete s r i = ⟨s, r, false, none⟩ := by unfold pushDelete; simp [hl]
+        rw [e]; exact hb
+      | none =>
+        cases hbi : r.base i with
+        | none => exact absurd hbi hb
+        | some b =>
+          obtain ⟨⟨row', hrow', hdel⟩, -⟩ := pushDelete_lands s r i hl b hbi row0 hs
+          rw [hrow'] at hrow; cases hrow
+          rw [hdel] at hlive; cases hlive
+  · have e : (pushDelete s r id).replica.base i = r.base i := by
+      unfold pushDelete; split <;> simp [Replica.setBase, hi]
+    rw [e]; exact hb
+
+omit [DecidableEq C] in
+/-- A late response: the `[row]` it carries is live, so it writes an
+entry or nothing. -/
+theorem baseCovers_recv {s : Server C} {r : Replica C} (h : BaseCoversBelow s r) (q : Flight C)
+    (hlv : ∀ row, q.resp = some row → row.deleted = false) :
+    BaseCoversBelow s (r.recv hash q) := by
+  obtain ⟨hfr, hcur, -⟩ := recv_frame hash r q
+  intro i row hrow hle hlive
+  rw [hcur] at hle
+  have hb := h i row hrow hle hlive
+  by_cases hi : i = q.id
+  · subst hi
+    unfold Replica.recv
+    cases hresp : q.resp with
+    | none => simpa using hb
+    | some row' =>
+      have hd := hlv row' hresp
+      simp only
+      split
+      · simp [hd, Replica.setBase]
+      · exact hb
+  · rw [hfr i hi]; exact hb
+
+omit [DecidableEq C] in
+/-- The rewound restore: a live row at or below the rewound cursor is at
+or below `C0`, so the state the walk's last page was read at held it at
+the same version, the snapshot carries it (`hall`), and the replay gives
+it the cloud row's entry. Without the rewind a row the replica pulled
+after that state is above `C0` and below the cursor, and an overwrite
+drops it (`overwrite_drops_pulled_row_control`). -/
+theorem baseCovers_restore {sys : Sys C} (ih : ReachInv hash sys) (overwrite : Bool)
+    (keepCloud : Id → Bool) (snap : Snapshot C) (C0 : Seq)
+    (hall : ∃ s' ∈ sys.server :: sys.past, C0 ≤ s'.counter ∧
+      ∀ i row, s'.rows i = some row → row.deleted = false →
+        snap i = some (row.content, row.seq)) :
+    BaseCoversBelow sys.server (sys.replica.restore hash overwrite keepCloud snap C0) := by
+  intro i row hrow hle hlive
+  rw [restore_cursor] at hle
+  obtain ⟨s', hs', hC0, hcov⟩ := hall
+  obtain ⟨-, a⟩ := hist_ok ih.past ih.inv.wf hs'
+  have hrow' : s'.rows i = some row := by
+    rcases a.rows i row hrow with hold | hnew
+    · exact hold
+    · exact absurd (Nat.lt_of_le_of_lt
+        (Nat.le_trans hle (Nat.le_trans (Nat.min_le_right _ _) hC0)) hnew) (Nat.lt_irrefl _)
+  rw [(restore_carried_base hash sys.replica overwrite keepCloud snap C0 i _ _
+    (hcov i row hrow' hlive)).1]
+  simp
+
+/-- THEOREM (every live server row below the cursor has an entry): on
+every reachable state, restores included. -/
+theorem baseCovers_of_reachable {sys : Sys C} (h : Reachable hash sys) :
+    BaseCoversBelow sys.server sys.replica := by
+  induction h with
+  | init s r hwf hb hc hfresh0 =>
+    intro i row hrow hle hlive
+    rw [hfresh0 i row hrow hle] at hlive; cases hlive
+  | peer sys op h' ih =>
+    exact baseCovers_transfer ih (reachInv_of_reachable hash h').inv.cursorBounded
+      (step_advances _ op) (Nat.le_refl _) (fun _ _ _ _ _ hb => hb)
+  | edit sys id c _ ih => exact ih
+  | deleteLocal sys id _ ih => exact ih
+  | push sys id hfree h' ih =>
+    exact baseCovers_pushRow hash ih (reachInv_of_reachable hash h').inv.cursorBounded id
+  | send sys id c bh bseq hloc hbase hdirty hfree h' ih =>
+    exact baseCovers_transfer ih (reachInv_of_reachable hash h').inv.cursorBounded
+      (patch_advances sys.server id bseq c) (Nat.le_refl _) (fun _ _ _ _ _ hb => hb)
+  | recv sys pre post q hq h' ih =>
+    have hqm : q ∈ sys.flights := by rw [hq]; simp
+    exact baseCovers_recv hash ih q ((reachInv_of_reachable hash h').flights q hqm).live
+  | lose sys pre post q hq _ ih => exact ih
+  | pushDelete sys id h' ih =>
+    exact baseCovers_pushDelete ih (reachInv_of_reachable hash h').inv.cursorBounded id
+  | pull sys s₀ bound page hmem hc hfeed h' ih =>
+    have hr := reachInv_of_reachable hash h'
+    obtain ⟨hwf₀, a⟩ := hist_ok hr.past hr.inv.wf hmem
+    exact baseCovers_pull hash hwf₀ a hc bound page hfeed ih
+  | verify sys page hfeed h' ih =>
+    have hr := reachInv_of_reachable hash h'
+    show BaseCoversBelow sys.server (pullVerify hash sys.replica page sys.pending)
+    rw [pullVerify_eq_pull_of_stale hash hr.inv hr.tracks page hfeed sys.pending hr.pending]
+    exact baseCovers_pull hash hr.inv.wf (advances_refl _) hr.inv.cursorBounded _ page
+      (hfeed.page hr.inv.wf) ih
+  | restore sys overwrite keepCloud snap C0 hread hall h' ih =>
+    exact baseCovers_restore hash (reachInv_of_reachable hash h') overwrite keepCloud snap C0
+      hall
+
+/-- THEOREM (a clean id below the cursor is in sync): on every reachable
+state, restores included, at a clean id whose server row (if any) is at
+or below the cursor, the local row is the server's live content. A live
+row has an entry (`BaseCoversBelow`) on its seq (`BaseTracksFeed`) with
+its hash (`BaseHashSound`); a dead row or no row has none (`NoDeadBase`,
+`BaseAnchored`); clean is the local row's hash being the entry's. -/
+theorem clean_synced_at (hinj : HashInjective hash) {sys : Sys C} (h : Reachable hash sys)
+    (i : Id) (hclean : CleanAt hash sys.replica i)
+    (hbelow : ∀ row, sys.server.rows i = some row → row.seq ≤ sys.replica.cursor) :
+    sys.replica.loc i = sys.server.live i := by
+  have hr := reachInv_of_reachable hash h
+  have hcov := baseCovers_of_reachable hash h
+  unfold CleanAt at hclean
+  have hnone : sys.replica.base i = none → sys.server.live i = none →
+      sys.replica.loc i = sys.server.live i := by
+    intro hb hl
+    rw [hb] at hclean; rw [hl]
+    cases hloc : sys.replica.loc i with
+    | none => rfl
+    | some l => rw [hloc] at hclean; cases hclean
+  cases hrow : sys.server.rows i with
+  | none =>
+    apply hnone _ (by simp [Server.live, hrow])
+    cases hb : sys.replica.base i with
+    | none => rfl
+    | some e =>
+      obtain ⟨hh, S⟩ := e
+      obtain ⟨row, hr', -⟩ := hr.inv.anchored i hh S hb
+      rw [hrow] at hr'; cases hr'
+  | some row =>
+    have hle := hbelow row hrow
+    cases hd : row.deleted with
+    | true =>
+      apply hnone _ (by simp [Server.live, hrow, hd])
+      cases hb : sys.replica.base i with
+      | none => rfl
+      | some e =>
+        obtain ⟨hh, S⟩ := e
+        have hS := hr.tracks i hh S row hb hrow hle
+        have := hr.inv.noDead i hh S row hb hrow hS
+        rw [hd] at this; cases this
+    | false =>
+      have hne := hcov i row hrow hle hd
+      cases hb : sys.replica.base i with
+      | none => exact absurd hb hne
+      | some e =>
+        obtain ⟨hh, S⟩ := e
+        have hS := hr.tracks i hh S row hb hrow hle
+        have hh' := hr.hashSound i hh S row hb hrow hS
+        rw [hb, hh'] at hclean
+        have hlv : sys.server.live i = some row.content := by simp [Server.live, hrow, hd]
+        rw [hlv]
+        cases hloc : sys.replica.loc i with
+        | none => rw [hloc] at hclean; cases hclean
+        | some l =>
+          rw [hloc] at hclean
+          simp only [Option.map_some, Option.some.injEq] at hclean
+          rw [hinj _ _ hclean]
+
+/-- THEOREM (an all-clean reachable replica is in sync below its cursor):
+`SyncedBelow` — the premise T5 and T5' carry — is a theorem on reachable
+states, restores included, once nothing is dirty. -/
+theorem synced_below_of_clean (hinj : HashInjective hash) {sys : Sys C}
+    (h : Reachable hash sys) (hclean : ∀ i, CleanAt hash sys.replica i) :
+    SyncedBelow sys.server sys.replica :=
+  fun i hbelow => clean_synced_at hash hinj h i (hclean i) hbelow
+
+/-- THEOREM T5 on reachable states: a reachable replica with no dirty id
+pulling one head page lands on the server's live content at every id,
+shelf untouched, every id clean, every page row's baseline landed. The
+premises of `clean_replica_converges` beyond all-clean are theorems here
+— the truthfulness ones (`reachable_sound`) and `SyncedBelow`
+(`synced_below_of_clean`) — so every reachable clean replica is covered:
+one that took a conflict and has pushed since
+(`clean_replica_converges_reachable_instance`), and one a restore with
+the rewind left clean (`overwrite_drops_pulled_row_control`). -/
 theorem clean_replica_converges_reachable (hinj : HashInjective hash) {sys : Sys C}
     (hreach : Reachable hash sys)
-    (hclean : ∀ i, CleanAt hash sys.replica i) (hsync : SyncedBelow sys.server sys.replica)
+    (hclean : ∀ i, CleanAt hash sys.replica i)
     (page : List (FeedRow C)) (hfeed : IsHeadFeed sys.server sys.replica.cursor page) :
     (∀ i, (pull hash sys.replica page).loc i = sys.server.live i)
       ∧ (pull hash sys.replica page).shelf = sys.replica.shelf
@@ -5247,16 +5969,16 @@ theorem clean_replica_converges_reachable (hinj : HashInjective hash) {sys : Sys
       ∧ ∀ fr ∈ page, (pull hash sys.replica page).base fr.id
           = (if fr.deleted then none else some (hash fr.content, fr.seq)) := by
   obtain ⟨hinv, hbh, -⟩ := reachable_sound hash hreach
-  exact clean_replica_converges hash hinj sys.server hinv.wf sys.replica page hclean hsync
-    hinv.anchored hbh hinv.noDead hfeed
+  exact clean_replica_converges hash hinj sys.server hinv.wf sys.replica page hclean
+    (synced_below_of_clean hash hinj hreach hclean) hinv.anchored hbh hinv.noDead hfeed
 
-/-- THEOREM T5' on reachable states: a reachable, clean replica in sync
-below its cursor that runs the I1 loop (any number of limit-cut pages,
-peers writing between) and whose last pull is a head page lands on that
-server's live content at every id — no truthfulness premise. -/
+/-- THEOREM T5' on reachable states: a reachable, clean replica that runs
+the I1 loop (any number of limit-cut pages, peers writing between) and
+whose last pull is a head page lands on that server's live content at
+every id — no truthfulness premise and no `SyncedBelow` premise. -/
 theorem pull_pages_converge_reachable (hinj : HashInjective hash) {sys : Sys C}
     (hreach : Reachable hash sys)
-    (hclean : ∀ i, CleanAt hash sys.replica i) (hs : SyncedBelow sys.server sys.replica)
+    (hclean : ∀ i, CleanAt hash sys.replica i)
     {steps : List (Server C × List (FeedRow C))} {s₁ s' : Server C}
     (hchain : Chain hash sys.server sys.replica steps s₁)
     (a : Advances s₁ s') (page : List (FeedRow C))
@@ -5265,7 +5987,121 @@ theorem pull_pages_converge_reachable (hinj : HashInjective hash) {sys : Sys C}
       ∧ (pull hash (pullAll hash sys.replica steps) page).shelf = sys.replica.shelf
       ∧ ∀ i, CleanAt hash (pull hash (pullAll hash sys.replica steps) page) i := by
   obtain ⟨hinv, hbh, -⟩ := reachable_sound hash hreach
-  exact pull_pages_converge hash hinj hchain hinv hclean hs hbh a page hfeed
+  exact pull_pages_converge hash hinj hchain hinv hclean
+    (synced_below_of_clean hash hinj hreach hclean) hbh a page hfeed
+
+/-- THEOREM (a row the server has never had always goes up — the property
+7a2e382e restored to merge restores): on every reachable state, restores
+included, a local row at an id the server holds no row for has no
+baseline entry, is not clean, and pushing it is the ignore-duplicates
+POST, which lands it. It needs nothing beyond `BaseAnchored` (part of
+`Inv`): every entry names a server row, and server rows never disappear
+(`Advances.keep`); `BaseHeld` with `PastOK` gives the same. With the
+replay before 7a2e382e it is false (`pre_merge_unsent_row_clean_control`). -/
+theorem unsent_row_never_clean {sys : Sys C} (h : Reachable hash sys) (i : Id) (c : C)
+    (hloc : sys.replica.loc i = some c) (hnone : sys.server.rows i = none) :
+    sys.replica.base i = none ∧ ¬ CleanAt hash sys.replica i
+      ∧ (pushRow hash sys.server sys.replica i).server.rows i
+          = some ⟨c, sys.server.next, false⟩ := by
+  have hinv := (reachable_sound hash h).1
+  have hbase : sys.replica.base i = none := by
+    cases hb : sys.replica.base i with
+    | none => rfl
+    | some e =>
+      obtain ⟨hh, S⟩ := e
+      obtain ⟨row, hrow, -⟩ := hinv.anchored i hh S hb
+      rw [hnone] at hrow; cases hrow
+  refine ⟨hbase, ?_, ?_⟩
+  · unfold CleanAt; rw [hloc, hbase]; simp
+  · simp [pushRow, hloc, hbase, Server.insertIgnore, hnone, Server.setRow]
+
+omit [DecidableEq C] in
+/-- After a restore of either strategy, a row the snapshot carried has the
+cloud row's `(hash, seq)` as its entry and is clean exactly when its local
+row is the cloud's: a row taken from the cloud reads clean, a keepLocal
+collision row whose bytes differ reads dirty and goes out as a PATCH on
+the cloud's seq. -/
+theorem restore_carried (hinj : HashInjective hash) (r : Replica C) (overwrite : Bool)
+    (keepCloud : Id → Bool) (snap : Snapshot C) (C0 : Seq) (i : Id) (c : C) (S : Seq)
+    (hs : snap i = some (c, S)) :
+    (r.restore hash overwrite keepCloud snap C0).base i = some (hash c, S)
+      ∧ (CleanAt hash (r.restore hash overwrite keepCloud snap C0) i
+          ↔ (r.restore hash overwrite keepCloud snap C0).loc i = some c) := by
+  obtain ⟨hbase, l, hl⟩ := restore_carried_base hash r overwrite keepCloud snap C0 i c S hs
+  refine ⟨hbase, ?_⟩
+  unfold CleanAt
+  rw [hl, hbase]
+  simp only [Option.map_some, Option.some.injEq]
+  exact ⟨fun h => by rw [hinj _ _ h], fun h => by rw [h]⟩
+
+omit [DecidableEq C] in
+/-- After a merge, a row the snapshot did not carry keeps its local row
+and, while it has one, its entry: a row that never reached the cloud
+still has no entry and reads dirty, a row edited since its last upload
+still PATCHes on the seq it had. An id with no local row loses its entry
+— so a pending local delete the snapshot did not carry is dropped, and
+its tombstone PATCH is never sent. -/
+theorem restore_merge_uncarried (r : Replica C) (keepCloud : Id → Bool) (snap : Snapshot C)
+    (C0 : Seq) (i : Id) (hs : snap i = none) :
+    (r.restore hash false keepCloud snap C0).loc i = r.loc i
+      ∧ (∀ row, r.loc i = some row → (r.restore hash false keepCloud snap C0).base i = r.base i)
+      ∧ (r.loc i = none → (r.restore hash false keepCloud snap C0).base i = none) := by
+  have hl : (r.restore hash false keepCloud snap C0).loc i = r.loc i := by
+    show restoreLoc false keepCloud snap r.loc i = _
+    simp only [restoreLoc, Bool.false_eq_true, ↓reduceIte, hs]
+  have hb : (r.restore hash false keepCloud snap C0).base i
+      = replayBaseline hash false snap r.base (r.restore hash false keepCloud snap C0).loc i :=
+    rfl
+  refine ⟨hl, ?_, ?_⟩
+  · intro row hrow
+    rw [hb]
+    simp [replayBaseline, hl, hrow, hs]
+  · intro hnone
+    rw [hb]
+    simp [replayBaseline, hl, hnone]
+
+/-- A restore step: from the replica, the strategy, the per-row
+decisions, the snapshot and `C0`, the replica after the restore. -/
+abbrev RestoreStep (C : Type) := Replica C → Bool → (Id → Bool) → Snapshot C → Seq → Replica C
+
+omit [DecidableEq C] in
+/-- The replay `replay`, then the rewind. -/
+def fixedStep (replay : Replay C) : RestoreStep C := fun r overwrite keepCloud snap C0 =>
+  r.restoreFixedWith replay overwrite keepCloud snap C0
+
+omit [DecidableEq C] in
+/-- The replay `replay`, no rewind (`C0` unread). -/
+def unfixedStep (replay : Replay C) : RestoreStep C := fun r overwrite keepCloud snap _ =>
+  r.restoreWith replay overwrite keepCloud snap
+
+/-- `Reachable` with the restore step swapped for `step`: every
+`Reachable` state, and every state one restore by `step` reaches from one
+of them, under exactly `Reachable.restore`'s premises. A statement about
+every state of this set fails as soon as one state violates it, so one
+restore is all a positive control needs. With the step `Reachable` has
+the set is inside `Reachable` (`reachableRestoreWith_current`), so a
+control with `fixedStep` and an older replay differs from the theorems in
+the replay alone, and one with `unfixedStep (replayBaseline hash)` — the
+Swift as of 7a2e382e — in the rewind alone. -/
+inductive ReachableRestoreWith (step : RestoreStep C) : Sys C → Prop
+  | reach (sys : Sys C) : Reachable hash sys → ReachableRestoreWith step sys
+  | restore (sys : Sys C) (overwrite : Bool) (keepCloud : Id → Bool) (snap : Snapshot C)
+      (C0 : Seq)
+      (hread : ∀ i c S, snap i = some (c, S) →
+        ∃ s' ∈ sys.server :: sys.past, s'.rows i = some ⟨c, S, false⟩ ∧ C0 ≤ s'.counter)
+      (hall : ∃ s' ∈ sys.server :: sys.past, C0 ≤ s'.counter ∧
+        ∀ i row, s'.rows i = some row → row.deleted = false →
+          snap i = some (row.content, row.seq)) :
+      Reachable hash sys →
+      ReachableRestoreWith step
+        { sys with replica := step sys.replica overwrite keepCloud snap C0 }
+
+theorem reachableRestoreWith_current {sys : Sys C}
+    (h : ReachableRestoreWith hash (fixedStep (replayBaseline hash)) sys) : Reachable hash sys := by
+  cases h with
+  | reach _ h => exact h
+  | restore sys overwrite keepCloud snap C0 hread hall h =>
+    exact Reachable.restore sys overwrite keepCloud snap C0 hread hall h
 
 end Reachable
 
@@ -5274,9 +6110,11 @@ end Reachable
 Concrete runs (`Nat` content, identity hash) built through the
 constructors, so the premises of the reachable theorems are shown
 satisfiable on a state that took a conflict, a late `[row]` response and
-a push; and the three runs the section header names as outside
-`Reachable` — the unguarded late write, the ineligible verify pass, the
-restore replay's local-hash writing — each with the loss it admits. -/
+a push, and on restored states; the runs the section header names as
+outside `Reachable` — the unguarded late write, the ineligible verify
+pass, a restore without the rewind — each with the loss it admits; and
+the restore replays before 7a2e382e, each reaching a state a reachable
+theorem rules out. -/
 
 section ReachableRuns
 
@@ -5338,6 +6176,29 @@ theorem oneServer_wf (row : Row Nat) (counter : Seq) (h : row.seq ≤ counter) :
 theorem oneServer_only (row : Option (Row Nat)) (counter : Seq) (i : Id) (hi : i ≠ 1) :
     (oneServer row counter).rows i = none := by
   simp [oneServer, hi]
+
+/-- `init`'s premise for a replica at cursor 0 against a server whose one
+row carries a minted seq. -/
+theorem oneServer_fresh0 (row : Row Nat) (counter : Seq) (hpos : 0 < row.seq) :
+    ∀ i r, (oneServer (some row) counter).rows i = some r → r.seq ≤ 0 → r.deleted = true := by
+  intro i r h hle
+  by_cases hi : i = 1
+  · subst hi
+    simp only [oneServer, ↓reduceIte, Option.some.injEq] at h
+    subst h
+    exact absurd hle (Nat.not_le.mpr hpos)
+  · simp [oneServer, hi] at h
+
+/-- The live rows of a one-row server. -/
+theorem oneServer_live (row : Row Nat) (counter : Seq) :
+    ∀ i r, (oneServer (some row) counter).rows i = some r → r.deleted = false →
+      i = 1 ∧ r = row := by
+  intro i r h _
+  by_cases hi : i = 1
+  · subst hi
+    simp only [oneServer, ↓reduceIte, Option.some.injEq] at h
+    exact ⟨rfl, h.symm⟩
+  · simp [oneServer, hi] at h
 
 /-- A replica that holds nothing away from id 1. -/
 def OnlyAt1 (r : Replica Nat) : Prop := ∀ i, i ≠ 1 → r.loc i = none ∧ r.base i = none
@@ -5428,7 +6289,7 @@ theorem late_guard_run_reachable :
   have hwf0 : lateS0.WF := oneServer_wf _ _ (Nat.le_refl _)
   have h0 : Reachable id ⟨lateS0, lateR0, [], [], []⟩ :=
     Reachable.init lateS0 lateR0 hwf0 (fun i => by simp [lateR0, oneRowAt, oneRow])
-      (Nat.zero_le _)
+      (Nat.zero_le _) (oneServer_fresh0 _ _ (by decide))
   have h1 : Reachable id ⟨lateS0, lateR1, [], [], []⟩ :=
     Reachable.pull ⟨lateS0, lateR0, [], [], []⟩ lateS0 5 [⟨1, 5, 0, false⟩]
       (List.mem_cons_self ..) (Nat.zero_le _)
@@ -5533,17 +6394,9 @@ theorem clean_replica_converges_reachable_instance :
     by_cases hi : i = 1
     · subst hi; unfold CleanAt; decide
     · unfold CleanAt; rw [(lateR6_only i hi).1, (lateR6_only i hi).2]; rfl
-  have hsync : SyncedBelow lateS3 lateR6 := by
-    intro i hp
-    by_cases hi : i = 1
-    · subst hi
-      have h : lateS3.rows 1 = some ⟨3, 8, false⟩ := by decide
-      have := hp _ h
-      exact absurd this (by decide)
-    · rw [(lateR6_only i hi).1]; simp [Server.live, lateS3_only i hi]
   have hfeed : IsHeadFeed lateS3 lateR6.cursor [⟨1, 8, 3, false⟩] :=
     onePage_head _ _ _ (by decide) (by decide) lateS3_only
-  obtain ⟨hl, hs, -⟩ := clean_replica_converges_reachable id hinj h8 hclean hsync _ hfeed
+  obtain ⟨hl, hs, -⟩ := clean_replica_converges_reachable id hinj h8 hclean _ hfeed
   exact ⟨hl, by rw [hs]; decide⟩
 
 /-- The common prefix of the late-response runs: `init`, the pull of c0
@@ -5555,7 +6408,7 @@ theorem late_prefix_reachable :
   have hwf0 : lateS0.WF := oneServer_wf _ _ (Nat.le_refl _)
   have h0 : Reachable id ⟨lateS0, lateR0, [], [], []⟩ :=
     Reachable.init lateS0 lateR0 hwf0 (fun i => by simp [lateR0, oneRowAt, oneRow])
-      (Nat.zero_le _)
+      (Nat.zero_le _) (oneServer_fresh0 _ _ (by decide))
   have h1 : Reachable id ⟨lateS0, lateR1, [], [], []⟩ :=
     Reachable.pull ⟨lateS0, lateR0, [], [], []⟩ lateS0 5 [⟨1, 5, 0, false⟩]
       (List.mem_cons_self ..) (Nat.zero_le _)
@@ -5818,8 +6671,9 @@ reachable run, so no reachable theorem is read off runs that never take
 those steps: the guard's PASS branch (`recv` with the baseline still on
 the PATCH's seq); a nonempty pending set and the `verify` step that
 consumes it; a pending local delete meeting a peer's edit, then
-`pushDelete`; a lost response (`lose`). And the two runs `Reachable`
-excludes violate `BaseHeld`, so its past-tense content is not vacuous. -/
+`pushDelete`; a lost response (`lose`). The `restore` step's runs are
+in the restore subsection below. And the two runs `Reachable` excludes
+here violate `BaseHeld`, so its past-tense content is not vacuous. -/
 
 /-- INSTANCE (the guard's pass branch): the response arrives with the
 baseline still `(h0, 5)` and writes `(h1, 6)`. -/
@@ -5908,7 +6762,7 @@ theorem pending_delete_run_instance :
   have hwf0 : lateS0.WF := oneServer_wf _ _ (Nat.le_refl _)
   have h0 : Reachable id ⟨lateS0, lateR0, [], [], []⟩ :=
     Reachable.init lateS0 lateR0 hwf0 (fun i => by simp [lateR0, oneRowAt, oneRow])
-      (Nat.zero_le _)
+      (Nat.zero_le _) (oneServer_fresh0 _ _ (by decide))
   have h1 : Reachable id ⟨lateS0, lateR1, [], [], []⟩ :=
     Reachable.pull ⟨lateS0, lateR0, [], [], []⟩ lateS0 5 [⟨1, 5, 0, false⟩]
       (List.mem_cons_self ..) (Nat.zero_le _)
@@ -6016,8 +6870,6 @@ theorem pull_pages_converge_reachable_instance :
       ∧ (pull id (pullAll id mpR0 [(mpS0, mpPage1)]) mpPage2).shelf = []
       ∧ (pull id (pullAll id mpR0 [(mpS0, mpPage1)]) mpPage2).loc 1 = some 11 := by
   have hinj : HashInjective (id : Nat → Hash) := fun _ _ h => h
-  have hreach : Reachable id ⟨mpS0, mpR0, [], [], []⟩ :=
-    Reachable.init mpS0 mpR0 mpS0_wf (fun _ => rfl) (Nat.zero_le _)
   have hpos : ∀ i row, mpS0.rows i = some row → 0 < row.seq := by
     intro i row hr
     by_cases h1 : i = 1
@@ -6025,11 +6877,14 @@ theorem pull_pages_converge_reachable_instance :
     · by_cases h2 : i = 2
       · subst h2; simp [mpS0] at hr; subst hr; decide
       · rw [mpS0_rows i h1 h2] at hr; cases hr
-  obtain ⟨-, hclean, hs, -⟩ :=
+  have hreach : Reachable id ⟨mpS0, mpR0, [], [], []⟩ :=
+    Reachable.init mpS0 mpR0 mpS0_wf (fun _ => rfl) (Nat.zero_le _)
+      (fun i row hr hle => absurd hle (Nat.not_le.mpr (hpos i row hr)))
+  obtain ⟨-, hclean, -, -⟩ :=
     fresh_replica_premises id mpS0 mpS0_wf hpos mpR0 (fun _ => rfl) (fun _ => rfl) rfl
   have hchain : Chain id mpS0 mpR0 [(mpS0, mpPage1)] mpS0 :=
     Chain.cons mpS0 mpS0 mpS0 mpR0 mpPage1 [] (advances_refl _) 6 mpPage1_feed (Chain.nil _ _)
-  obtain ⟨hl, hsh, -⟩ := pull_pages_converge_reachable id hinj hreach hclean hs hchain
+  obtain ⟨hl, hsh, -⟩ := pull_pages_converge_reachable id hinj hreach hclean hchain
     (step_advances mpS0 (.patch 1 6 11)) mpPage2 mpPage2_head
   exact ⟨hl, hsh, by rw [hl 1]; decide⟩
 
@@ -6111,15 +6966,24 @@ theorem late_post_response_guards_witness :
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_,
     ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> decide
 
-/-! ### Restore's baseline replay (not a `Reachable` writer)
+/-! ### Restore's baseline replay
 
-In slice 1 (and in the round-nine §13 row) `markRestoreCompleted` →
-`replayBaseline` writes `(hash(local row), previous seq)`. For a
-keepLocal collision row — local c1, the cloud's row c2 at seq 6 — that
-pair reads clean while the server holds c2: nothing is uploaded, and the
-state violates `BaseHashSound`. The writing the round-nine principle
-asks for, and v1.5 (S6) adopts, `(hash(cloud row), cloud seq)`, reads
-dirty and the next PATCH `seq=eq.6` lands c1. -/
+`Reachable.restore` is the replay as of 7a2e382e followed by the rewind.
+The runs below put it on reachable runs (a merge keeping local, a merge
+over a pending local delete, an overwrite); run the two replays before
+7a2e382e, with the rewind, under the same premises
+(`ReachableRestoreWith` with `fixedStep`); and run the replay as of
+7a2e382e without the rewind — the Swift as it stands — under the same
+premises (`unfixedStep`). Each control reaches a state that a theorem
+proved for every reachable state rules out.
+
+`restore_replay_local_hash_witness` is slice 1's writing on bare states:
+for a keepLocal collision row — local c1, the cloud's row c2 at seq 6 —
+`(hash(local row), previous seq)` reads clean while the server holds c2:
+nothing is uploaded, and the state violates `BaseHashSound`. The
+cloud-row writing `(hash(cloud row), cloud seq)` reads dirty and the next
+PATCH `seq=eq.6` lands c1. `slice1_collision_clean_control` reaches the
+same pair of states by a run. -/
 
 def restoreServer : Server Nat := oneServer (some ⟨2, 6, false⟩) 6
 def restoreLocalHash : Replica Nat := oneRowAt (some 1) (some (1, 6)) 6
@@ -6137,6 +7001,568 @@ theorem restore_replay_local_hash_witness :
   intro h
   have := h 1 1 6 ⟨2, 6, false⟩ (by decide) (by decide) rfl
   cases this
+
+/-- A snapshot carrying one row, at id 1; the empty snapshot; every
+collision keeping the local row, or taking the cloud's. -/
+def snapAt1 (c : Nat) (S : Seq) : Snapshot Nat := fun i => if i = 1 then some (c, S) else none
+def snapNone : Snapshot Nat := fun _ => none
+def keepLocalAll : Id → Bool := fun _ => false
+def keepCloudAll : Id → Bool := fun _ => true
+
+theorem snapAt1_some {c c' : Nat} {S S' : Seq} {i : Id} (h : snapAt1 c S i = some (c', S')) :
+    i = 1 ∧ c' = c ∧ S' = S := by
+  unfold snapAt1 at h
+  by_cases hi : i = 1
+  · rw [if_pos hi] at h; cases h; exact ⟨hi, rfl, rfl⟩
+  · rw [if_neg hi] at h; cases h
+
+theorem snapNone_none {i : Id} {c : Nat} {S : Seq} (h : snapNone i = some (c, S)) : False := by
+  simp [snapNone] at h
+
+/-- `hread` for a one-row snapshot read at `s0`. -/
+theorem snapAt1_read {c : Nat} {S C0 : Seq} {hist : List (Server Nat)} {s0 : Server Nat}
+    (hmem : s0 ∈ hist) (hrow : s0.rows 1 = some ⟨c, S, false⟩) (hC0 : C0 ≤ s0.counter) :
+    ∀ i c' S', snapAt1 c S i = some (c', S') →
+      ∃ s' ∈ hist, s'.rows i = some ⟨c', S', false⟩ ∧ C0 ≤ s'.counter := by
+  intro i c' S' h
+  obtain ⟨rfl, rfl, rfl⟩ := snapAt1_some h
+  exact ⟨s0, hmem, hrow, hC0⟩
+
+/-- `hall` for a one-row snapshot of a state whose only live row it is. -/
+theorem snapAt1_all {c : Nat} {S C0 : Seq} {hist : List (Server Nat)} {s0 : Server Nat}
+    (hmem : s0 ∈ hist) (hC0 : C0 ≤ s0.counter)
+    (hlive : ∀ i row, s0.rows i = some row → row.deleted = false →
+      i = 1 ∧ row = ⟨c, S, false⟩) :
+    ∃ s' ∈ hist, C0 ≤ s'.counter ∧ ∀ i row, s'.rows i = some row → row.deleted = false →
+      snapAt1 c S i = some (row.content, row.seq) := by
+  refine ⟨s0, hmem, hC0, ?_⟩
+  intro i row h hd
+  obtain ⟨rfl, rfl⟩ := hlive i row h hd
+  rfl
+
+theorem snapNone_read {C0 : Seq} {hist : List (Server Nat)} :
+    ∀ i c S, snapNone i = some (c, S) →
+      ∃ s' ∈ hist, s'.rows i = some ⟨c, S, false⟩ ∧ C0 ≤ s'.counter :=
+  fun _ _ _ h => (snapNone_none h).elim
+
+/-- `hall` for the empty snapshot of a state with no live row. -/
+theorem snapNone_all {C0 : Seq} {hist : List (Server Nat)} {s0 : Server Nat}
+    (hmem : s0 ∈ hist) (hC0 : C0 ≤ s0.counter)
+    (hdead : ∀ i row, s0.rows i = some row → row.deleted = true) :
+    ∃ s' ∈ hist, C0 ≤ s'.counter ∧ ∀ i row, s'.rows i = some row → row.deleted = false →
+      snapNone i = some (row.content, row.seq) := by
+  refine ⟨s0, hmem, hC0, ?_⟩
+  intro i row h hd
+  rw [hdead i row h] at hd; cases hd
+
+theorem lateR1_reachable : Reachable id ⟨lateS0, lateR1, [], [], []⟩ := by
+  have hwf0 : lateS0.WF := oneServer_wf _ _ (Nat.le_refl _)
+  have h0 : Reachable id ⟨lateS0, lateR0, [], [], []⟩ :=
+    Reachable.init lateS0 lateR0 hwf0 (fun i => by simp [lateR0, oneRowAt, oneRow])
+      (Nat.zero_le _) (oneServer_fresh0 _ _ (by decide))
+  exact Reachable.pull ⟨lateS0, lateR0, [], [], []⟩ lateS0 5 [⟨1, 5, 0, false⟩]
+    (List.mem_cons_self ..) (Nat.zero_le _)
+    (onePage_feed _ _ _ _ rfl (by decide) (Nat.le_refl _) (oneServer_only _ _)) h0
+
+/-! #### The replay before 7a2e382e: a row the cloud never had
+
+A row made while uploads were off — never sent, no entry, no server row
+— and a merge restore whose snapshot does not carry it. Both replays run
+with the rewind (`fixedStep`), so the control differs from the theorem in
+the replay alone. -/
+
+def ctl1S : Server Nat := oneServer none 5
+def ctl1R : Replica Nat := (oneRowAt none none 0).edit 1 7
+def ctl1Pre : Replica Nat :=
+  ctl1R.restoreFixedWith (replayBaselinePre id) false keepLocalAll snapNone 0
+def ctl1Now : Replica Nat := ctl1R.restore id false keepLocalAll snapNone 0
+
+theorem ctl1S_dead : ∀ i row, ctl1S.rows i = some row → row.deleted = true := by
+  intro i row h; simp [ctl1S, oneServer] at h
+
+theorem ctl1R_reachable : Reachable id ⟨ctl1S, ctl1R, [], [], []⟩ := by
+  have hwf : ctl1S.WF := by intro i row h; simp [ctl1S, oneServer] at h
+  exact Reachable.edit _ 1 7 (Reachable.init ctl1S (oneRowAt none none 0) hwf
+    (fun i => by simp [oneRowAt, oneRow]) (Nat.zero_le _)
+    (fun i row h _ => ctl1S_dead i row h))
+
+/-- CONTROL (`unsent_row_never_clean` — the property the shipped bug broke
+— under the replay before 7a2e382e): the old replay gives the row
+`(hash row, ·)` (seq-less in the Swift; `seqlessStandIn` here, which
+nothing below reads), so it reads clean while the server holds no row
+for it, and pushing it sends nothing — on this flush and every later
+one. The theorem, restated over the set with that replay, is false. With
+the current replay the row keeps no entry, and its POST lands. -/
+theorem pre_merge_unsent_row_clean_control :
+    ReachableRestoreWith id (fixedStep (replayBaselinePre id)) ⟨ctl1S, ctl1Pre, [], [], []⟩
+      ∧ ctl1Pre.loc 1 = some 7 ∧ ctl1S.rows 1 = none ∧ CleanAt id ctl1Pre 1
+      ∧ (pushRow id ctl1S ctl1Pre 1).server.counter = ctl1S.counter
+      ∧ (pushRow id ctl1S ctl1Pre 1).needsPull = false
+      ∧ (¬ ∀ sys : Sys Nat, ReachableRestoreWith id (fixedStep (replayBaselinePre id)) sys →
+          ∀ i c, sys.replica.loc i = some c → sys.server.rows i = none →
+            ¬ CleanAt id sys.replica i)
+      ∧ Reachable id ⟨ctl1S, ctl1Now, [], [], []⟩
+      ∧ ctl1Now.base 1 = none
+      ∧ (pushRow id ctl1S ctl1Now 1).server.rows 1 = some ⟨7, 6, false⟩ := by
+  have hall := snapNone_all (C0 := 0) (List.mem_cons_self (a := ctl1S) (l := []))
+    (Nat.zero_le _) ctl1S_dead
+  have hr : ReachableRestoreWith id (fixedStep (replayBaselinePre id))
+      ⟨ctl1S, ctl1Pre, [], [], []⟩ :=
+    ReachableRestoreWith.restore _ false keepLocalAll snapNone 0 snapNone_read hall
+      ctl1R_reachable
+  have hclean : CleanAt id ctl1Pre 1 := by unfold CleanAt; decide
+  refine ⟨hr, by decide, by decide, hclean, by decide, by decide, ?_, ?_, by decide, by decide⟩
+  · intro H
+    exact H _ hr 1 7 (by decide) (by decide) hclean
+  · exact Reachable.restore _ false keepLocalAll snapNone 0 snapNone_read hall ctl1R_reachable
+
+/-! #### The replay before 7a2e382e: a row edited after its last upload
+
+The previous-seq case, which the model represents exactly: the device
+holds X as the server does; a peer deletes X; this device, not having
+pulled the tombstone, edits X, then merge-restores — the fetch skips
+dead rows, so the snapshot does not carry X. -/
+
+def ctl2S : Server Nat := lateS0.step (.tombstone 1)
+def ctl2R : Replica Nat := lateR1.edit 1 3
+def ctl2Pre : Replica Nat :=
+  ctl2R.restoreFixedWith (replayBaselinePre id) false keepLocalAll snapNone 5
+def ctl2Now : Replica Nat := ctl2R.restore id false keepLocalAll snapNone 5
+
+theorem ctl2S_only (i : Id) (hi : i ≠ 1) : ctl2S.rows i = none := by
+  simp [ctl2S, Server.step, Server.tombstone, lateS0, oneServer, Server.setRow, hi]
+
+theorem ctl2S_dead : ∀ i row, ctl2S.rows i = some row → row.deleted = true := by
+  intro i row h
+  by_cases hi : i = 1
+  · subst hi
+    have e : ctl2S.rows 1 = some ⟨0, 6, true⟩ := by decide
+    rw [e] at h; cases h; rfl
+  · rw [ctl2S_only i hi] at h; cases h
+
+theorem ctl2R_reachable : Reachable id ⟨ctl2S, ctl2R, [], [], [lateS0]⟩ :=
+  Reachable.edit _ 1 3 (Reachable.peer _ (.tombstone 1) lateR1_reachable)
+
+/-- CONTROL (`reachable_sound`'s `BaseHeld`, under the replay before
+7a2e382e): the old replay writes the edit's hash at the seq of the
+version before it — a pair no state of the run held — and the row reads
+clean; the head pull of the tombstone then removes the edit without
+shelving it, as I7 allows for a clean row, and the edit is on no device,
+server or shelf. `BaseHeld`, restated over the set with that replay, is
+false. With the current replay the entry the row had stays, the row
+stays dirty, and the same pull shelves the edit
+(`dirty_local_vs_tombstone_shelved`). -/
+theorem pre_merge_previous_seq_control :
+    ReachableRestoreWith id (fixedStep (replayBaselinePre id))
+        ⟨ctl2S, ctl2Pre, [], [], [lateS0]⟩
+      ∧ ctl2S.rows 1 = some ⟨0, 6, true⟩
+      ∧ ctl2Pre.base 1 = some (3, 5) ∧ CleanAt id ctl2Pre 1
+      ∧ ¬ BaseHeld id [ctl2S, lateS0] ctl2Pre
+      ∧ (¬ ∀ sys : Sys Nat, ReachableRestoreWith id (fixedStep (replayBaselinePre id)) sys →
+          BaseHeld id (sys.server :: sys.past) sys.replica)
+      ∧ IsHeadFeed ctl2S ctl2Pre.cursor [⟨1, 6, 0, true⟩]
+      ∧ (pull id ctl2Pre [⟨1, 6, 0, true⟩]).loc 1 = none
+      ∧ (pull id ctl2Pre [⟨1, 6, 0, true⟩]).shelf = []
+      ∧ Reachable id ⟨ctl2S, ctl2Now, [], [], [lateS0]⟩
+      ∧ ctl2Now.base 1 = some (0, 5) ∧ ¬ CleanAt id ctl2Now 1
+      ∧ (pull id ctl2Now [⟨1, 6, 0, true⟩]).loc 1 = none
+      ∧ (pull id ctl2Now [⟨1, 6, 0, true⟩]).shelf = [(1, 3)] := by
+  have hall := snapNone_all (C0 := 5) (List.mem_cons_self (a := ctl2S) (l := [lateS0]))
+    (by decide) ctl2S_dead
+  have hr : ReachableRestoreWith id (fixedStep (replayBaselinePre id))
+      ⟨ctl2S, ctl2Pre, [], [], [lateS0]⟩ :=
+    ReachableRestoreWith.restore _ false keepLocalAll snapNone 5 snapNone_read hall
+      ctl2R_reachable
+  have hnot : ¬ BaseHeld id [ctl2S, lateS0] ctl2Pre := by
+    intro h
+    obtain ⟨s', hs', row, hrow, hseq, -, hh⟩ := h 1 3 5 (by decide)
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hs'
+    rcases hs' with rfl | rfl
+    · have e : ctl2S.rows 1 = some ⟨0, 6, true⟩ := by decide
+      rw [e] at hrow; cases hrow; cases hseq
+    · have e : lateS0.rows 1 = some ⟨0, 5, false⟩ := by decide
+      rw [e] at hrow; cases hrow; cases hh
+  refine ⟨hr, by decide, by decide, by unfold CleanAt; decide, hnot, ?_,
+    onePage_head _ _ _ (by decide) (by decide) ctl2S_only, by decide, by decide, ?_, by decide,
+    by unfold CleanAt; decide, by decide, by decide⟩
+  · intro H
+    exact hnot (H _ hr)
+  · exact Reachable.restore _ false keepLocalAll snapNone 5 snapNone_read hall ctl2R_reachable
+
+/-! #### Slice 1's replay: a keepLocal collision row
+
+The device pulled X, edited it, and restores a snapshot carrying the
+server's current row for X. -/
+
+def ctl3R : Replica Nat := (pull id (oneRowAt none none 0) [⟨1, 6, 2, false⟩]).edit 1 1
+def ctl3Slice1 : Replica Nat :=
+  ctl3R.restoreFixedWith (replayBaselineSlice1 id) false keepLocalAll (snapAt1 2 6) 6
+def ctl3Now : Replica Nat := ctl3R.restore id false keepLocalAll (snapAt1 2 6) 6
+def ctl3Over : Replica Nat := ctl3R.restore id true keepLocalAll (snapAt1 2 6) 6
+
+theorem ctl3R_reachable : Reachable id ⟨restoreServer, ctl3R, [], [], []⟩ := by
+  have hwf : restoreServer.WF := oneServer_wf _ _ (Nat.le_refl _)
+  have h0 : Reachable id ⟨restoreServer, oneRowAt none none 0, [], [], []⟩ :=
+    Reachable.init _ _ hwf (fun i => by simp [oneRowAt, oneRow]) (Nat.zero_le _)
+      (oneServer_fresh0 _ _ (by decide))
+  exact Reachable.edit _ 1 1 (Reachable.pull _ restoreServer 6 [⟨1, 6, 2, false⟩]
+    (List.mem_cons_self ..) (Nat.zero_le _)
+    (onePage_feed _ _ _ _ rfl (by decide) (Nat.le_refl _) (oneServer_only _ _)) h0)
+
+theorem ctl3_read : ∀ i c S, snapAt1 2 6 i = some (c, S) →
+    ∃ s' ∈ restoreServer :: ([] : List (Server Nat)),
+      s'.rows i = some ⟨c, S, false⟩ ∧ 6 ≤ s'.counter :=
+  snapAt1_read (List.mem_cons_self ..) rfl (Nat.le_refl _)
+
+theorem ctl3_all : ∃ s' ∈ restoreServer :: ([] : List (Server Nat)), 6 ≤ s'.counter ∧
+    ∀ i row, s'.rows i = some row → row.deleted = false →
+      snapAt1 2 6 i = some (row.content, row.seq) :=
+  snapAt1_all (List.mem_cons_self ..) (Nat.le_refl _) (oneServer_live _ _)
+
+/-- CONTROL (`reachable_sound`'s `BaseHashSound`, and
+`clean_iff_matches_server`, under slice 1's replay): slice 1 writes the
+edit's hash at the cloud row's seq — the pair
+`restore_replay_local_hash_witness` starts from: the row reads clean,
+the local row is not the server's, nothing is sent. Both theorems,
+restated over the set with slice 1's replay, are false. With the current
+replay the entry is the cloud row's, the row is dirty and its PATCH on
+the cloud's seq lands the edit; an overwrite instead takes the cloud
+row and reads clean — the two truth values of `clean_iff_matches_server`
+on restored states. -/
+theorem slice1_collision_clean_control :
+    ReachableRestoreWith id (fixedStep (replayBaselineSlice1 id))
+        ⟨restoreServer, ctl3Slice1, [], [], []⟩
+      ∧ ctl3Slice1.loc 1 = some 1 ∧ ctl3Slice1.base 1 = some (1, 6)
+      ∧ CleanAt id ctl3Slice1 1 ∧ ctl3Slice1.loc 1 ≠ restoreServer.live 1
+      ∧ ¬ BaseHashSound id restoreServer ctl3Slice1
+      ∧ (pushRow id restoreServer ctl3Slice1 1).server.counter = restoreServer.counter
+      ∧ (¬ ∀ sys : Sys Nat, ReachableRestoreWith id (fixedStep (replayBaselineSlice1 id)) sys →
+          BaseHashSound id sys.server sys.replica)
+      ∧ (¬ ∀ sys : Sys Nat, ReachableRestoreWith id (fixedStep (replayBaselineSlice1 id)) sys →
+          ∀ i h S row, sys.replica.base i = some (h, S) → sys.server.rows i = some row →
+            row.seq = S → (CleanAt id sys.replica i ↔ sys.replica.loc i = sys.server.live i))
+      ∧ Reachable id ⟨restoreServer, ctl3Now, [], [], []⟩
+      ∧ ctl3Now.base 1 = some (2, 6) ∧ ¬ CleanAt id ctl3Now 1
+      ∧ ctl3Now.loc 1 ≠ restoreServer.live 1
+      ∧ (pushRow id restoreServer ctl3Now 1).server.rows 1 = some ⟨1, 7, false⟩
+      ∧ Reachable id ⟨restoreServer, ctl3Over, [], [], []⟩
+      ∧ CleanAt id ctl3Over 1 ∧ ctl3Over.loc 1 = restoreServer.live 1 := by
+  have hr : ReachableRestoreWith id (fixedStep (replayBaselineSlice1 id))
+      ⟨restoreServer, ctl3Slice1, [], [], []⟩ :=
+    ReachableRestoreWith.restore _ false keepLocalAll (snapAt1 2 6) 6 ctl3_read ctl3_all
+      ctl3R_reachable
+  have hclean : CleanAt id ctl3Slice1 1 := by unfold CleanAt; decide
+  have hne : ctl3Slice1.loc 1 ≠ restoreServer.live 1 := by decide
+  have hns : ¬ BaseHashSound id restoreServer ctl3Slice1 := by
+    intro h
+    have := h 1 1 6 ⟨2, 6, false⟩ (by decide) (by decide) rfl
+    cases this
+  refine ⟨hr, by decide, by decide, hclean, hne, hns, by decide, ?_, ?_, ?_, by decide,
+    by unfold CleanAt; decide, by decide, by decide, ?_, by unfold CleanAt; decide, by decide⟩
+  · intro H
+    exact hns (H _ hr)
+  · intro H
+    exact hne ((H _ hr 1 1 6 ⟨2, 6, false⟩ (by decide) (by decide) rfl).mp hclean)
+  · exact Reachable.restore _ false keepLocalAll (snapAt1 2 6) 6 ctl3_read ctl3_all
+      ctl3R_reachable
+  · exact Reachable.restore _ true keepLocalAll (snapAt1 2 6) 6 ctl3_read ctl3_all
+      ctl3R_reachable
+
+/-! #### A merge restore over a pending local delete -/
+
+def pdR : Replica Nat := delR3.restore id false keepLocalAll (snapAt1 0 5) 5
+
+theorem lateS0_read : ∀ i c S, snapAt1 0 5 i = some (c, S) →
+    ∃ s' ∈ lateS0 :: ([] : List (Server Nat)), s'.rows i = some ⟨c, S, false⟩ ∧ 5 ≤ s'.counter :=
+  snapAt1_read (List.mem_cons_self ..) rfl (Nat.le_refl _)
+
+theorem lateS0_all : ∃ s' ∈ lateS0 :: ([] : List (Server Nat)), 5 ≤ s'.counter ∧
+    ∀ i row, s'.rows i = some row → row.deleted = false →
+      snapAt1 0 5 i = some (row.content, row.seq) :=
+  snapAt1_all (List.mem_cons_self ..) (Nat.le_refl _) (oneServer_live _ _)
+
+/-- INSTANCE (a merge over a pending local delete, on a reachable run —
+the delete is undone): the device deletes X (the entry stays, the
+tombstone PATCH not yet sent) and merge-restores a snapshot carrying X.
+To `mergeByID` X is a row only the cloud has, so it comes back; its
+entry is the cloud row's, it reads clean, and neither push sends
+anything — the server keeps X live. Without the restore the next
+flush's tombstone PATCH deletes it. A pending delete the snapshot does
+NOT carry loses its entry instead (`restore_merge_uncarried`), and its
+tombstone PATCH is never sent either. -/
+theorem restore_merge_undoes_pending_delete_instance :
+    Reachable id ⟨lateS0, pdR, [], [], []⟩
+      ∧ delR3.loc 1 = none ∧ delR3.base 1 = some (0, 5)
+      ∧ pdR.loc 1 = some 0 ∧ pdR.base 1 = some (0, 5) ∧ CleanAt id pdR 1
+      ∧ (pushDelete lateS0 pdR 1).server.live 1 = some 0
+      ∧ (pushRow id lateS0 pdR 1).server.counter = lateS0.counter
+      ∧ (pushDelete lateS0 delR3 1).server.live 1 = none :=
+  ⟨Reachable.restore _ false keepLocalAll (snapAt1 0 5) 5 lateS0_read lateS0_all
+      (Reachable.deleteLocal _ 1 lateR1_reachable),
+    by decide, by decide, by decide, by decide, by unfold CleanAt; decide, by decide, by decide,
+    by decide⟩
+
+/-- The same merge, of a snapshot missing X although X was live when it
+was read (an undecodable row, the walk's safety cap). -/
+def pdMissing : Replica Nat := delR3.restore id false keepLocalAll snapNone 5
+
+/-- WITNESS (`hall` is what `BaseCoversBelow` needs): the snapshot misses
+X, so `hall` fails while `hread` holds. X has no local row, so the replay
+drops its entry (`restore_merge_uncarried`): the replica is clean at X
+and X is live on the server at a seq the cursor has passed — not in
+sync below the cursor, and the pending delete is never sent. -/
+theorem restore_incomplete_snapshot_witness :
+    Reachable id ⟨lateS0, delR3, [], [], []⟩
+      ∧ ¬ (∃ s' ∈ lateS0 :: ([] : List (Server Nat)), 5 ≤ s'.counter ∧
+          ∀ i row, s'.rows i = some row → row.deleted = false →
+            snapNone i = some (row.content, row.seq))
+      ∧ pdMissing.loc 1 = none ∧ pdMissing.base 1 = none ∧ pdMissing.cursor = 5
+      ∧ CleanAt id pdMissing 1 ∧ lateS0.live 1 = some 0
+      ∧ ¬ BaseCoversBelow lateS0 pdMissing
+      ∧ (pushDelete lateS0 pdMissing 1).server.live 1 = some 0 := by
+  have e : lateS0.rows 1 = some ⟨0, 5, false⟩ := by decide
+  refine ⟨Reachable.deleteLocal _ 1 lateR1_reachable, ?_, by decide, by decide, by decide,
+    by unfold CleanAt; decide, by decide, fun h => h 1 _ e (by decide) rfl (by decide),
+    by decide⟩
+  rintro ⟨s', hs', -, hcov⟩
+  simp only [List.mem_cons, List.not_mem_nil, or_false] at hs'
+  subst hs'
+  exact snapNone_none (hcov 1 _ e rfl)
+
+/-! #### Without the rewind (the Swift as of 7a2e382e): an older snapshot
+
+The snapshot is fetched when the restore sheet opens and applied after
+the user's review; the puller keeps running meanwhile. Without the
+rewind, by the time the replay writes a snapshot row's seq the device
+may have pulled a newer version of that row. The run: the device holds X
+as the server does, at the cursor it has when the fetch starts (`C0`);
+the restore fetch reads X; a peer writes a newer version and the device
+pulls it, its cursor passing that version's seq; the user merges
+keeping local. -/
+
+def staleR2 : Replica Nat := pull id lateR1 [⟨1, 6, 2, false⟩]
+def staleR3 : Replica Nat := staleR2.restoreUnfixed id false keepLocalAll (snapAt1 0 5)
+def staleR4 : Replica Nat := staleR3.edit 1 3
+def staleR5 : Replica Nat := pullVerify id staleR4 [] [⟨1, 5, 3⟩]
+def staleS2 : Server Nat := inelS1.step (.patch 1 6 4)
+/-- The same restore with the rewind. -/
+def staleFixed : Replica Nat := staleR2.restore id false keepLocalAll (snapAt1 0 5) 5
+
+theorem staleR2_reachable : Reachable id ⟨inelS1, staleR2, [], [], [lateS0]⟩ :=
+  Reachable.pull _ inelS1 6 [⟨1, 6, 2, false⟩] (List.mem_cons_self ..) (by decide)
+    (inelS1_feed _ (by decide)) (Reachable.peer _ (.patch 1 5 2) lateR1_reachable)
+
+theorem stale_read : ∀ i c S, snapAt1 0 5 i = some (c, S) →
+    ∃ s' ∈ inelS1 :: [lateS0], s'.rows i = some ⟨c, S, false⟩ ∧ 5 ≤ s'.counter :=
+  snapAt1_read (List.mem_cons_of_mem _ (List.mem_cons_self ..)) rfl (Nat.le_refl _)
+
+theorem stale_all : ∃ s' ∈ inelS1 :: [lateS0], 5 ≤ s'.counter ∧
+    ∀ i row, s'.rows i = some row → row.deleted = false →
+      snapAt1 0 5 i = some (row.content, row.seq) :=
+  snapAt1_all (List.mem_cons_of_mem _ (List.mem_cons_self ..)) (Nat.le_refl _)
+    (oneServer_live _ _)
+
+/-- CONTROL (the rewind, against the Swift as of 7a2e382e): the same
+premises, the step without the rewind (`unfixedStep`). The replay writes
+the snapshot's older `(hash, seq)` under a cursor past the newer version,
+so `BaseTracksFeed` — part of `reachable_sound` — fails, and restated
+over the set with that step it is false. The edit that follows is lost:
+its PATCH filters on the older seq and answers `[]`; the eligible head
+pull does not show X (its row is at the cursor), the baseline seq equals
+the sent one, and the verify pass writes the edit's hash at the older
+seq — a pair no state held, so `BaseHeld` fails too. The edit reads
+clean and is never sent; the peer's next write is adopted over it with
+nothing shelved. Keeping the cloud's copy instead leaves the device on
+the older version, clean, with no pull from its cursor that brings the
+newer one. With the rewind the restore is a `Reachable` step, and the
+same edit meets the newer version as a conflict (shelved) and lands. -/
+theorem restore_stale_snapshot_witness :
+    ReachableRestoreWith id (unfixedStep (replayBaseline id))
+        ⟨inelS1, staleR3, [], [], [lateS0]⟩
+      ∧ staleR3.loc 1 = some 2 ∧ staleR3.base 1 = some (0, 5) ∧ staleR3.cursor = 6
+      ∧ ¬ BaseTracksFeed inelS1 staleR3
+      ∧ (¬ ∀ sys : Sys Nat, ReachableRestoreWith id (unfixedStep (replayBaseline id)) sys →
+          BaseTracksFeed sys.server sys.replica)
+      ∧ (pushRow id inelS1 staleR4 1).pending = some ⟨1, 5, 3⟩
+      ∧ (pushRow id inelS1 staleR4 1).server.counter = inelS1.counter
+      ∧ IsHeadFeed inelS1 staleR4.cursor []
+      ∧ staleR5.base 1 = some (3, 5) ∧ CleanAt id staleR5 1
+      ∧ (pushRow id inelS1 staleR5 1).server.counter = inelS1.counter
+      ∧ (pushRow id inelS1 staleR5 1).needsPull = false
+      ∧ ¬ BaseHeld id [inelS1, lateS0] staleR5
+      ∧ inelS1.live 1 = some 2
+      ∧ staleS2.rows 1 = some ⟨4, 7, false⟩
+      ∧ (pull id staleR5 [⟨1, 7, 4, false⟩]).loc 1 = some 4
+      ∧ (pull id staleR5 [⟨1, 7, 4, false⟩]).shelf = []
+      ∧ (staleR2.restoreUnfixed id false keepCloudAll (snapAt1 0 5)).loc 1 = some 0
+      ∧ CleanAt id (staleR2.restoreUnfixed id false keepCloudAll (snapAt1 0 5)) 1
+      ∧ (staleR2.restoreUnfixed id false keepCloudAll (snapAt1 0 5)).cursor = staleR4.cursor
+      ∧ Reachable id ⟨inelS1, staleFixed, [], [], [lateS0]⟩
+      ∧ staleFixed.cursor = 5
+      ∧ (pushRow id inelS1 (staleFixed.edit 1 3) 1).pending = some ⟨1, 5, 3⟩
+      ∧ IsHeadFeed inelS1 staleFixed.cursor [⟨1, 6, 2, false⟩]
+      ∧ (pullVerify id (staleFixed.edit 1 3) [⟨1, 6, 2, false⟩] [⟨1, 5, 3⟩]).loc 1 = some 3
+      ∧ (pullVerify id (staleFixed.edit 1 3) [⟨1, 6, 2, false⟩] [⟨1, 5, 3⟩]).shelf
+          = [(1, 2)]
+      ∧ (pushRow id inelS1 (pullVerify id (staleFixed.edit 1 3) [⟨1, 6, 2, false⟩]
+          [⟨1, 5, 3⟩]) 1).server.rows 1 = some ⟨3, 7, false⟩ := by
+  have e1 : inelS1.rows 1 = some ⟨2, 6, false⟩ := by decide
+  have hr : ReachableRestoreWith id (unfixedStep (replayBaseline id))
+      ⟨inelS1, staleR3, [], [], [lateS0]⟩ :=
+    ReachableRestoreWith.restore _ false keepLocalAll (snapAt1 0 5) 5 stale_read stale_all
+      staleR2_reachable
+  have hnt : ¬ BaseTracksFeed inelS1 staleR3 := by
+    intro h
+    have := h 1 0 5 ⟨2, 6, false⟩ (by decide) e1 (by decide)
+    cases this
+  have hnh : ¬ BaseHeld id [inelS1, lateS0] staleR5 := by
+    intro h
+    obtain ⟨s', hs', row, hrow, hseq, -, hh⟩ := h 1 3 5 (by decide)
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hs'
+    rcases hs' with rfl | rfl
+    · rw [e1] at hrow; cases hrow; cases hseq
+    · have e : lateS0.rows 1 = some ⟨0, 5, false⟩ := by decide
+      rw [e] at hrow; cases hrow; cases hh
+  refine ⟨hr, by decide, by decide, by decide, hnt, fun H => hnt (H _ hr), by decide, by decide,
+    emptyPage_head _ _ ?_, by decide, by unfold CleanAt; decide, by decide, by decide, hnh,
+    by decide, by decide, by decide, by decide, by decide, by unfold CleanAt; decide, by decide,
+    Reachable.restore _ false keepLocalAll (snapAt1 0 5) 5 stale_read stale_all
+      staleR2_reachable,
+    by decide, by decide, onePage_head _ _ _ e1 (by decide) inelS1_only, by decide, by decide,
+    by decide⟩
+  intro i row hr'
+  by_cases hi : i = 1
+  · subst hi; rw [e1] at hr'; cases hr'; decide
+  · rw [inelS1_only i hi] at hr'; cases hr'
+
+/-! #### Without the rewind: an overwrite drops a row the device pulled
+
+The independent QA's run: the device holds X as the server does, at the
+cursor it has when the fetch starts (`C0`); the restore fetch reads X; a
+peer creates Y and the device pulls it, its cursor passing Y's seq; the
+user overwrites from the cloud. The snapshot does not carry Y, so the
+overwrite drops it locally and the replay drops its entry. -/
+
+def qaS1 : Server Nat := lateS0.step (.insertIgnore 2 7)
+def qaR2 : Replica Nat := pull id lateR1 [⟨2, 6, 7, false⟩]
+def qaUnfixed : Replica Nat := qaR2.restoreUnfixed id true keepLocalAll (snapAt1 0 5)
+def qaFixed : Replica Nat := qaR2.restore id true keepLocalAll (snapAt1 0 5) 5
+
+theorem qaS1_1 : qaS1.rows 1 = some ⟨0, 5, false⟩ := by decide
+theorem qaS1_2 : qaS1.rows 2 = some ⟨7, 6, false⟩ := by decide
+theorem qaS1_other (i : Id) (h1 : i ≠ 1) (h2 : i ≠ 2) : qaS1.rows i = none := by
+  simp [qaS1, Server.step, Server.insertIgnore, lateS0, oneServer, Server.setRow, h1, h2]
+
+theorem qaR2_reachable : Reachable id ⟨qaS1, qaR2, [], [], [lateS0]⟩ := by
+  have hfeed : IsPageFeed qaS1 lateR1.cursor 6 [⟨2, 6, 7, false⟩] := by
+    refine ⟨?_, ?_, List.pairwise_singleton _ _⟩
+    · intro fr hfr
+      simp only [List.mem_singleton] at hfr
+      subst hfr
+      exact ⟨qaS1_2, by decide, Nat.le_refl _⟩
+    · intro i row hrow hlt _
+      by_cases h2 : i = 2
+      · exact ⟨_, List.mem_singleton_self _, h2.symm⟩
+      · exfalso
+        by_cases h1 : i = 1
+        · subst h1; rw [qaS1_1] at hrow; cases hrow; exact absurd hlt (by decide)
+        · rw [qaS1_other i h1 h2] at hrow; cases hrow
+  exact Reachable.pull _ qaS1 6 _ (List.mem_cons_self ..) (by decide) hfeed
+    (Reachable.peer _ (.insertIgnore 2 7) lateR1_reachable)
+
+theorem qa_read : ∀ i c S, snapAt1 0 5 i = some (c, S) →
+    ∃ s' ∈ qaS1 :: [lateS0], s'.rows i = some ⟨c, S, false⟩ ∧ 5 ≤ s'.counter :=
+  snapAt1_read (List.mem_cons_of_mem _ (List.mem_cons_self ..)) rfl (Nat.le_refl _)
+
+theorem qa_all : ∃ s' ∈ qaS1 :: [lateS0], 5 ≤ s'.counter ∧
+    ∀ i row, s'.rows i = some row → row.deleted = false →
+      snapAt1 0 5 i = some (row.content, row.seq) :=
+  snapAt1_all (List.mem_cons_of_mem _ (List.mem_cons_self ..)) (Nat.le_refl _)
+    (oneServer_live _ _)
+
+/-- An overwrite of `snapAt1 0 5`, with or without the rewind, is clean
+everywhere. -/
+theorem qa_clean (r : Replica Nat) (hr : r = qaUnfixed ∨ r = qaFixed) : ∀ i, CleanAt id r i := by
+  intro i
+  rcases hr with rfl | rfl
+  · by_cases hi : i = 1
+    · subst hi; unfold CleanAt; decide
+    · unfold CleanAt
+      simp [qaUnfixed, Replica.restoreUnfixed, Replica.restoreWith, restoreLoc, replayBaseline,
+        snapAt1, hi]
+  · by_cases hi : i = 1
+    · subst hi; unfold CleanAt; decide
+    · unfold CleanAt
+      simp [qaFixed, Replica.restore, Replica.restoreFixedWith, Replica.restoreWith, restoreLoc,
+        replayBaseline, snapAt1, hi]
+
+/-- CONTROL (`synced_below_of_clean` and `BaseCoversBelow`, against the
+Swift as of 7a2e382e): without the rewind the overwritten replica is
+clean everywhere, yet Y — live on the server at a seq the cursor has
+passed — is neither a local row nor an entry, and no pull from that
+cursor brings it back: the device has lost a row every other device
+shows, and nothing flags it. Both statements, restated over the set with
+the step without the rewind, are false. With the rewind the cursor goes
+back to `C0`, which Y's seq is above: the restore is a `Reachable` step,
+the replica is in sync below its cursor (`synced_below_of_clean`), and
+the head pull lands on the server at every id
+(`clean_replica_converges_reachable`), Y included. -/
+theorem overwrite_drops_pulled_row_control :
+    ReachableRestoreWith id (unfixedStep (replayBaseline id)) ⟨qaS1, qaUnfixed, [], [], [lateS0]⟩
+      ∧ qaR2.loc 2 = some 7 ∧ qaR2.base 2 = some (7, 6) ∧ qaR2.cursor = 6
+      ∧ qaUnfixed.loc 2 = none ∧ qaUnfixed.base 2 = none ∧ qaUnfixed.cursor = 6
+      ∧ (∀ i, CleanAt id qaUnfixed i)
+      ∧ qaS1.live 2 = some 7
+      ∧ ¬ SyncedBelow qaS1 qaUnfixed ∧ ¬ BaseCoversBelow qaS1 qaUnfixed
+      ∧ IsHeadFeed qaS1 qaUnfixed.cursor []
+      ∧ (¬ ∀ sys : Sys Nat, ReachableRestoreWith id (unfixedStep (replayBaseline id)) sys →
+          (∀ i, CleanAt id sys.replica i) → SyncedBelow sys.server sys.replica)
+      ∧ (¬ ∀ sys : Sys Nat, ReachableRestoreWith id (unfixedStep (replayBaseline id)) sys →
+          BaseCoversBelow sys.server sys.replica)
+      ∧ Reachable id ⟨qaS1, qaFixed, [], [], [lateS0]⟩
+      ∧ qaFixed.cursor = 5 ∧ (∀ i, CleanAt id qaFixed i)
+      ∧ SyncedBelow qaS1 qaFixed
+      ∧ IsHeadFeed qaS1 qaFixed.cursor [⟨2, 6, 7, false⟩]
+      ∧ (∀ i, (pull id qaFixed [⟨2, 6, 7, false⟩]).loc i = qaS1.live i)
+      ∧ (pull id qaFixed [⟨2, 6, 7, false⟩]).loc 2 = some 7 := by
+  have hinj : HashInjective (id : Nat → Hash) := fun _ _ h => h
+  have hr : ReachableRestoreWith id (unfixedStep (replayBaseline id))
+      ⟨qaS1, qaUnfixed, [], [], [lateS0]⟩ :=
+    ReachableRestoreWith.restore _ true keepLocalAll (snapAt1 0 5) 5 qa_read qa_all
+      qaR2_reachable
+  have hcu := qa_clean qaUnfixed (Or.inl rfl)
+  have hcf := qa_clean qaFixed (Or.inr rfl)
+  have hns : ¬ SyncedBelow qaS1 qaUnfixed := by
+    intro h
+    have := h 2 (fun row hrow => by rw [qaS1_2] at hrow; cases hrow; decide)
+    exact absurd this (by decide)
+  have hnc : ¬ BaseCoversBelow qaS1 qaUnfixed :=
+    fun h => h 2 _ qaS1_2 (by decide) rfl (by decide)
+  have hrf : Reachable id ⟨qaS1, qaFixed, [], [], [lateS0]⟩ :=
+    Reachable.restore _ true keepLocalAll (snapAt1 0 5) 5 qa_read qa_all qaR2_reachable
+  have hhead : IsHeadFeed qaS1 qaFixed.cursor [⟨2, 6, 7, false⟩] := by
+    refine ⟨?_, ?_, List.pairwise_singleton _ _⟩
+    · intro fr hfr
+      simp only [List.mem_singleton] at hfr
+      subst hfr
+      exact ⟨qaS1_2, by decide⟩
+    · intro i row hrow hlt
+      by_cases h2 : i = 2
+      · exact ⟨_, List.mem_singleton_self _, h2.symm⟩
+      · exfalso
+        by_cases h1 : i = 1
+        · subst h1; rw [qaS1_1] at hrow; cases hrow; exact absurd hlt (by decide)
+        · rw [qaS1_other i h1 h2] at hrow; cases hrow
+  obtain ⟨hl, -⟩ := clean_replica_converges_reachable id hinj hrf hcf _ hhead
+  refine ⟨hr, by decide, by decide, by decide, by decide, by decide, by decide, hcu, by decide,
+    hns, hnc, emptyPage_head _ _ ?_, fun H => hns (H _ hr hcu), fun H => hnc (H _ hr), hrf,
+    by decide, hcf, synced_below_of_clean id hinj hrf hcf, hhead, hl, by rw [hl 2]; decide⟩
+  intro i row hrow
+  by_cases h1 : i = 1
+  · subst h1; rw [qaS1_1] at hrow; cases hrow; decide
+  · by_cases h2 : i = 2
+    · subst h2; rw [qaS1_2] at hrow; cases hrow; decide
+    · rw [qaS1_other i h1 h2] at hrow; cases hrow
 
 /-- The other half of the vacuity statement, on reachable states: a
 PATCH `[]` there never has the server row at the sent seq, so the
