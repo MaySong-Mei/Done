@@ -44,8 +44,10 @@ struct WristStrings {
     var eventPageEmpty: String { isChinese ? "在今天页点一个事件" : "Tap an event on Today" }
     /// An open-ended session (a phone timer) has no end to show.
     var running: String { isChinese ? "进行中" : "Running" }
-    /// The end time to VoiceOver, which adjusts it.
+    /// The end time, and the event page's − and +, to VoiceOver.
     var endLabel: String { isChinese ? "结束时间" : "Ends" }
+    var endEarlier: String { isChinese ? "提前结束" : "End earlier" }
+    var endLater: String { isChinese ? "推迟结束" : "End later" }
     /// "10:30": one time of day.
     func clock(_ date: Date) -> String {
         (isChinese ? Self.chineseClock : Self.englishClock).string(from: date)

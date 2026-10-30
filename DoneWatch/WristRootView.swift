@@ -112,9 +112,7 @@ struct WristRootView: View {
                 pendingEventIDs: day.pendingIDs,
                 page: $page,
                 now: now, strings: strings,
-                onSend: { client.editRange($0.occurrence, start: $0.start, end: $0.end) },
-                onExtend: { client.extend($0) },
-                onFinish: { client.finish($0) }
+                onSend: { client.editRange($0.occurrence, start: $0.start, end: $0.end) }
             )
         } else {
             WristEmptyView(strings: strings)

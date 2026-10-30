@@ -120,60 +120,24 @@ final class WristEndCrownTests: XCTestCase {
         XCTAssertEqual(turn(&l, -3), [at(0.25), at(0.25), at(0.25)])
     }
 
-    /// The running session is not ended by the crown — Finish does that —
-    /// but it can be shortened down to the first grid mark at least two
-    /// minutes after now: 21:26 → 21:30, 21:29 → 21:45. The device case:
-    /// 工作 21:15–21:30 at 21:26, turned to 21:45, then back down to 21:30.
-    func testARunningSessionShortensToTheFirstMarkTwoMinutesAhead() {
+    /// The running session is moved like any other event: down to its
+    /// shortest, whatever the time — the phone decides what that means for
+    /// a session. The device case: 工作 21:15–21:30 at 21:26, up to 21:45,
+    /// then back down to 21:30 and no further.
+    func testARunningSessionMovesLikeAnyOtherEvent() {
         var device = endCrown(at(21, 15), at(21, 30), current: true, now: at(21, 26))
         XCTAssertEqual(turn(&device, 1), [at(21, 45)])
-        XCTAssertEqual(device.turn(-1), .moved)
-        XCTAssertEqual(device.target, at(21, 30), "back down: 21:30 is two minutes or more after 21:26")
-        XCTAssertEqual(device.turn(-1), .limit)
+        XCTAssertEqual(turn(&device, -2), [at(21, 30), at(21, 30)])
+        XCTAssertFalse(device.canTurn(-1))
+        XCTAssertTrue(device.canTurn(1))
 
-        var l = endCrown(at(21), at(22), current: true, now: at(21, 26))
-        XCTAssertEqual(turn(&l, -3), [at(21, 45), at(21, 30), at(21, 30)])
-        var late = endCrown(at(21), at(22), current: true, now: at(21, 29))
-        XCTAssertEqual(turn(&late, -2), [at(21, 45), at(21, 45)], "21:30 is under two minutes after 21:29")
-
-        XCTAssertEqual(WristEndCrown.runningFloor(at(21, 26)), at(21, 30))
-        XCTAssertEqual(WristEndCrown.runningFloor(at(21, 28)), at(21, 30))
-        XCTAssertEqual(WristEndCrown.runningFloor(at(21, 28).addingTimeInterval(1)), at(21, 45))
-        XCTAssertEqual(WristEndCrown.runningFloor(at(21, 29)), at(21, 45))
-        XCTAssertEqual(WristEndCrown.runningFloor(at(21, 13)), at(21, 15))
-    }
-
-    /// The page's minute is 10:12 but the send goes later: what is sent
-    /// still ends at least two minutes after the real time, lifted to the
-    /// next mark when it no longer would.
-    func testARunningSessionsSendIsCheckedAgainstTheRealTime() {
-        var l = endCrown(at(10), at(11), current: true, now: at(10, 12))
-        XCTAssertEqual(turn(&l, -3), [at(10.75), at(10.5), at(10.25)])
-        XCTAssertEqual(l.takeUnsent(now: at(10, 12).addingTimeInterval(50)), WristTimeSpan(start: at(10), end: at(10.25)),
-                       "still two minutes ahead: sent as turned")
-        var late = endCrown(at(10), at(11), current: true, now: at(10, 12))
-        _ = turn(&late, -3)
-        // The crown rested only at 10:13:30: 10:15 is under two minutes away.
-        XCTAssertEqual(late.takeUnsent(now: at(10, 13).addingTimeInterval(30)), WristTimeSpan(start: at(10), end: at(10.5)),
-                       "no longer two minutes ahead: lifted to the next mark, never ended")
-        var notRunning = endCrown(at(10), at(11))
-        _ = turn(&notRunning, -2)
-        XCTAssertEqual(notRunning.takeUnsent(now: at(12)), WristTimeSpan(start: at(10), end: at(10.5)), "only a running session")
-    }
-
-    /// A turn down on a running session, waiting for the crown to rest,
-    /// when the minute ticks and the floor passes it: no stop is left below
-    /// the end, so the turn goes back to the end — never up to an extension.
-    func testAKeptShorteningNeverBecomesAnExtension() {
-        var l = endCrown(at(10), at(11), current: true, now: at(10, 30))
-        XCTAssertEqual(l.config.floor, at(10, 45))
-        XCTAssertEqual(turn(&l, -1), [at(10, 45)])
-        guard case .moves(let ticked) = crown(at(10), at(11), current: true, now: at(10, 44)) else { return XCTFail() }
-        XCTAssertEqual(ticked.floor, at(11))
-        l.update(ticked)
-        XCTAssertEqual(l.target, at(11), "back to the end")
-        XCTAssertFalse(l.hasUnsent)
-        XCTAssertNil(l.takeUnsent(now: at(10, 44)), "nothing sent")
+        var long = endCrown(at(21), at(22), current: true, now: at(21, 50))
+        XCTAssertEqual(turn(&long, -4), [at(21, 45), at(21, 30), at(21, 15), at(21, 15)],
+                       "past now, to the shortest the event may be")
+        XCTAssertEqual(long.takeUnsent(), WristTimeSpan(start: at(21), end: at(21, 15)))
+        guard case .moves(let config) = crown(at(21), at(22), current: true, now: at(21, 50)) else { return XCTFail() }
+        XCTAssertEqual(config.floor, at(21, 15))
+        XCTAssertTrue(config.running)
     }
 
     /// A turn later onto a neighbour's edge, the neighbour moves and leaves
@@ -241,21 +205,6 @@ final class WristEndCrownTests: XCTestCase {
         guard case .moves(let short) = crown(at(10), at(11.25)) else { return XCTFail() }
         ahead.update(short)
         XCTAssertEqual(ahead.takeUnsent(), WristTimeSpan(start: at(10), end: at(11.75)))
-    }
-
-    /// At send time the real time has passed the turned end of a running
-    /// session: the first stop the real time allows is above the end, which
-    /// would lengthen what was shortened — nothing is sent.
-    func testTheSendRecheckNeverTurnsAShorteningIntoAnExtension() {
-        var l = endCrown(at(10), at(11), current: true, now: at(10, 30))
-        XCTAssertEqual(turn(&l, -1), [at(10, 45)])
-        XCTAssertNil(l.takeUnsent(now: at(10, 43).addingTimeInterval(30)), "10:45 is under two minutes after 10:43:30; 11:00 is no shortening")
-        XCTAssertEqual(l.target, at(11))
-        XCTAssertFalse(l.hasUnsent)
-        // Still room below the end at the real time: the first stop that is.
-        var room = endCrown(at(10), at(12), current: true, now: at(10, 0))
-        XCTAssertEqual(turn(&room, -6), [at(11.75), at(11.5), at(11.25), at(11), at(10.75), at(10.5)])
-        XCTAssertEqual(room.takeUnsent(now: at(10, 29).addingTimeInterval(30)), WristTimeSpan(start: at(10), end: at(10.75)))
     }
 
     /// The phone answered a send the day never showed (the overlay could
@@ -375,34 +324,6 @@ final class WristEndCrownTests: XCTestCase {
         XCTAssertEqual(turn(&l, 1), [at(12)])
     }
 
-    /// Sent, but the day has not caught up yet when something else changes
-    /// (a minute passed): the preview stays on what was sent.
-    func testASentChangeWaitsForTheDay() {
-        var l = endCrown(at(10), at(10.5), current: true, now: at(10, 2))
-        _ = turn(&l, 2)
-        _ = l.takeUnsent()
-        guard case .moves(let ticked) = crown(at(10), at(10.5), current: true, now: at(10, 16)) else { return XCTFail() }
-        XCTAssertNotEqual(ticked, l.config, "the floor moved on")
-        l.update(ticked)
-        XCTAssertEqual(l.target, at(11))
-    }
-
-    /// A minute passing does not reset a turn of the running session.
-    func testAMinutePassingKeepsATurn() {
-        var l = endCrown(at(10), at(10.5), current: true, now: at(10, 2))
-        _ = turn(&l, 1)
-        guard case .moves(let ticked) = crown(at(10), at(10.5), current: true, now: at(10, 16)) else { return XCTFail() }
-        XCTAssertNotEqual(ticked, l.config, "the floor moved on")
-        l.update(ticked)
-        XCTAssertEqual(l.target, at(10.75))
-        XCTAssertTrue(l.hasUnsent)
-        // Still nothing past the floor once now passes a mark.
-        guard case .moves(let later) = crown(at(10), at(10.5), current: true, now: at(10, 20)) else { return XCTFail() }
-        var idle = endCrown(at(10), at(10.5), current: true, now: at(10, 2))
-        idle.update(later)
-        XCTAssertEqual(idle.turn(-1), .limit)
-    }
-
     /// A kept time the new limits rule out goes to the nearest stop within
     /// them.
     func testAKeptTimeOutsideTheNewLimitsComesInside() {
@@ -506,13 +427,13 @@ final class WristEndCrownSessionTests: XCTestCase {
         XCTAssertEqual(Set(WristEventSubject.neighbourEdges(of: key, in: day)), [at(10.5), at(12), at(8)])
     }
 
-    func testTheRunningSubjectsEndHasAFloorAheadOfNow() {
+    func testTheRunningSubjectIsMovedLikeAnyOther() {
         let work = occurrence(1, 9, 11)
         let day = blocks([work], currentID: work.id)
         let subject = WristEventSubject.resolve(selectedKey: nil, blocks: day, running: work)
         guard case .moves(let config)? = availability(subject, day, now: 10.5) else { return XCTFail() }
         XCTAssertTrue(config.running)
-        XCTAssertEqual(config.floor, at(10.75))
+        XCTAssertEqual(config.floor, at(9.25), "no floor ahead of now: the shortest the event may be")
         XCTAssertEqual(availability(subject, day, takesEdits: false), .refused(.phoneTooOld))
         let repeating = occurrence(4, 13, 14, quick: false)
         let day2 = blocks([repeating])
