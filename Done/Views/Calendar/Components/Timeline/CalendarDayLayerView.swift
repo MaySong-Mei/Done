@@ -557,6 +557,11 @@ final class DayLayerHostView: UIView {
                 text.isWrapped = true
                 text.truncationMode = .end
                 text.alignmentMode = .left
+                // The redraw after a string change lands at the run loop's
+                // commit, outside `render`'s disabled actions, so a subtree
+                // recycled from another block faded its old title into the
+                // new one. (gh#279)
+                text.actions = ["contents": NSNull()]
             }
         }
 
@@ -622,8 +627,10 @@ final class DayLayerHostView: UIView {
     /// scroll stops. Cleared by a drag or the band closing. (gh#279)
     private var bandPiecesDay: Date?
     /// Occurrences the last full render drew in pieces, so the render that
-    /// starts drawing one in pieces can inbetween the split.
+    /// starts drawing one in pieces can dissolve into the split.
     private var bandSplitIDsLastRender: Set<String> = []
+    /// Snapshots of whole blocks fading out over their new pieces.
+    private var bandSplitVeils: [CALayer] = []
 
     /// Blocks whose event was just deleted, detached from `pool` and left in
     /// the layer tree until their delete motion plays (`EventDeletionMotion`).
@@ -1680,13 +1687,16 @@ final class DayLayerHostView: UIView {
                 layers.container.removeAnimation(forKey: "resizeTween.position")
                 layers.container.removeAnimation(forKey: "resizeTween.bounds")
             }
+            for veil in bandSplitVeils {
+                veil.position.y += shift
+            }
         }
         lastRenderedLeadingHours = model.leadingExtendedHours
 
         if !bandPiecesAllowed(model) { bandPiecesDay = nil }
         let piecesActive = bandPiecesAllowed(model)
         var splitIDs = Set<String>()
-        var tweenedSplits = 0
+        var dissolvedSplits = 0
 
         // Horizontal placement comes from `CalendarLayout.overlapLayout`:
         // greedy column packing, with the committed (`.auto`) render allowed
@@ -2108,10 +2118,14 @@ final class DayLayerHostView: UIView {
                 || occurrence.id == synthesizedPreview?.id
             let pieces = blockPieces(of: occurrence, model: model, active: piecesActive)
             if pieces.count > 1 { splitIDs.insert(occurrence.id) }
-            // The split inbetweens only a block already on screen whole.
-            let splitsInView = pieces.count > 1
-                && !bandSplitIDsLastRender.contains(occurrence.id)
-                && pool[occurrence.id] != nil
+            // Only a block already on screen whole dissolves into its pieces.
+            if pieces.count > 1,
+               !bandSplitIDsLastRender.contains(occurrence.id),
+               let wholeLayers = pool[occurrence.id],
+               isWithinViewport(frame, visibleRect: visibleRect) {
+                dissolveIntoPieces(wholeLayers, wholeFrame: frame, zPosition: zPosition)
+                dissolvedSplits += 1
+            }
             for piece in pieces {
                 let pieceFrame = self.frame(
                     of: piece, occurrence: occurrence, whole: frame, model: model,
@@ -2124,40 +2138,24 @@ final class DayLayerHostView: UIView {
                 liveIDs.insert(piece.key)
                 let layers = acquireLayers(for: piece.key)
                 let span = visibleSpan(of: piece, visibleStart: visibleStart, visibleEnd: visibleEnd)
-                func configurePiece(_ pieceFrame: CGRect) {
-                    configure(
-                        layers,
-                        frame: pieceFrame,
-                        occurrence: occurrence,
-                        model: model,
-                        slot: slot,
-                        isEmbeddedChild: isEmbeddedChild,
-                        interrupt: interrupt,
-                        visibleStart: span.start,
-                        visibleEnd: span.end,
-                        stackPeekStripWidth: stackPeekStripWidthPt
-                    )
-                    applyInteractionState(
-                        layers, occurrence: occurrence, frame: pieceFrame, model: model,
-                        hidesTopHandle: piece.hidesTopHandle, hidesBottomHandle: piece.hidesBottomHandle
-                    )
-                }
-                // Both pieces start as the whole block and draw in to their
-                // side of the line; the band piece sits on top, so today's
-                // title slides out from under it.
-                var splitFrom: EventResizeTween.Capture?
-                if splitsInView {
-                    if piece.isBandPiece { configurePiece(frame) }
-                    splitFrom = EventResizeTween.capture(layers.container)
-                }
-                configurePiece(pieceFrame)
+                configure(
+                    layers,
+                    frame: pieceFrame,
+                    occurrence: occurrence,
+                    model: model,
+                    slot: slot,
+                    isEmbeddedChild: isEmbeddedChild,
+                    interrupt: interrupt,
+                    visibleStart: span.start,
+                    visibleEnd: span.end,
+                    stackPeekStripWidth: stackPeekStripWidthPt
+                )
+                applyInteractionState(
+                    layers, occurrence: occurrence, frame: pieceFrame, model: model,
+                    hidesTopHandle: piece.hidesTopHandle, hidesBottomHandle: piece.hidesBottomHandle
+                )
 
-                layers.container.zPosition = zPosition + (piece.isBandPiece ? 0.01 : 0)
-                if let splitFrom,
-                   EventResizeTween.animate(from: splitFrom, root: layers.container, duration: Self.bandPieceSplitDuration),
-                   !piece.isBandPiece {
-                    tweenedSplits += 1
-                }
+                layers.container.zPosition = zPosition
             }
         }
         if splitIDs != bandSplitIDsLastRender {
@@ -2165,7 +2163,7 @@ final class DayLayerHostView: UIView {
                 "split": "\(splitIDs.count)",
                 "newlySplit": "\(splitIDs.subtracting(bandSplitIDsLastRender).count)",
                 "joined": "\(bandSplitIDsLastRender.subtracting(splitIDs).count)",
-                "tweened": "\(tweenedSplits)",
+                "dissolved": "\(dissolvedSplits)",
                 "leading": "\(model.leadingExtendedHours)",
                 "trailing": "\(model.trailingExtendedHours)",
                 "userScrolled": "\(bandPiecesDay == model.date)"
@@ -2830,7 +2828,7 @@ final class DayLayerHostView: UIView {
                             layers, occurrence: live, frame: pieceFrame, model: model,
                             hidesTopHandle: piece.hidesTopHandle, hidesBottomHandle: piece.hidesBottomHandle
                         )
-                        layers.container.zPosition = placement.zPosition + (piece.isBandPiece ? 0.01 : 0)
+                        layers.container.zPosition = placement.zPosition
                     }
                 }
             }
@@ -2883,7 +2881,7 @@ final class DayLayerHostView: UIView {
                             layers, occurrence: live, frame: pieceFrame, model: model,
                             hidesTopHandle: piece.hidesTopHandle, hidesBottomHandle: piece.hidesBottomHandle
                         )
-                        layers.container.zPosition = placement.zPosition + (piece.isBandPiece ? 0.01 : 0)
+                        layers.container.zPosition = placement.zPosition
                     }
                 }
             }
@@ -2936,7 +2934,6 @@ final class DayLayerHostView: UIView {
         let key: String
         /// The stretch of time this piece shows; nil for a block drawn whole.
         let window: ClosedRange<Date>?
-        let isBandPiece: Bool
         /// A piece's edge on the line is not the event's: no handle there.
         var hidesTopHandle = false
         var hidesBottomHandle = false
@@ -2958,7 +2955,7 @@ final class DayLayerHostView: UIView {
         model: Model,
         active: Bool
     ) -> [BlockPiece] {
-        let whole = [BlockPiece(key: occurrence.id, window: nil, isBandPiece: false)]
+        let whole = [BlockPiece(key: occurrence.id, window: nil)]
         // The analyzing spinner's blur view is keyed by occurrence id, one
         // per block.
         guard active, occurrence.event.agenticIntake?.processingPhase != .analyzing else { return whole }
@@ -2977,20 +2974,19 @@ final class DayLayerHostView: UIView {
         var pieces = [BlockPiece(
             key: occurrence.id,
             window: (crossesStart ? dayStart : .distantPast)...(crossesEnd ? dayEnd : .distantFuture),
-            isBandPiece: false,
             hidesTopHandle: crossesStart,
             hidesBottomHandle: crossesEnd
         )]
         if crossesStart {
             pieces.append(BlockPiece(
                 key: occurrence.id + "\u{1F}before", window: Date.distantPast...dayStart,
-                isBandPiece: true, hidesBottomHandle: true
+                hidesBottomHandle: true
             ))
         }
         if crossesEnd {
             pieces.append(BlockPiece(
                 key: occurrence.id + "\u{1F}after", window: dayEnd...Date.distantFuture,
-                isBandPiece: true, hidesTopHandle: true
+                hidesTopHandle: true
             ))
         }
         return pieces
@@ -3019,6 +3015,40 @@ final class DayLayerHostView: UIView {
         else { return }
         bandPiecesDay = model.date
         render(model)
+    }
+
+    /// Lays a snapshot of a block, still drawn whole, over the spot and fades
+    /// it out, so the pieces drawn underneath come through: the seam and the
+    /// lower piece's title appear in place, and nothing slides.
+    private func dissolveIntoPieces(_ layers: EventLayers, wholeFrame: CGRect, zPosition: CGFloat) {
+        guard wholeFrame.width > 0, wholeFrame.height > 0, !calendarReduceMotionEnabled else { return }
+        let savedTransform = layers.container.transform
+        layers.container.transform = CATransform3DIdentity
+        let image = UIGraphicsImageRenderer(size: wholeFrame.size).image { context in
+            layers.container.render(in: context.cgContext)
+        }
+        layers.container.transform = savedTransform
+        let veil = CALayer()
+        veil.contents = image.cgImage
+        veil.contentsScale = image.scale
+        veil.frame = wholeFrame
+        // Over both pieces, under anything stacked on the block.
+        veil.zPosition = zPosition + 0.5
+        layer.addSublayer(veil)
+        bandSplitVeils.append(veil)
+        let duration = Self.bandPieceSplitDuration
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 1
+        fade.toValue = 0
+        fade.duration = duration
+        fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        veil.opacity = 0
+        veil.add(fade, forKey: "bandSplitVeil")
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self, weak veil] in
+            guard let veil else { return }
+            veil.removeFromSuperlayer()
+            self?.bandSplitVeils.removeAll { $0 === veil }
+        }
     }
 
     private func frame(
@@ -3051,6 +3081,9 @@ final class DayLayerHostView: UIView {
         pool.filter { $0.key == occurrenceID || $0.key.hasPrefix(occurrenceID + "\u{1F}") }
             .mapValues(\.container)
     }
+
+    /// TEST-ONLY: whole-block snapshots still fading over new pieces.
+    var debugSplitVeilCount: Int { bandSplitVeils.count }
 
     /// TEST-ONLY: a drawn piece's resize-handle opacities.
     func debugHandleOpacities(ofPiece key: String) -> (top: Float, bottom: Float)? {
@@ -4328,7 +4361,7 @@ final class DayLayerHostView: UIView {
                     layers, occurrence: live, frame: pieceFrame, model: model,
                     hidesTopHandle: piece.hidesTopHandle, hidesBottomHandle: piece.hidesBottomHandle
                 )
-                layers.container.zPosition = placement.zPosition + (piece.isBandPiece ? 0.01 : 0)
+                layers.container.zPosition = placement.zPosition
             }
         }
 

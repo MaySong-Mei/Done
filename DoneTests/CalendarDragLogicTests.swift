@@ -15296,18 +15296,22 @@ final class BoundaryBandPieceTests: XCTestCase {
         XCTAssertEqual(hit.maxY, today.frame.maxY, accuracy: 0.01, "to its end")
     }
 
-    func testAJustDroppedBlockSplitsWhenItsHandlesGoAndGlides() {
+    func testAJustDroppedBlockSplitsWhenItsHandlesGoAndDissolvesInPlace() {
         let crossing = occurrence(-2.25, 4.5)
         let host = makeHost([crossing], leading: band, graceEvent: crossing.event.id)
         XCTAssertEqual(host.debugPieceContainers(of: crossing.id).count, 1, "whole while its handles show")
         let whole = try! XCTUnwrap(host.debugPieceContainers(of: crossing.id)[crossing.id])
+        let wholeZ = whole.zPosition
+        XCTAssertEqual(host.debugSplitVeilCount, 0)
 
         host.apply(makeModel([crossing], leading: band))
         host.layoutIfNeeded()
         let pieces = host.debugPieceContainers(of: crossing.id)
         XCTAssertEqual(pieces.count, 2)
         XCTAssertTrue(pieces[crossing.id] === whole, "today's piece keeps the block's layers")
-        XCTAssertEqual(pieces.values.filter(isTweening).count, 2, "both pieces draw in from the whole block")
+        XCTAssertEqual(host.debugSplitVeilCount, 1, "the whole block fades out over its pieces")
+        XCTAssertFalse(pieces.values.contains(where: isTweening), "nothing slides")
+        XCTAssertEqual(Set(pieces.values.map(\.zPosition)), [wholeZ], "no piece rises over what was stacked on the block")
 
         host.apply(makeModel([crossing], leading: 0))
         host.layoutIfNeeded()
