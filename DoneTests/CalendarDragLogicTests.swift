@@ -15364,6 +15364,22 @@ final class BoundaryBandPieceTests: XCTestCase {
         XCTAssertEqual(host.debugSplitVeilCount, 0)
     }
 
+    func testASplitThatAlsoChangesColumnSpringsOnlySideways() {
+        // A draft beside the block shares its column; once it goes the
+        // block takes the full width and splits on the same render.
+        let crossing = occurrence(-2.25, 4.5)
+        let host = makeHost([crossing], leading: band, creating: true, draftAt: (-1, 1))
+        let whole = try! XCTUnwrap(host.debugPieceContainers(of: crossing.id)[crossing.id])
+        XCTAssertLessThan(whole.frame.width, 300, "control: the draft takes half the column")
+        host.apply(makeModel([crossing], leading: band))
+        host.layoutIfNeeded()
+        let travel = try! XCTUnwrap(
+            host.debugReflowVerticalTravel(ofPiece: crossing.id),
+            "control: the column change springs"
+        )
+        XCTAssertEqual(travel, 0, accuracy: 0.01)
+    }
+
     func testABlockAcrossTodaysEndSplitsThere() {
         let crossing = occurrence(22, 25.5)
         let host = makeHost([crossing], trailing: band)
@@ -15432,12 +15448,13 @@ final class BoundaryBandPieceTests: XCTestCase {
         trailing: Int = 0,
         graceEvent: UUID? = nil,
         hourHeight: CGFloat? = nil,
-        creating: Bool = false
+        creating: Bool = false,
+        draftAt: (Double, Double) = (9, 10)
     ) -> DayLayerHostView {
         let host = DayLayerHostView(frame: CGRect(x: 0, y: 0, width: 360, height: 3200))
         host.apply(makeModel(
             occurrences, leading: leading, trailing: trailing, graceEvent: graceEvent, hourHeight: hourHeight,
-            creating: creating
+            creating: creating, draftAt: draftAt
         ))
         host.layoutIfNeeded()
         return host
@@ -15449,7 +15466,8 @@ final class BoundaryBandPieceTests: XCTestCase {
         trailing: Int = 0,
         graceEvent: UUID? = nil,
         hourHeight: CGFloat? = nil,
-        creating: Bool = false
+        creating: Bool = false,
+        draftAt: (Double, Double) = (9, 10)
     ) -> DayLayerHostView.Model {
         var model = DayLayerHostView.Model(
             date: day,
@@ -15476,7 +15494,7 @@ final class BoundaryBandPieceTests: XCTestCase {
         model.graceResizeEventID = graceEvent
         if creating {
             model.creationPreviewRange = Event.TimeRange(
-                start: day.addingTimeInterval(9 * 3600), end: day.addingTimeInterval(10 * 3600)
+                start: day.addingTimeInterval(draftAt.0 * 3600), end: day.addingTimeInterval(draftAt.1 * 3600)
             )
         }
         return model

@@ -2155,6 +2155,15 @@ final class DayLayerHostView: UIView {
                 liveIDs.insert(piece.key)
                 let layers = acquireLayers(for: piece.key)
                 let span = visibleSpan(of: piece, visibleStart: visibleStart, visibleEnd: visibleEnd)
+                // Splitting or joining changes the block's height on this
+                // render. When its column changes on the same render, as a
+                // drop beside it does, the reflow spring would carry it from
+                // the whole block's middle and park today's piece behind the
+                // band piece until it settles; keep that spring sideways.
+                if (pieces.count > 1) != bandSplitIDsLastRender.contains(occurrence.id) {
+                    layers.lastBlockY = pieceFrame.minY
+                    layers.lastBlockH = pieceFrame.height
+                }
                 configure(
                     layers,
                     frame: pieceFrame,
@@ -3149,6 +3158,14 @@ final class DayLayerHostView: UIView {
         pool.values.reduce(0) { count, layers in
             count + (layers.container.sublayers?.filter { $0.name == Self.bandSplitVeilName }.count ?? 0)
         }
+    }
+
+    /// TEST-ONLY: the vertical travel of a piece's running reflow spring.
+    func debugReflowVerticalTravel(ofPiece key: String) -> CGFloat? {
+        guard let spring = pool[key]?.container.animation(forKey: "s5.reflow.position") as? CABasicAnimation,
+              let from = (spring.fromValue as? NSValue)?.cgPointValue,
+              let to = (spring.toValue as? NSValue)?.cgPointValue else { return nil }
+        return abs(to.y - from.y)
     }
 
     /// TEST-ONLY: a drawn piece's resize-handle opacities.
