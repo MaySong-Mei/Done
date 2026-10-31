@@ -15410,6 +15410,17 @@ final class BoundaryBandPieceTests: XCTestCase {
         XCTAssertEqual(host.debugMaxRenderDepth, 1)
     }
 
+    func testABandPiecesEdgeFadesWithTheBand() {
+        // The fade keeps a strip of the band beside the line opaque; the
+        // band piece's border must lie outside it.
+        let crossing = occurrence(-2.25, 4.5)
+        let host = makeHost([crossing], leading: band)
+        let bandPiece = try! XCTUnwrap(host.debugPieceContainers(of: crossing.id).first { $0.key != crossing.id }?.value)
+        let lineY = 16 + CGFloat(band) * hourHeight
+        XCTAssertLessThanOrEqual(bandPiece.frame.maxY, lineY - calendarBandFadeSeamOverhang)
+        XCTAssertGreaterThan(calendarBandFadeSeamOverhang, 0, "control: the midnight line still gets its strip")
+    }
+
     func testABlockAcrossTodaysEndSplitsThere() {
         let crossing = occurrence(22, 25.5)
         let host = makeHost([crossing], trailing: band)

@@ -86,6 +86,13 @@ private enum CalendarDebugTrace {
     }
 }
 
+/// How far the opaque day reaches into a fading band, so the midnight line
+/// stays solid. It has to stop short of a block's edge beside the line: a
+/// block split there ends its band piece just inside the band, and a wider
+/// overhang kept that piece's border on screen after the band had faded.
+/// (gh#279)
+let calendarBandFadeSeamOverhang: CGFloat = 1
+
 func calendarDebugLog(
     _ event: String,
     fields: @autoclosure () -> [String: String] = [:]
@@ -2975,8 +2982,8 @@ struct TimelinePagerView: View {
     /// opaque, the extension band(s) at `1 - extensionFadeProgress`. The
     /// day-boundary hour line sits exactly on the band↔base seam and mask
     /// anti-aliasing would sample the 1pt line at ~50% alpha — so the base
-    /// segment overhangs 2pt into each band side to keep the midnight line
-    /// fully opaque while the band fades.
+    /// segment overhangs `calendarBandFadeSeamOverhang` into each band side
+    /// to keep the midnight line fully opaque while the band fades.
     @ViewBuilder
     private func extensionFadeMask() -> some View {
         // Spec 07: in the 48h-constant model the band content is ALWAYS present
@@ -2986,7 +2993,7 @@ struct TimelinePagerView: View {
         // the non-imperative path this == `boundaryExtensionHours`, unchanged.
         let leading = renderBoundaryExtensionHours.leading
         let trailing = renderBoundaryExtensionHours.trailing
-        let boundaryBuffer: CGFloat = 2
+        let boundaryBuffer = calendarBandFadeSeamOverhang
         let leadingBuf: CGFloat = leading > 0 ? boundaryBuffer : 0
         let trailingBuf: CGFloat = trailing > 0 ? boundaryBuffer : 0
         VStack(spacing: 0) {
