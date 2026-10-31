@@ -9,7 +9,8 @@
 //
 //  These tests use only API that predates the fix, so the file also runs on
 //  king 9121ba12, where the tests that pin the rule fail (the positive
-//  control) and the ones marked "same on both" pass.
+//  control) and the ones marked "same on both" pass. The refused-tombstone
+//  test pins 1703a124's heal; it fails only on e4cbac6d.
 //
 //  The deletes here are made the ways the app makes them: the store's own
 //  delete calls, the todo merge / smart split with the undo hold that
@@ -304,38 +305,57 @@ final class SyncRestoreKeepLocalDeletesQATests: SyncRestoreAndSwitchTestCase {
                       "the tombstone of a row the peer deleted was refused")
     }
 
-    // MARK: - A refused tombstone (characterization)
+    // MARK: - A refused tombstone heals
 
-    /// The server refuses X's tombstone (a 4xx; the engine does not resend a
-    /// refused tombstone while the row is still absent). On king a merge
-    /// restore brought X back, which also cleared the refusal, so device and
-    /// cloud agreed again. With the fix the merge keeps X deleted: the device
-    /// shows no X, the cloud keeps it live, and nothing is sent — the review
-    /// line's "the deletion still syncs to the cloud" does not hold for this
-    /// row. Pinned so a change to it is seen.
-    func testCharacterization_aRefusedTombstoneStaysDeletedHereAndIsNotResent() async throws {
-        let x = makeEvent("X")
+    /// The server refuses X's tombstone (a 4xx with a constraint code; the
+    /// engine never re-sends a refused tombstone while the row is absent).
+    /// On e4cbac6d the merge kept X deleted, so the device lacked X while the
+    /// cloud kept it for good. Now (1703a124) the merge brings X back, clean
+    /// at the cloud's version; the next flush drops the refusal record and
+    /// sends nothing for X; and X is an ordinary row again — an edit of it
+    /// goes up. Device and cloud agree. Same on king, where the merge
+    /// brought every pending delete back; only e4cbac6d fails it.
+    func testARefusedTombstoneComesBackOnMerge_andDeviceAndCloudAgree() async throws {
+        let x = makeEvent("X", note: "v1")
         try await seedAndPull([x])
+        let xKey = SyncBaselineKey(table: "calendar_events", id: x.id.uuidString)
         server.reject(table: "events", key: x.id.uuidString, status: 400, code: "23514")
         store.deleteCalendarEvent(try XCTUnwrap(local(x.id)), unlinkAssets: false)
         scheduler.advance(by: debounce)
-        try await syncEventually("the tombstone was refused") {
-            DiagnosticTrail.combinedText().contains("sync.push.rejected table=calendar_events id=\(x.id.uuidString)")
+        try await syncEventually("fixture: the tombstone was refused") {
+            self.service.rejected.refuses(xKey, hash: SyncRejectedSet.deletedHash)
         }
         try await settle()
+        XCTAssertFalse(server.isTombstoned(table: "events", key: x.id.uuidString), "fixture: the cloud keeps X")
         let y = makeEvent("Y, only on the cloud")
         server.seed(table: "events", rows: [row(y)])
+
         await merge(coordinator())
-        XCTAssertNil(local(x.id), "the merge brought back X (king's behaviour)")
+        XCTAssertNotNil(local(x.id), "the merge left deleted a row whose delete the server refused")
+        XCTAssertEqual(entry(x)?.seq, server.seq(table: "events", key: x.id.uuidString), "X is not recorded at the cloud's version")
+        XCTAssertEqual(local(x.id).map(hash), entry(x)?.hash, "X came back dirty, so it would be re-sent")
         let before = server.requests.count
+
         scheduler.advance(by: debounce)
         try await settle()
         await puller.pullToHead()
         scheduler.advance(by: debounce)
         try await settle()
-        XCTAssertEqual(writes(after: before).filter { names($0, x.id) }.count, 0, "a refused tombstone was resent")
-        XCTAssertFalse(server.isTombstoned(table: "events", key: x.id.uuidString), "fixture: the cloud keeps X")
-        XCTAssertNil(local(x.id), "device and cloud now disagree about X")
+        XCTAssertFalse(service.rejected.refuses(xKey, hash: SyncRejectedSet.deletedHash),
+                       "the refusal outlived X's return, so a later delete of X would never be sent")
+        XCTAssertEqual(writes(after: before).filter { names($0, x.id) }.count, 0, "X was sent after it came back")
+        XCTAssertFalse(server.isTombstoned(table: "events", key: x.id.uuidString))
+        XCTAssertNotNil(local(x.id), "device and cloud disagree about X")
+
+        // An ordinary row again: an edit goes up (the server refuses only the delete).
+        server.clearRejection(table: "events", key: x.id.uuidString)
+        var edited = try XCTUnwrap(local(x.id))
+        edited.note = "edited after the heal"
+        store.updateCalendarEvent(edited)
+        scheduler.advance(by: debounce)
+        try await syncEventually("X's edit reached the cloud") {
+            (self.onServer(x)?["note"] as? String) == "edited after the heal"
+        }
     }
 
     // MARK: - Event types

@@ -170,6 +170,36 @@ final class SyncRestoreKeepLocalDeletesPreviewQATests: SyncRestoreKeepLocalDelet
         XCTAssertEqual(keptDeletedInTrail(), 1)
     }
 
+    /// A delete the server refused is not a pending delete any more
+    /// (1703a124): the review offers the row back as an add, does not count
+    /// it as kept deleted, and the apply's trail agrees. A real pending
+    /// delete beside it (Z) is still counted.
+    func testARefusedDeleteIsOfferedBackAsAnAdd_notCountedAsKeptDeleted() async throws {
+        let x = makeEvent("X, its delete refused"), z = makeEvent("Z, deleted here")
+        server.seed(table: "events", rows: [row(x), row(z)])
+        await puller.pullToHead()
+        server.reject(table: "events", key: x.id.uuidString, status: 400, code: "23514")
+        store.deleteCalendarEvent(try XCTUnwrap(local(x.id)), unlinkAssets: false)
+        scheduler.advance(by: debounce)
+        try await syncEventually("fixture: the tombstone was refused") {
+            self.service.rejected.refuses(SyncBaselineKey(table: "calendar_events", id: x.id.uuidString),
+                                          hash: SyncRejectedSet.deletedHash)
+        }
+        try await settle()
+        store.deleteCalendarEvent(try XCTUnwrap(local(z.id)), unlinkAssets: false)
+        let c = coordinator()
+        await c.startFetch()
+        await c.prepareMerge()
+        guard case .mergeReview(_, let p) = c.phase else { return XCTFail("not reviewed: \(c.phase)") }
+        XCTAssertEqual(p.addsFromCloud.calendarEvents, 1, "the refused row is not offered back")
+        XCTAssertEqual(p.keptDeleted.calendarEvents, 1, "only Z is kept deleted")
+        DiagnosticTrail.clear()
+        await c.applyMerge(resolution: .keepLocal)
+        XCTAssertEqual(keptDeletedInTrail(), 1)
+        XCTAssertNotNil(local(x.id))
+        XCTAssertNil(local(z.id))
+    }
+
     /// A pending delete the cloud no longer holds is not counted (there is
     /// nothing to leave out), and alone it leaves the merge a silent no-op.
     func testAPendingDeleteTheCloudNoLongerHoldsIsNotCounted() async throws {
