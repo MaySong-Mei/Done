@@ -15364,20 +15364,26 @@ final class BoundaryBandPieceTests: XCTestCase {
         XCTAssertEqual(host.debugSplitVeilCount, 0)
     }
 
-    func testASplitThatAlsoChangesColumnSpringsOnlySideways() {
+    func testASplitWaitsForAColumnChangeToSettle() {
         // A draft beside the block shares its column; once it goes the
-        // block takes the full width and splits on the same render.
+        // block glides to the full width, and splits when it gets there.
         let crossing = occurrence(-2.25, 4.5)
         let host = makeHost([crossing], leading: band, creating: true, draftAt: (-1, 1))
         let whole = try! XCTUnwrap(host.debugPieceContainers(of: crossing.id)[crossing.id])
         XCTAssertLessThan(whole.frame.width, 300, "control: the draft takes half the column")
+
         host.apply(makeModel([crossing], leading: band))
         host.layoutIfNeeded()
+        XCTAssertEqual(host.debugPieceContainers(of: crossing.id).count, 1, "whole while it glides")
         let travel = try! XCTUnwrap(
             host.debugReflowVerticalTravel(ofPiece: crossing.id),
-            "control: the column change springs"
+            "control: the column change glides"
         )
-        XCTAssertEqual(travel, 0, accuracy: 0.01)
+        XCTAssertEqual(travel, 0, accuracy: 0.01, "sideways only")
+
+        host.debugSettleReflowAndRender()
+        XCTAssertEqual(host.debugPieceContainers(of: crossing.id).count, 2)
+        XCTAssertEqual(host.debugSplitVeilCount, 2, "split from a settled block, so it fades")
     }
 
     func testABlockAcrossTodaysEndSplitsThere() {

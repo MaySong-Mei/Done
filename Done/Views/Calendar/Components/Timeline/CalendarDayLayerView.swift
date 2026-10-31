@@ -636,7 +636,15 @@ final class DayLayerHostView: UIView {
     /// splits on the render a drop lands in was last drawn mid-drag (another
     /// column, dimmed), so there is no settled whole block to fade from.
     private var bandPiecesAllowedLastRender = false
+    /// Blocks kept whole on the last full render because their column was
+    /// still moving; scroll culls and zoom repaints keep them whole too.
+    private var bandSplitDeferredIDs: Set<String> = []
+    private var bandSplitRetry: DispatchWorkItem?
     private static let bandSplitVeilName = "bandSplitVeil"
+    /// About as long as the column glide (`applyInteractionState`'s reflow
+    /// spring) takes to settle.
+    private static let bandSplitRetryDelay: TimeInterval =
+        calendarCASpring(keyPath: "position", response: 0.25, dampingFraction: 0.85).settlingDuration + 0.05
 
     /// Blocks whose event was just deleted, detached from `pool` and left in
     /// the layer tree until their delete motion plays (`EventDeletionMotion`).
@@ -1701,6 +1709,7 @@ final class DayLayerHostView: UIView {
         let piecesActive = bandPiecesAllowed(model)
         let settledBefore = bandPiecesAllowedLastRender
         bandPiecesAllowedLastRender = piecesActive
+        bandSplitDeferredIDs = []
         var splitIDs = Set<String>()
         var dissolvedSplits = 0
 
@@ -2122,7 +2131,20 @@ final class DayLayerHostView: UIView {
             // per-frame configure cost ∝ visible-N, not total-N.
             let mustKeep = occurrence.id == manipulatedID
                 || occurrence.id == synthesizedPreview?.id
-            let pieces = blockPieces(of: occurrence, model: model, active: piecesActive)
+            var pieces = blockPieces(of: occurrence, model: model, active: piecesActive)
+            // A block on its way to another column splits once it gets
+            // there. Split mid-glide, today's piece would ride the glide set
+            // up for the whole block, behind the band piece, and the new band
+            // piece wouldn't glide with it.
+            if pieces.count > 1,
+               !bandSplitIDsLastRender.contains(occurrence.id),
+               let current = pool[occurrence.id],
+               current.container.animation(forKey: "s5.reflow.position") != nil
+                || (current.lastBlockX.isFinite
+                    && (abs(current.lastBlockX - frame.minX) > 0.5 || abs(current.lastBlockW - frame.width) > 0.5)) {
+                pieces = [BlockPiece(key: occurrence.id, window: nil)]
+                bandSplitDeferredIDs.insert(occurrence.id)
+            }
             if pieces.count > 1 { splitIDs.insert(occurrence.id) }
             // Only a block already on screen whole dissolves into its pieces.
             var splitSnapshot: CGImage?
@@ -2190,8 +2212,19 @@ final class DayLayerHostView: UIView {
                 }
             }
         }
-        if splitIDs != bandSplitIDsLastRender {
+        if !bandSplitDeferredIDs.isEmpty, bandSplitRetry == nil {
+            let retry = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.bandSplitRetry = nil
+                guard let model = self.currentModel else { return }
+                self.render(model)
+            }
+            bandSplitRetry = retry
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.bandSplitRetryDelay, execute: retry)
+        }
+        if splitIDs != bandSplitIDsLastRender || !bandSplitDeferredIDs.isEmpty {
             calendarDebugLog("band.pieces", fields: [
+                "deferred": "\(bandSplitDeferredIDs.count)",
                 "split": "\(splitIDs.count)",
                 "newlySplit": "\(splitIDs.subtracting(bandSplitIDsLastRender).count)",
                 "joined": "\(bandSplitIDsLastRender.subtracting(splitIDs).count)",
@@ -2991,6 +3024,7 @@ final class DayLayerHostView: UIView {
         // The analyzing spinner's blur view is keyed by occurrence id, one
         // per block.
         guard active, occurrence.event.agenticIntake?.processingPhase != .analyzing else { return whole }
+        guard !bandSplitDeferredIDs.contains(occurrence.id) else { return whole }
         let event = occurrence.event
         let showsHandles = (model.focusedEventID == event.id
             && (model.focusedOccurrenceID == nil || model.focusedOccurrenceID == occurrence.id))
@@ -3158,6 +3192,17 @@ final class DayLayerHostView: UIView {
         pool.values.reduce(0) { count, layers in
             count + (layers.container.sublayers?.filter { $0.name == Self.bandSplitVeilName }.count ?? 0)
         }
+    }
+
+    /// TEST-ONLY: settle every column glide and render again, as the retry
+    /// after one would.
+    func debugSettleReflowAndRender() {
+        for layers in pool.values {
+            layers.container.removeAnimation(forKey: "s5.reflow.position")
+            layers.container.removeAnimation(forKey: "s5.reflow.bounds")
+        }
+        guard let model = currentModel else { return }
+        render(model)
     }
 
     /// TEST-ONLY: the vertical travel of a piece's running reflow spring.
