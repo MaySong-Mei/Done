@@ -1771,7 +1771,8 @@ struct TimelinePagerView: View {
             dragOffset: dragState.dragOffset,
             dragMode: dragState.dragMode,
             dayColumnStep: dragState.dayColumnStep,
-            hourHeight: hourHeight
+            hourHeight: hourHeight,
+            renderDayStart: dragState.draggingRenderDayStart
         )
     }
 
@@ -3214,7 +3215,8 @@ private struct TimelineAxisDragOverlay: View {
             dragOffset: dragState.dragOffset,
             dragMode: dragState.dragMode,
             dayColumnStep: dragState.dayColumnStep,
-            hourHeight: hourHeight
+            hourHeight: hourHeight,
+            renderDayStart: dragState.draggingRenderDayStart
         )
     }
 

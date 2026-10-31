@@ -4521,6 +4521,48 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    func testDraggingAnEventFromTheDayBeforeInTodaysColumnOpensTodaysBandAbove() {
+        // 22:00 the day before to 1:45, picked up in today's column: the
+        // band above today has to open, not the one below. (gh#279)
+        let calendar = Calendar(identifier: .gregorian)
+        let today = calendar.date(from: DateComponents(year: 2026, month: 10, day: 31))!
+        let range = Event.TimeRange(
+            start: today.addingTimeInterval(-2 * 3600),
+            end: today.addingTimeInterval(1.75 * 3600)
+        )
+        func bands(renderDay: Date?) -> (leading: Int, trailing: Int) {
+            let mapping = calendarResolvedDragEditMapping(
+                draggingEventID: UUID(),
+                draggingOriginalRange: range,
+                dragOffset: DragOffset(x: 0, y: -10),
+                dragMode: .move,
+                dayColumnStep: 0,
+                hourHeight: 56,
+                renderDayStart: renderDay,
+                calendar: calendar
+            )!
+            return calendarTimelineBoundaryExtensionHours(
+                mappingState: TimelineEditMappingState(source: mapping.source, anchorDate: mapping.date, range: mapping.range),
+                calendar: calendar
+            )
+        }
+        let inToday = bands(renderDay: today)
+        XCTAssertGreaterThan(inToday.leading, 0)
+        XCTAssertEqual(inToday.trailing, 0)
+        let byStartDay = bands(renderDay: nil)
+        XCTAssertEqual(byStartDay.leading, 0, "control: anchored on the start day it read as crossing that day's end")
+        XCTAssertGreaterThan(byStartDay.trailing, 0)
+
+        let resizeAnchor = calendarResolvedDragAnchorDate(
+            draggingOriginalRange: range,
+            dragOffset: DragOffset(x: 0, y: -10),
+            dragMode: .resizeTop,
+            renderDayStart: today,
+            calendar: calendar
+        )
+        XCTAssertEqual(resizeAnchor, today)
+    }
+
     func testResolvedDragAnchorDateFollowsHorizontalDayMoveWithoutUsingPreviewStart() {
         let calendar = Calendar(identifier: .gregorian)
         let originalRange = Event.TimeRange(
