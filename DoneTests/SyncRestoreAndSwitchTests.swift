@@ -32,6 +32,10 @@ import QuartzCore
 /// `AuthService` holding an injected session whose refresh the transport
 /// answers with a new token (a refresh re-runs the session sink). `gateway`
 /// replaces the server's own connection (a router between two accounts).
+/// `relaunching` opens the suite and storage of an earlier device instead
+/// of fresh ones — the same phone after a relaunch, its files and baseline
+/// as that device left them; `catalog` is the event-type catalog the new
+/// type store reads (one staged unreadable, say).
 @MainActor
 final class SyncSwitchTestDevice {
     let defaults: UserDefaults
@@ -43,16 +47,18 @@ final class SyncSwitchTestDevice {
     let service: SupabaseSyncService
     let puller: SyncPuller
     let auth: AuthService
-    private let suite: String
+    let suite: String
     private let prefsDirectory: URL
     private let shelfDirectory: URL
 
-    init(server: SyncFakeServer, gateway: SyncGateway? = nil, uid: String, start: Date, switchOnAtAttach: Bool) {
-        suite = "SyncRestoreAndSwitchTests-\(UUID().uuidString)"
-        let location = TestStorage.reset(suite)
+    init(server: SyncFakeServer, gateway: SyncGateway? = nil, uid: String, start: Date, switchOnAtAttach: Bool,
+         relaunching earlier: SyncSwitchTestDevice? = nil, catalog: EventTypeCatalog? = nil) {
+        suite = earlier?.suite ?? "SyncRestoreAndSwitchTests-\(UUID().uuidString)"
+        let location = earlier == nil ? TestStorage.reset(suite) : EventStorageLocation.isolated(name: suite)
         defaults = UserDefaults(suiteName: suite)!
         scheduler = SyncManualScheduler(start: start)
         store = EventStore(defaults: defaults, storage: location, seedsSampleDataIfEmpty: false)
+        if let catalog { EventTypeCatalog.register(catalog, for: defaults) }
         types = EventTypeTemplateStore(defaults: defaults)
         skills = SkillInsightStore(defaults: defaults)
         let scratch = FileManager.default.temporaryDirectory
