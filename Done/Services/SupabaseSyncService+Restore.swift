@@ -381,50 +381,77 @@ extension SupabaseSyncService {
 
     // MARK: Pending local deletes
 
-    /// The rows of `snapshot` whose id this device deleted without the
-    /// delete reaching the cloud. Such a delete is an id the baseline holds
-    /// that the local table no longer does — whatever kept it from going up
-    /// (uploads off, signed out, the undo window, a debounce not yet fired,
-    /// a tombstone whose answer never came) — and it is exactly what the
-    /// next flush tombstones (`pushTable`'s `deletedIds`) and what
-    /// `unsyncedChanges` counts. A merge restore leaves these rows out
-    /// (`EventStore.applyRestore`, `EventTypeTemplateStore.applyRestore`,
-    /// `SkillInsightStore.applyRestore`), and the replay keeps their
-    /// entries (`replayBaseline`), so the delete stays and is still sent.
+    /// The deletes this device made that have not reached the cloud: ids the
+    /// baseline holds that the local table no longer does — whatever kept
+    /// them from going up (uploads off, signed out, the undo window, a
+    /// debounce not yet fired, a tombstone whose answer never came). They
+    /// are the ids the flush tombstones (`pushTable`), including those an
+    /// undo window still holds back. A merge restore leaves the snapshot's
+    /// rows with these ids out (`EventStore.applyRestore`,
+    /// `EventTypeTemplateStore.applyRestore`, `SkillInsightStore.applyRestore`)
+    /// and the replay keeps their entries, so the delete stays and is still
+    /// sent.
+    ///
+    /// Absences that are not deletes are left out, so the merge restores
+    /// those rows as it always did:
+    /// - a frozen table (`EventStore.isSlotFrozen`,
+    ///   `EventTypeTemplateStore.areTemplatesFrozen`) is empty or stale in
+    ///   memory because its file could not be read, not because the user
+    ///   deleted anything — the flush does not mirror it either
+    ///   (`exportSuppressed`). Read before the restore unfreezes anything.
+    /// - a delete the server refused is never re-sent (`rejected`); the
+    ///   merge bringing the row back is how it heals.
     ///
     /// Reads the baseline and the stores as they are now. The apply reads
     /// it in the main-actor turn that runs the merge and the replay, so the
-    /// three see one state.
+    /// set, the merge and the replay see one state.
     func pendingDeletes(in snapshot: RestoreSnapshot, eventStore: EventStore,
                         eventTypeStore: EventTypeTemplateStore, skillStore: SkillInsightStore) -> RestorePendingDeletes {
         var out = RestorePendingDeletes()
-        out.todoEvents = pendingDeleteIds(table: "events", local: eventStore.events,
-                                          cloud: snapshot.todoEvents, wireId: { $0.id.uuidString }, id: \.id)
-        out.calendarEvents = pendingDeleteIds(table: "calendar_events", local: eventStore.rawCalendarEvents,
-                                              cloud: snapshot.calendarEvents, wireId: { $0.id.uuidString }, id: \.id)
-        out.logs = pendingDeleteIds(table: "event_logs", local: eventStore.calendarEventLogRecords,
-                                    cloud: snapshot.logs, wireId: { self.encodeOccurrenceKey($0.id) }, id: \.id)
-        out.feedback = pendingDeleteIds(table: "event_feedback", local: eventStore.calendarEventFeedbackRecords,
-                                        cloud: snapshot.feedback, wireId: { self.encodeOccurrenceKey($0.id) }, id: \.id)
-        out.todoLists = pendingDeleteIds(table: "todo_lists", local: eventStore.todoLists,
-                                         cloud: snapshot.todoLists, wireId: { $0.id.uuidString }, id: \.id)
-        out.eventTypes = pendingDeleteIds(table: "event_types", local: eventTypeStore.templates,
-                                          cloud: snapshot.eventTypes, wireId: { $0.id.uuidString }, id: \.id)
-        out.skills = pendingDeleteIds(table: "skill_insights", local: skillStore.insights,
-                                      cloud: snapshot.skills, wireId: { $0.id.uuidString }, id: \.id)
+        out.todoEvents = pendingDeleteIds(table: "events", frozen: eventStore.isSlotFrozen(.events),
+                                          local: eventStore.events, cloud: snapshot.todoEvents,
+                                          wireId: { $0.id.uuidString }, id: \.id, into: &out.baselineIds)
+        out.calendarEvents = pendingDeleteIds(table: "calendar_events", frozen: eventStore.isSlotFrozen(.calendarEvents),
+                                              local: eventStore.rawCalendarEvents, cloud: snapshot.calendarEvents,
+                                              wireId: { $0.id.uuidString }, id: \.id, into: &out.baselineIds)
+        out.logs = pendingDeleteIds(table: "event_logs", frozen: eventStore.isSlotFrozen(.calendarEventLogRecords),
+                                    local: eventStore.calendarEventLogRecords, cloud: snapshot.logs,
+                                    wireId: { self.encodeOccurrenceKey($0.id) }, id: \.id, into: &out.baselineIds)
+        out.feedback = pendingDeleteIds(table: "event_feedback", frozen: eventStore.isSlotFrozen(.calendarEventFeedbackRecords),
+                                        local: eventStore.calendarEventFeedbackRecords, cloud: snapshot.feedback,
+                                        wireId: { self.encodeOccurrenceKey($0.id) }, id: \.id, into: &out.baselineIds)
+        out.todoLists = pendingDeleteIds(table: "todo_lists", frozen: eventStore.isSlotFrozen(.todoLists),
+                                         local: eventStore.todoLists, cloud: snapshot.todoLists,
+                                         wireId: { $0.id.uuidString }, id: \.id, into: &out.baselineIds)
+        out.eventTypes = pendingDeleteIds(table: "event_types", frozen: eventTypeStore.areTemplatesFrozen,
+                                          local: eventTypeStore.templates, cloud: snapshot.eventTypes,
+                                          wireId: { $0.id.uuidString }, id: \.id, into: &out.baselineIds)
+        // The skills store has no unreadable state to consult: a blob that
+        // does not decode loads as no skills, the same as "Clear skill
+        // insights".
+        out.skills = pendingDeleteIds(table: "skill_insights", frozen: false,
+                                      local: skillStore.insights, cloud: snapshot.skills,
+                                      wireId: { $0.id.uuidString }, id: \.id, into: &out.baselineIds)
         return out
     }
 
-    /// One table of `pendingDeletes`: the cloud rows whose id, spelled as
-    /// the row projection spells it (`wireId`, the baseline's key), is in
-    /// the baseline and not among the local rows.
-    private func pendingDeleteIds<Row, ID: Hashable>(table: String, local: [Row], cloud: [Row],
-                                                     wireId: (Row) -> String, id: KeyPath<Row, ID>) -> Set<ID> {
+    /// One table of `pendingDeletes`: the pending deletes as the baseline
+    /// keys them go into `baselineIds[table]`; the snapshot rows with one of
+    /// those ids (spelled by `wireId`, as the row projection spells it) are
+    /// returned.
+    private func pendingDeleteIds<Row, ID: Hashable>(table: String, frozen: Bool, local: [Row], cloud: [Row],
+                                                     wireId: (Row) -> String, id: KeyPath<Row, ID>,
+                                                     into baselineIds: inout [String: Set<String>]) -> Set<ID> {
+        guard !frozen else { return [] }
         let entries = baseline.entries(table: table)
-        guard !entries.isEmpty, !cloud.isEmpty else { return [] }
+        guard !entries.isEmpty else { return [] }
         var deleted = Set(entries.keys)
         for row in local { deleted.remove(wireId(row)) }
+        deleted = deleted.filter {
+            !rejected.refuses(SyncBaselineKey(table: table, id: $0), hash: SyncRejectedSet.deletedHash)
+        }
         guard !deleted.isEmpty else { return [] }
+        baselineIds[table] = deleted
         var out = Set<ID>()
         for row in cloud where deleted.contains(wireId(row)) { out.insert(row[keyPath: id]) }
         return out
