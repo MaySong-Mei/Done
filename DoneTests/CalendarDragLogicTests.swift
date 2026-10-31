@@ -15309,7 +15309,7 @@ final class BoundaryBandPieceTests: XCTestCase {
         let pieces = host.debugPieceContainers(of: crossing.id)
         XCTAssertEqual(pieces.count, 2)
         XCTAssertTrue(pieces[crossing.id] === whole, "today's piece keeps the block's layers")
-        XCTAssertEqual(host.debugSplitVeilCount, 1, "the whole block fades out over its pieces")
+        XCTAssertEqual(host.debugSplitVeilCount, 2, "the whole block fades out over its pieces, a share in each")
         XCTAssertFalse(pieces.values.contains(where: isTweening), "nothing slides")
         XCTAssertEqual(Set(pieces.values.map(\.zPosition)), [wholeZ], "no piece rises over what was stacked on the block")
 
@@ -15333,6 +15333,23 @@ final class BoundaryBandPieceTests: XCTestCase {
         XCTAssertGreaterThan(today.bottom, 0, "control: the event's own end keeps its handle")
         XCTAssertEqual(bandPiece.bottom, 0)
         XCTAssertGreaterThan(bandPiece.top, 0, "control: the event's own start keeps its handle")
+    }
+
+    func testAShortBlockWhoseTextRunsPastTheLineSplitsWithoutTheFade() {
+        // Title and time stacked in a block an hour each side of 0:00 at a
+        // small zoom run past the line, where the fading copy would print
+        // over today's title.
+        let crossing = occurrence(-1, 1)
+        let small = makeHost([crossing], leading: band, graceEvent: crossing.event.id, hourHeight: 24)
+        small.apply(makeModel([crossing], leading: band, hourHeight: 24))
+        small.layoutIfNeeded()
+        XCTAssertEqual(small.debugPieceContainers(of: crossing.id).count, 2)
+        XCTAssertEqual(small.debugSplitVeilCount, 0)
+
+        let tall = makeHost([crossing], leading: band, graceEvent: crossing.event.id)
+        tall.apply(makeModel([crossing], leading: band))
+        tall.layoutIfNeeded()
+        XCTAssertEqual(tall.debugSplitVeilCount, 2, "control: with room above the line it fades")
     }
 
     func testABlockAcrossTodaysEndSplitsThere() {
@@ -15401,10 +15418,13 @@ final class BoundaryBandPieceTests: XCTestCase {
         _ occurrences: [CalendarLayout.EventOccurrence],
         leading: Int = 0,
         trailing: Int = 0,
-        graceEvent: UUID? = nil
+        graceEvent: UUID? = nil,
+        hourHeight: CGFloat? = nil
     ) -> DayLayerHostView {
         let host = DayLayerHostView(frame: CGRect(x: 0, y: 0, width: 360, height: 3200))
-        host.apply(makeModel(occurrences, leading: leading, trailing: trailing, graceEvent: graceEvent))
+        host.apply(makeModel(
+            occurrences, leading: leading, trailing: trailing, graceEvent: graceEvent, hourHeight: hourHeight
+        ))
         host.layoutIfNeeded()
         return host
     }
@@ -15413,14 +15433,15 @@ final class BoundaryBandPieceTests: XCTestCase {
         _ occurrences: [CalendarLayout.EventOccurrence],
         leading: Int = 0,
         trailing: Int = 0,
-        graceEvent: UUID? = nil
+        graceEvent: UUID? = nil,
+        hourHeight: CGFloat? = nil
     ) -> DayLayerHostView.Model {
         var model = DayLayerHostView.Model(
             date: day,
             occurrences: occurrences,
             contentWidth: 360,
             headerHeight: 16,
-            hourHeight: hourHeight,
+            hourHeight: hourHeight ?? self.hourHeight,
             eventHorizontalInset: 8,
             leadingExtendedHours: leading,
             trailingExtendedHours: trailing,

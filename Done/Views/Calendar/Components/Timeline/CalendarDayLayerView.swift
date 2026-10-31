@@ -577,6 +577,9 @@ final class DayLayerHostView: UIView {
         func resetAnimationState() {
             pulseSettleWork?.cancel()
             pulseSettleWork = nil
+            container.sublayers?
+                .filter { $0.name == DayLayerHostView.bandSplitVeilName }
+                .forEach { $0.removeFromSuperlayer() }
             container.removeAllAnimations()
             maskedContent.removeAllAnimations()
             border.removeAllAnimations()
@@ -629,8 +632,7 @@ final class DayLayerHostView: UIView {
     /// Occurrences the last full render drew in pieces, so the render that
     /// starts drawing one in pieces can dissolve into the split.
     private var bandSplitIDsLastRender: Set<String> = []
-    /// Snapshots of whole blocks fading out over their new pieces.
-    private var bandSplitVeils: [CALayer] = []
+    private static let bandSplitVeilName = "bandSplitVeil"
 
     /// Blocks whose event was just deleted, detached from `pool` and left in
     /// the layer tree until their delete motion plays (`EventDeletionMotion`).
@@ -1687,9 +1689,7 @@ final class DayLayerHostView: UIView {
                 layers.container.removeAnimation(forKey: "resizeTween.position")
                 layers.container.removeAnimation(forKey: "resizeTween.bounds")
             }
-            for veil in bandSplitVeils {
-                veil.position.y += shift
-            }
+
         }
         lastRenderedLeadingHours = model.leadingExtendedHours
 
@@ -2119,12 +2119,22 @@ final class DayLayerHostView: UIView {
             let pieces = blockPieces(of: occurrence, model: model, active: piecesActive)
             if pieces.count > 1 { splitIDs.insert(occurrence.id) }
             // Only a block already on screen whole dissolves into its pieces.
+            var splitSnapshot: CGImage?
             if pieces.count > 1,
                !bandSplitIDsLastRender.contains(occurrence.id),
                let wholeLayers = pool[occurrence.id],
-               isWithinViewport(frame, visibleRect: visibleRect) {
-                dissolveIntoPieces(wholeLayers, wholeFrame: frame, zPosition: zPosition)
-                dissolvedSplits += 1
+               isWithinViewport(frame, visibleRect: visibleRect),
+               let todayWindow = pieces[0].window {
+                // The upper line the block crosses.
+                let line = todayWindow.lowerBound != .distantPast ? todayWindow.lowerBound : todayWindow.upperBound
+                let lineY = model.headerHeight + calendarTimelineYFraction(
+                    for: line,
+                    containing: model.date,
+                    leadingExtendedHours: model.leadingExtendedHours,
+                    trailingExtendedHours: model.trailingExtendedHours
+                ) * contentHeight
+                splitSnapshot = dissolveSnapshot(of: wholeLayers, wholeFrame: frame, lineY: lineY)
+                if splitSnapshot != nil { dissolvedSplits += 1 }
             }
             for piece in pieces {
                 let pieceFrame = self.frame(
@@ -2156,6 +2166,12 @@ final class DayLayerHostView: UIView {
                 )
 
                 layers.container.zPosition = zPosition
+                if let splitSnapshot, let window = piece.window {
+                    veil(
+                        layers, pieceFrame: pieceFrame, window: window, wholeFrame: frame,
+                        snapshot: splitSnapshot, model: model, contentHeight: contentHeight
+                    )
+                }
             }
         }
         if splitIDs != bandSplitIDsLastRender {
@@ -3017,25 +3033,66 @@ final class DayLayerHostView: UIView {
         render(model)
     }
 
-    /// Lays a snapshot of a block, still drawn whole, over the spot and fades
-    /// it out, so the pieces drawn underneath come through: the seam and the
-    /// lower piece's title appear in place, and nothing slides.
-    private func dissolveIntoPieces(_ layers: EventLayers, wholeFrame: CGRect, zPosition: CGFloat) {
-        guard wholeFrame.width > 0, wholeFrame.height > 0, !calendarReduceMotionEnabled else { return }
+    /// A snapshot of a block still drawn whole, for its pieces to dissolve
+    /// out of; nil when the split should just happen. Its text has to stay
+    /// clear of the line: past it, the fading copy would print over the
+    /// title the lower piece is fading in, as a short block at a small zoom
+    /// does.
+    private func dissolveSnapshot(
+        of layers: EventLayers, wholeFrame: CGRect, lineY: CGFloat
+    ) -> CGImage? {
+        guard wholeFrame.width > 0, wholeFrame.height > 0, !calendarReduceMotionEnabled else { return nil }
+        let textBottom = [layers.title, layers.subtitle, layers.time]
+            .filter { !$0.isHidden && $0.string != nil }
+            .map(\.frame.maxY)
+            .max() ?? 0
+        guard textBottom <= lineY - wholeFrame.minY else { return nil }
         let savedTransform = layers.container.transform
         layers.container.transform = CATransform3DIdentity
         let image = UIGraphicsImageRenderer(size: wholeFrame.size).image { context in
             layers.container.render(in: context.cgContext)
         }
         layers.container.transform = savedTransform
+        return image.cgImage
+    }
+
+    /// Lays this piece's share of the whole block's snapshot over it, from
+    /// the line to the block's end on its side, and fades it out: the seam
+    /// and the lower piece's title appear in place and nothing slides. It
+    /// sits inside the piece, so whatever was stacked on the block stays on
+    /// top.
+    private func veil(
+        _ layers: EventLayers,
+        pieceFrame: CGRect,
+        window: ClosedRange<Date>,
+        wholeFrame: CGRect,
+        snapshot: CGImage,
+        model: Model,
+        contentHeight: CGFloat
+    ) {
+        func boundaryY(_ date: Date) -> CGFloat {
+            model.headerHeight + calendarTimelineYFraction(
+                for: date,
+                containing: model.date,
+                leadingExtendedHours: model.leadingExtendedHours,
+                trailingExtendedHours: model.trailingExtendedHours
+            ) * contentHeight
+        }
+        let top = window.lowerBound == .distantPast ? wholeFrame.minY : boundaryY(window.lowerBound)
+        let bottom = window.upperBound == .distantFuture ? wholeFrame.maxY : boundaryY(window.upperBound)
+        guard bottom > top else { return }
         let veil = CALayer()
-        veil.contents = image.cgImage
-        veil.contentsScale = image.scale
-        veil.frame = wholeFrame
-        // Over both pieces, under anything stacked on the block.
-        veil.zPosition = zPosition + 0.5
-        layer.addSublayer(veil)
-        bandSplitVeils.append(veil)
+        veil.name = Self.bandSplitVeilName
+        veil.contents = snapshot
+        veil.contentsScale = UIScreen.main.scale
+        veil.contentsRect = CGRect(
+            x: 0,
+            y: (top - wholeFrame.minY) / wholeFrame.height,
+            width: 1,
+            height: (bottom - top) / wholeFrame.height
+        )
+        veil.frame = CGRect(x: 0, y: top - pieceFrame.minY, width: pieceFrame.width, height: bottom - top)
+        layers.container.addSublayer(veil)
         let duration = Self.bandPieceSplitDuration
         let fade = CABasicAnimation(keyPath: "opacity")
         fade.fromValue = 1
@@ -3043,11 +3100,9 @@ final class DayLayerHostView: UIView {
         fade.duration = duration
         fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         veil.opacity = 0
-        veil.add(fade, forKey: "bandSplitVeil")
-        DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self, weak veil] in
-            guard let veil else { return }
-            veil.removeFromSuperlayer()
-            self?.bandSplitVeils.removeAll { $0 === veil }
+        veil.add(fade, forKey: "fade")
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak veil] in
+            veil?.removeFromSuperlayer()
         }
     }
 
@@ -3082,8 +3137,12 @@ final class DayLayerHostView: UIView {
             .mapValues(\.container)
     }
 
-    /// TEST-ONLY: whole-block snapshots still fading over new pieces.
-    var debugSplitVeilCount: Int { bandSplitVeils.count }
+    /// TEST-ONLY: whole-block snapshot shares still fading over new pieces.
+    var debugSplitVeilCount: Int {
+        pool.values.reduce(0) { count, layers in
+            count + (layers.container.sublayers?.filter { $0.name == Self.bandSplitVeilName }.count ?? 0)
+        }
+    }
 
     /// TEST-ONLY: a drawn piece's resize-handle opacities.
     func debugHandleOpacities(ofPiece key: String) -> (top: Float, bottom: Float)? {
