@@ -767,7 +767,8 @@ final class CalendarDayLayerApplyKeyTests: XCTestCase {
             ("graceResizeOccurrenceID", { $0.graceResizeOccurrenceID = "occ" }),
             ("graceResizeHandleOpacity", { $0.graceResizeHandleOpacity = 0.5 }),
             ("isFocusContextActive", { $0.isFocusContextActive.toggle() }),
-            ("recentlyAbsorbedEventIDs", { $0.recentlyAbsorbedEventIDs = [UUID()] })
+            ("recentlyAbsorbedEventIDs", { $0.recentlyAbsorbedEventIDs = [UUID()] }),
+            ("awaitingNameTitles", { $0.awaitingNameTitles = [UUID(): "Draft"] })
         ]
 
         let occurrenceKey = sourceKey([occurrence(id: "a", startHour: 9)])
