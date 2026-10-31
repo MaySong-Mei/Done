@@ -15352,6 +15352,18 @@ final class BoundaryBandPieceTests: XCTestCase {
         XCTAssertEqual(tall.debugSplitVeilCount, 2, "control: with room above the line it fades")
     }
 
+    func testABlockThatSplitsAsADropLandsSplitsWithoutTheFade() {
+        // Mid-edit the block was drawn for the drag (another column,
+        // dimmed); fading from that would flash the old look.
+        let crossing = occurrence(-2.25, 4.5)
+        let host = makeHost([crossing], leading: band, creating: true)
+        XCTAssertEqual(host.debugPieceContainers(of: crossing.id).count, 1, "whole while something is edited")
+        host.apply(makeModel([crossing], leading: band))
+        host.layoutIfNeeded()
+        XCTAssertEqual(host.debugPieceContainers(of: crossing.id).count, 2)
+        XCTAssertEqual(host.debugSplitVeilCount, 0)
+    }
+
     func testABlockAcrossTodaysEndSplitsThere() {
         let crossing = occurrence(22, 25.5)
         let host = makeHost([crossing], trailing: band)
@@ -15419,11 +15431,13 @@ final class BoundaryBandPieceTests: XCTestCase {
         leading: Int = 0,
         trailing: Int = 0,
         graceEvent: UUID? = nil,
-        hourHeight: CGFloat? = nil
+        hourHeight: CGFloat? = nil,
+        creating: Bool = false
     ) -> DayLayerHostView {
         let host = DayLayerHostView(frame: CGRect(x: 0, y: 0, width: 360, height: 3200))
         host.apply(makeModel(
-            occurrences, leading: leading, trailing: trailing, graceEvent: graceEvent, hourHeight: hourHeight
+            occurrences, leading: leading, trailing: trailing, graceEvent: graceEvent, hourHeight: hourHeight,
+            creating: creating
         ))
         host.layoutIfNeeded()
         return host
@@ -15434,7 +15448,8 @@ final class BoundaryBandPieceTests: XCTestCase {
         leading: Int = 0,
         trailing: Int = 0,
         graceEvent: UUID? = nil,
-        hourHeight: CGFloat? = nil
+        hourHeight: CGFloat? = nil,
+        creating: Bool = false
     ) -> DayLayerHostView.Model {
         var model = DayLayerHostView.Model(
             date: day,
@@ -15459,6 +15474,11 @@ final class BoundaryBandPieceTests: XCTestCase {
             frozenSlotMinutes: nil
         )
         model.graceResizeEventID = graceEvent
+        if creating {
+            model.creationPreviewRange = Event.TimeRange(
+                start: day.addingTimeInterval(9 * 3600), end: day.addingTimeInterval(10 * 3600)
+            )
+        }
         return model
     }
 }

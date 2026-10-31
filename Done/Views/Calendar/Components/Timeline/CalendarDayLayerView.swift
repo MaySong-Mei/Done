@@ -632,6 +632,10 @@ final class DayLayerHostView: UIView {
     /// Occurrences the last full render drew in pieces, so the render that
     /// starts drawing one in pieces can dissolve into the split.
     private var bandSplitIDsLastRender: Set<String> = []
+    /// Whether the last full render had nothing being edited. A block that
+    /// splits on the render a drop lands in was last drawn mid-drag (another
+    /// column, dimmed), so there is no settled whole block to fade from.
+    private var bandPiecesAllowedLastRender = false
     private static let bandSplitVeilName = "bandSplitVeil"
 
     /// Blocks whose event was just deleted, detached from `pool` and left in
@@ -1695,6 +1699,8 @@ final class DayLayerHostView: UIView {
 
         if !bandPiecesAllowed(model) { bandPiecesDay = nil }
         let piecesActive = bandPiecesAllowed(model)
+        let settledBefore = bandPiecesAllowedLastRender
+        bandPiecesAllowedLastRender = piecesActive
         var splitIDs = Set<String>()
         var dissolvedSplits = 0
 
@@ -2121,6 +2127,7 @@ final class DayLayerHostView: UIView {
             // Only a block already on screen whole dissolves into its pieces.
             var splitSnapshot: CGImage?
             if pieces.count > 1,
+               settledBefore,
                !bandSplitIDsLastRender.contains(occurrence.id),
                let wholeLayers = pool[occurrence.id],
                isWithinViewport(frame, visibleRect: visibleRect),
