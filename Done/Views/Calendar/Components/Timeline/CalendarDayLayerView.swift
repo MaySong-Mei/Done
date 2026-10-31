@@ -3081,6 +3081,8 @@ final class DayLayerHostView: UIView {
             && !model.isWeekMode
             && !model.isThreeDayMode
             && gestureController.activeEventSession == nil
+            // A drag that began in another day's column has no session here.
+            && gestureController.callbacks.dragState?.draggingEventID == nil
             && foreignDragSession == nil
             && dragPreviewOccurrence == nil
             && model.creationPreviewRange == nil
