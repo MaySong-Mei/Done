@@ -15386,6 +15386,30 @@ final class BoundaryBandPieceTests: XCTestCase {
         XCTAssertEqual(host.debugSplitVeilCount, 2, "split from a settled block, so it fades")
     }
 
+    func testTheFadeDoesNotLayOutTheHierarchyFromInsideARender() {
+        // On device a split's fade drew the block with `render(in:)`, which
+        // laid out the hosting view from inside the render; SwiftUI handed
+        // the column a new model there and it rendered again, until the
+        // stack ran out.
+        let crossing = occurrence(-2.25, 4.5)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 360, height: 3200))
+        let parent = ReapplyingParent(frame: window.bounds)
+        window.addSubview(parent)
+        let host = DayLayerHostView(frame: parent.bounds)
+        parent.addSubview(host)
+        host.apply(makeModel([crossing], leading: band, graceEvent: crossing.event.id))
+        parent.layoutIfNeeded()
+
+        parent.onLayout = { [unowned self] in
+            host.apply(self.makeModel([crossing], leading: band, hourHeight: hourHeight + 1))
+        }
+        parent.setNeedsLayout()
+        host.apply(makeModel([crossing], leading: band))
+        XCTAssertEqual(host.debugPieceContainers(of: crossing.id).count, 2)
+        XCTAssertGreaterThan(host.debugSplitVeilCount, 0, "control: it faded")
+        XCTAssertEqual(host.debugMaxRenderDepth, 1)
+    }
+
     func testABlockAcrossTodaysEndSplitsThere() {
         let crossing = occurrence(22, 25.5)
         let host = makeHost([crossing], trailing: band)
@@ -15430,6 +15454,18 @@ final class BoundaryBandPieceTests: XCTestCase {
     }
 
     // MARK: Fixtures
+
+    /// Stands in for the hosting view: laying it out hands the column a new
+    /// model, once.
+    private final class ReapplyingParent: UIView {
+        var onLayout: (() -> Void)?
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            let work = onLayout
+            onLayout = nil
+            work?()
+        }
+    }
 
     private var day: Date { Calendar.current.startOfDay(for: Date()) }
 

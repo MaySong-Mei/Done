@@ -1682,6 +1682,17 @@ final class DayLayerHostView: UIView {
     // MARK: Render (static)
 
     private func render(_ model: Model) {
+        #if DEBUG
+        // Anything in here that lays out the hierarchy (`render(in:)` does)
+        // can re-enter through SwiftUI's update and recurse until the stack
+        // runs out. (gh#279)
+        debugRenderDepth += 1
+        debugMaxRenderDepth = max(debugMaxRenderDepth, debugRenderDepth)
+        if debugRenderDepth > 1 {
+            calendarDebugLog("dayLayer.render.reentered", fields: ["depth": "\(debugRenderDepth)"])
+        }
+        defer { debugRenderDepth -= 1 }
+        #endif
         // No implicit animations for the static S1 path: layer frame / path
         // changes must be instantaneous (animations are slice S5).
         CATransaction.begin()
@@ -2147,7 +2158,7 @@ final class DayLayerHostView: UIView {
             }
             if pieces.count > 1 { splitIDs.insert(occurrence.id) }
             // Only a block already on screen whole dissolves into its pieces.
-            var splitSnapshot: CGImage?
+            var dissolves = false
             if pieces.count > 1,
                settledBefore,
                !bandSplitIDsLastRender.contains(occurrence.id),
@@ -2162,8 +2173,8 @@ final class DayLayerHostView: UIView {
                     leadingExtendedHours: model.leadingExtendedHours,
                     trailingExtendedHours: model.trailingExtendedHours
                 ) * contentHeight
-                splitSnapshot = dissolveSnapshot(of: wholeLayers, wholeFrame: frame, lineY: lineY)
-                if splitSnapshot != nil { dissolvedSplits += 1 }
+                dissolves = dissolvesIntoPieces(wholeLayers, wholeFrame: frame, lineY: lineY)
+                if dissolves { dissolvedSplits += 1 }
             }
             for piece in pieces {
                 let pieceFrame = self.frame(
@@ -2204,10 +2215,13 @@ final class DayLayerHostView: UIView {
                 )
 
                 layers.container.zPosition = zPosition
-                if let splitSnapshot, let window = piece.window {
+                if dissolves, let window = piece.window {
                     veil(
                         layers, pieceFrame: pieceFrame, window: window, wholeFrame: frame,
-                        snapshot: splitSnapshot, model: model, contentHeight: contentHeight
+                        occurrence: occurrence, model: model, slot: slot,
+                        isEmbeddedChild: isEmbeddedChild, interrupt: interrupt,
+                        visibleStart: visibleStart, visibleEnd: visibleEnd,
+                        stackPeekStripWidth: stackPeekStripWidthPt, contentHeight: contentHeight
                     )
                 }
             }
@@ -3083,41 +3097,39 @@ final class DayLayerHostView: UIView {
         render(model)
     }
 
-    /// A snapshot of a block still drawn whole, for its pieces to dissolve
-    /// out of; nil when the split should just happen. Its text has to stay
-    /// clear of the line: past it, the fading copy would print over the
-    /// title the lower piece is fading in, as a short block at a small zoom
-    /// does.
-    private func dissolveSnapshot(
-        of layers: EventLayers, wholeFrame: CGRect, lineY: CGFloat
-    ) -> CGImage? {
-        guard wholeFrame.width > 0, wholeFrame.height > 0, !calendarReduceMotionEnabled else { return nil }
+    /// Whether a block about to split fades into its pieces rather than
+    /// just splitting. Its text has to stay clear of the line: past it, the
+    /// fading copy would print over the title the lower piece fades in, as a
+    /// short block at a small zoom does.
+    private func dissolvesIntoPieces(_ layers: EventLayers, wholeFrame: CGRect, lineY: CGFloat) -> Bool {
+        guard wholeFrame.width > 0, wholeFrame.height > 0, !calendarReduceMotionEnabled else { return false }
         let textBottom = [layers.title, layers.subtitle, layers.time]
             .filter { !$0.isHidden && $0.string != nil }
             .map(\.frame.maxY)
             .max() ?? 0
-        guard textBottom <= lineY - wholeFrame.minY else { return nil }
-        let savedTransform = layers.container.transform
-        layers.container.transform = CATransform3DIdentity
-        let image = UIGraphicsImageRenderer(size: wholeFrame.size).image { context in
-            layers.container.render(in: context.cgContext)
-        }
-        layers.container.transform = savedTransform
-        return image.cgImage
+        return textBottom <= lineY - wholeFrame.minY
     }
 
-    /// Lays this piece's share of the whole block's snapshot over it, from
-    /// the line to the block's end on its side, and fades it out: the seam
-    /// and the lower piece's title appear in place and nothing slides. It
-    /// sits inside the piece, so whatever was stacked on the block stays on
-    /// top.
+    /// Lays a copy of the block, drawn whole, over this piece, clipped from
+    /// the line to the block's end on the piece's side, and fades it out:
+    /// the seam and the lower piece's title appear in place and nothing
+    /// slides. It sits inside the piece, so whatever was stacked on the
+    /// block stays on top. The copy is a layer tree configured like any
+    /// block; a bitmap of the block would need `render(in:)`, which lays out
+    /// the hierarchy from inside this render and re-enters it.
     private func veil(
         _ layers: EventLayers,
         pieceFrame: CGRect,
         window: ClosedRange<Date>,
         wholeFrame: CGRect,
-        snapshot: CGImage,
+        occurrence: CalendarLayout.EventOccurrence,
         model: Model,
+        slot: CalendarLayout.EventOverlapSlot,
+        isEmbeddedChild: Bool,
+        interrupt: InterruptContext,
+        visibleStart: Date,
+        visibleEnd: Date,
+        stackPeekStripWidth: CGFloat,
         contentHeight: CGFloat
     ) {
         func boundaryY(_ date: Date) -> CGFloat {
@@ -3133,15 +3145,22 @@ final class DayLayerHostView: UIView {
         guard bottom > top else { return }
         let veil = CALayer()
         veil.name = Self.bandSplitVeilName
-        veil.contents = snapshot
-        veil.contentsScale = UIScreen.main.scale
-        veil.contentsRect = CGRect(
-            x: 0,
-            y: (top - wholeFrame.minY) / wholeFrame.height,
-            width: 1,
-            height: (bottom - top) / wholeFrame.height
-        )
+        veil.masksToBounds = true
         veil.frame = CGRect(x: 0, y: top - pieceFrame.minY, width: pieceFrame.width, height: bottom - top)
+        let whole = EventLayers()
+        let wholeInVeil = CGRect(
+            x: wholeFrame.minX - pieceFrame.minX,
+            y: wholeFrame.minY - top,
+            width: wholeFrame.width,
+            height: wholeFrame.height
+        )
+        configure(
+            whole, frame: wholeInVeil, occurrence: occurrence, model: model, slot: slot,
+            isEmbeddedChild: isEmbeddedChild, interrupt: interrupt,
+            visibleStart: visibleStart, visibleEnd: visibleEnd, stackPeekStripWidth: stackPeekStripWidth
+        )
+        applyInteractionState(whole, occurrence: occurrence, frame: wholeInVeil, model: model)
+        veil.addSublayer(whole.container)
         layers.container.addSublayer(veil)
         let duration = Self.bandPieceSplitDuration
         let fade = CABasicAnimation(keyPath: "opacity")
@@ -3174,6 +3193,10 @@ final class DayLayerHostView: UIView {
     }
 
     #if DEBUG
+    private var debugRenderDepth = 0
+    /// TEST-ONLY: the deepest `render` has been nested in itself.
+    private(set) var debugMaxRenderDepth = 0
+
     /// TEST-ONLY: split as the user's first scroll with a band open would.
     func debugSplitBandPieces() {
         guard let model = currentModel, bandPiecesAllowed(model) else { return }
