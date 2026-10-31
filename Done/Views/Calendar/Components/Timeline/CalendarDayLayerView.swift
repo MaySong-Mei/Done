@@ -1686,6 +1686,7 @@ final class DayLayerHostView: UIView {
         if !bandPiecesAllowed(model) { bandPiecesDay = nil }
         let piecesActive = bandPiecesAllowed(model)
         var splitIDs = Set<String>()
+        var tweenedSplits = 0
 
         // Horizontal placement comes from `CalendarLayout.overlapLayout`:
         // greedy column packing, with the committed (`.auto`) render allowed
@@ -2152,10 +2153,23 @@ final class DayLayerHostView: UIView {
                 configurePiece(pieceFrame)
 
                 layers.container.zPosition = zPosition + (piece.isBandPiece ? 0.01 : 0)
-                if let splitFrom {
-                    EventResizeTween.animate(from: splitFrom, root: layers.container, duration: Self.bandPieceSplitDuration)
+                if let splitFrom,
+                   EventResizeTween.animate(from: splitFrom, root: layers.container, duration: Self.bandPieceSplitDuration),
+                   !piece.isBandPiece {
+                    tweenedSplits += 1
                 }
             }
+        }
+        if splitIDs != bandSplitIDsLastRender {
+            calendarDebugLog("band.pieces", fields: [
+                "split": "\(splitIDs.count)",
+                "newlySplit": "\(splitIDs.subtracting(bandSplitIDsLastRender).count)",
+                "joined": "\(bandSplitIDsLastRender.subtracting(splitIDs).count)",
+                "tweened": "\(tweenedSplits)",
+                "leading": "\(model.leadingExtendedHours)",
+                "trailing": "\(model.trailingExtendedHours)",
+                "userScrolled": "\(bandPiecesDay == model.date)"
+            ])
         }
         bandSplitIDsLastRender = splitIDs
 
@@ -2928,7 +2942,16 @@ final class DayLayerHostView: UIView {
         var hidesBottomHandle = false
     }
 
-    private static let bandPieceSplitDuration: CFTimeInterval = 0.3
+    private static let bandPieceSplitDuration: CFTimeInterval = {
+        #if DEBUG
+        // Keyframe captures stretch the split: CALENDAR_BAND_SPLIT_SLOWMO=<factor>.
+        if let factor = ProcessInfo.processInfo.environment["CALENDAR_BAND_SPLIT_SLOWMO"].flatMap(Double.init),
+           factor > 0 {
+            return 0.3 * factor
+        }
+        #endif
+        return 0.3
+    }()
 
     private func blockPieces(
         of occurrence: CalendarLayout.EventOccurrence,
