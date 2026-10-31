@@ -209,11 +209,27 @@ nonisolated enum WristForeground {
 }
 
 /// The watch's own settings, kept on the watch (its `@AppStorage`) and
-/// never sent to the phone: how tall an hour is on the today page, and the
-/// period the stats page opens on when the user picked one on the watch.
+/// never sent to the phone: how tall an hour is on the today page, the
+/// period the stats page opens on when the user picked one on the watch,
+/// and what a tap on a block does.
 nonisolated enum WristLocalSettings {
     static let zoomKey = "wrist.zoom"
     static let statsPeriodKey = "wrist.statsPeriod"
+    static let tapModeKey = "wrist.tapMode"
+
+    /// What a tap on a block on the today page does besides selecting it:
+    /// nothing more (the event page left of Today shows it), or a card
+    /// with its name, range and quick changes rises over the day's foot.
+    enum TapMode: String, CaseIterable, Sendable {
+        case select, card
+
+        static let standard = TapMode.select
+
+        /// A stored value; anything unknown (or nothing) is the standard.
+        init(stored: String?) {
+            self = stored.flatMap(TapMode.init(rawValue:)) ?? .standard
+        }
+    }
 
     /// The today page's scale. Medium is the page as it always was.
     enum Zoom: String, CaseIterable, Sendable {

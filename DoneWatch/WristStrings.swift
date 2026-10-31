@@ -22,6 +22,7 @@ struct WristStrings {
     var noTypes: String { isChinese ? "iPhone 上还没有类型" : "No types on iPhone yet" }
     var finish: String { isChinese ? "结束" : "Finish" }
     var extend: String { "+15" }
+    var close: String { isChinese ? "关闭" : "Close" }
     var sending: String { isChinese ? "发送中…" : "Sending…" }
     /// The names step's last row: the block named after its type alone.
     func justType(_ type: String) -> String { isChinese ? "仅「\(type)」" : "Just \(type)" }
@@ -114,6 +115,13 @@ struct WristStrings {
         case .small: return isChinese ? "小" : "Small"
         case .medium: return isChinese ? "中" : "Medium"
         case .large: return isChinese ? "大" : "Large"
+        }
+    }
+    var tapMode: String { isChinese ? "点按事件块" : "Tap a Block" }
+    func tapModeLabel(_ mode: WristLocalSettings.TapMode) -> String {
+        switch mode {
+        case .select: return isChinese ? "仅选中" : "Select Only"
+        case .card: return isChinese ? "底部卡片" : "Bottom Card"
         }
     }
     var statsOpensOn: String { isChinese ? "统计默认周期" : "Stats Opens On" }

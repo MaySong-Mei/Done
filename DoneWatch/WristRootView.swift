@@ -24,6 +24,7 @@ struct WristRootView: View {
     @AppStorage(WristLocalSettings.zoomKey) private var zoomRaw = WristLocalSettings.Zoom.standard.rawValue
     /// Empty until a period is picked on the watch: the phone's applies.
     @AppStorage(WristLocalSettings.statsPeriodKey) private var periodRaw = ""
+    @AppStorage(WristLocalSettings.tapModeKey) private var tapModeRaw = WristLocalSettings.TapMode.standard.rawValue
     private let housekeeping = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -52,7 +53,7 @@ struct WristRootView: View {
                 .tag(WristPage.stats)
                 NavigationStack {
                     WristSettingsView(
-                        zoomRaw: $zoomRaw, periodRaw: $periodRaw,
+                        zoomRaw: $zoomRaw, periodRaw: $periodRaw, tapModeRaw: $tapModeRaw,
                         settings: settings,
                         hasPhoneData: client.snapshot != nil,
                         phoneTakesEdits: client.snapshot?.takesSettingsEdits ?? false,
@@ -70,6 +71,9 @@ struct WristRootView: View {
             client.tick(now: now)
         }
 #if DEBUG
+        .onAppear {
+            if let mode = WristPage.debugTapMode { tapModeRaw = mode.rawValue }
+        }
         .onAppear {
             guard let key = WristPage.initialSelection, let snapshot = client.snapshot else { return }
             let running = runningSession(now: Date())?.occurrence
@@ -125,7 +129,7 @@ struct WristRootView: View {
         running: (occurrence: WristOccurrence, pending: Bool)?
     ) -> some View {
         if let snapshot = client.snapshot {
-            let timeline = WristStateReducer.overlaid(snapshot, pending: client.pending, now: now).occurrences
+            let (timeline, pendingIDs) = WristStateReducer.overlaid(snapshot, pending: client.pending, now: now)
             WristTodayView(
                 occurrences: timeline, dismissed: client.dismissed, stats: stats,
                 now: now, currentID: running?.occurrence.id, strings: strings, types: snapshot.types,
@@ -138,6 +142,10 @@ struct WristRootView: View {
                     client.create(type, title: name.title, awaitsName: name == .later, start: start, end: end)
                 },
                 onEditRange: { occurrence, start, end in client.editRange(occurrence, start: start, end: end) },
+                onExtend: { client.extend($0) },
+                onFinish: { client.finish($0) },
+                showsCard: WristLocalSettings.TapMode(stored: tapModeRaw) == .card,
+                pendingEventIDs: pendingIDs,
                 onFlick: { step in
                     // The event page is to the left, Stats to the right.
                     withAnimation { page = step > 0 ? .stats : .event }
@@ -175,6 +183,18 @@ enum WristPage: String, Hashable {
 #endif
         return nil
     }
+
+    /// Nothing. Debug builds accept `-wristTapMode select|card`, stored as
+    /// the watch's setting at launch, so a check can open in either mode.
+    static var debugTapMode: WristLocalSettings.TapMode? {
+#if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        if let i = arguments.firstIndex(of: "-wristTapMode"), i + 1 < arguments.count {
+            return WristLocalSettings.TapMode(rawValue: arguments[i + 1])
+        }
+#endif
+        return nil
+    }
 }
 
 /// The day from midnight to midnight at about a point a minute — a quarter
@@ -189,7 +209,11 @@ enum WristPage: String, Hashable {
 /// type, the likeliest few for this range — and closing it discards the
 /// draft. Drawing from the now line is how a session starts now.
 ///
-/// Tap a block to select it: it is outlined, nothing opens over the day.
+/// Tap a block to select it: it is outlined. With the watch's tap setting
+/// on the card (`WristLocalSettings.TapMode.card`), a card also rises at
+/// the day's foot: it names the block and offers its quick changes (+15
+/// and Finish for the running one, the end a quarter hour earlier or later
+/// for the rest), and the day scrolls the block clear of it.
 /// Press and hold a block — it lifts with a click under
 /// the still finger — then drag to move it, or, pressed near its top or
 /// bottom edge, to resize that edge — the phone's
@@ -223,6 +247,15 @@ struct WristTodayView: View {
     var onCreate: (WristType, WristDraftName, Date, Date) -> UUID? = { _, _, _, _ in nil }
     /// A block's range moved or resized here.
     var onEditRange: (WristOccurrence, Date, Date) -> Void = { _, _, _ in }
+    /// For the running block's card.
+    var onExtend: (WristOccurrence) -> Void = { _ in }
+    var onFinish: (WristOccurrence) -> Void = { _ in }
+    /// The selected block's card shows over the day's foot
+    /// (`WristLocalSettings.TapMode.card`).
+    var showsCard: Bool = false
+    /// The events with a command the phone has not answered yet: the card
+    /// says it is sending.
+    var pendingEventIDs: Set<UUID> = []
     /// A sideways flick: -1 for the page to the left, +1 to the right. The
     /// hold-and-drag on the day is a drag gesture, and any drag gesture here
     /// keeps the paged TabView from turning the page itself.
@@ -256,6 +289,7 @@ struct WristTodayView: View {
     @State private var hintToken = UUID()
     /// The scroll view's width, to find the block under a touch.
     @State private var contentWidth: CGFloat = 0
+    @State private var cardHeight: CGFloat = 0
     /// The draft a block was just created from, and the event it made: the
     /// block starts in the draft's place and look. `sheetUp` holds it there
     /// until the picker is gone.
@@ -451,6 +485,26 @@ struct WristTodayView: View {
                 )
                 .scrollDisabled(holding || draft != nil || edit != nil)
                 .mask(WristEdgeFade(top: 0, bottom: 10))
+                // At the day's foot, with the selected block scrolled clear
+                // of it.
+                .overlay(alignment: .bottom) {
+                    if showsCard, draft == nil, edit == nil,
+                       let block = selectedBlock(in: blocks) {
+                        card(block)
+                            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { _, h in cardHeight = h }
+                            .padding(.bottom, 2)
+                            .transition(.opacity)
+                    }
+                }
+                .onChange(of: selection) { _, _ in
+                    guard showsCard, let block = selectedBlock(in: blocks) else { return }
+                    reveal(block.start, block.end, dayStart: dayStart, dayEnd: dayEnd, height: height, top: top)
+                }
+                // A block dropped low on the page comes clear of the card too.
+                .onChange(of: edit == nil) { _, ended in
+                    guard ended, showsCard, let block = selectedBlock(in: blocks) else { return }
+                    reveal(block.start, block.end, dayStart: dayStart, dayEnd: dayEnd, height: height, top: top)
+                }
                 .overlay(alignment: .top) {
                     if let hint {
                         Text(hint)
@@ -732,6 +786,132 @@ struct WristTodayView: View {
         withAnimation(.easeOut(duration: 0.15)) {
             selection = tapped == selection ? nil : tapped
         }
+    }
+
+    /// The selected block as the day lays it out.
+    private func selectedBlock(in blocks: [WristDayBlock]) -> WristDayBlock? {
+        guard let selection else { return nil }
+        return blocks.first { selection.matches($0.occurrence) }
+    }
+
+    /// Scrolls the day just enough that `start…end` clears the card at
+    /// the foot, never past its own top.
+    private func reveal(_ start: Date, _ end: Date, dayStart: Date, dayEnd: Date, height: CGFloat, top: CGFloat) {
+        let minY = WristDayLayout.fraction(start, dayStart: dayStart, dayEnd: dayEnd) * height
+        let maxY = WristDayLayout.fraction(end, dayStart: dayStart, dayEnd: dayEnd) * height
+        // The card's height is known after its first layout; a typical one
+        // stands in until then.
+        let clear = viewportHeight - (cardHeight > 0 ? cardHeight : 78) - 6
+        let bottom = maxY + top - scrollY
+        guard bottom > clear else { return }
+        let target = min(scrollY + (bottom - clear), minY, max(0, contentHeight - viewportHeight))
+        guard target > scrollY else { return }
+        withAnimation(.easeOut(duration: 0.2)) { position.scrollTo(y: target) }
+    }
+
+    /// The selected block's card: its name, type and range, and the quick
+    /// changes the phone allows for it — +15 and Finish while it runs, its
+    /// end a quarter hour earlier or later otherwise.
+    private func card(_ block: WristDayBlock) -> some View {
+        let occurrence = block.occurrence
+        let color = WristColor.color(occurrence.colorHex)
+        let end = occurrence.isOpenEnded ? block.end : occurrence.end
+        let running = block.isCurrent && occurrence.quickActionsEnabled
+        let editable = isEditable(occurrence)
+        let pending = pendingEventIDs.contains(occurrence.eventID)
+        let canShorten = end.addingTimeInterval(-WristTiming.extendStep).timeIntervalSince(occurrence.start)
+            >= WristTiming.minimumDuration
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .top, spacing: 4) {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(occurrence.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                    Text("\(occurrence.type) · \(strings.timeRange(occurrence.start, end))")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .foregroundStyle(.white.opacity(0.75))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Button {
+                    withAnimation(.easeOut(duration: 0.15)) { selection = nil }
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .frame(width: 24, height: 24)
+                        .background(Color.white.opacity(0.15), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(strings.close)
+            }
+            if pending {
+                Text(strings.sending)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+            if running {
+                HStack(spacing: 6) {
+                    cardButton(strings.extend, fill: Color.white.opacity(0.18)) { onExtend(occurrence) }
+                    cardButton(nil, systemImage: "checkmark", fill: color.opacity(0.85)) { onFinish(occurrence) }
+                        .accessibilityLabel(strings.finish)
+                }
+            } else if editable {
+                HStack(spacing: 6) {
+                    cardButton(strings.endEarlier, fill: Color.white.opacity(0.18), enabled: canShorten) {
+                        onEditRange(occurrence, occurrence.start, end.addingTimeInterval(-WristTiming.extendStep))
+                    }
+                    cardButton(strings.endLater, fill: Color.white.opacity(0.18)) {
+                        onEditRange(occurrence, occurrence.start, end.addingTimeInterval(WristTiming.extendStep))
+                    }
+                }
+            } else {
+                Text(takesRangeEdits || occurrence.isOpenEnded || !occurrence.quickActionsEnabled
+                     ? strings.editOnPhoneShort : strings.updatePhoneForEdits)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        // Plain fills: no blur redrawn as the day moves.
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(color.opacity(0.3))
+                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color(white: 0.08)))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(color.opacity(0.6), lineWidth: 1)
+        )
+        .padding(.horizontal, 4)
+    }
+
+    private func cardButton(
+        _ title: String?, systemImage: String? = nil, fill: Color, enabled: Bool = true, action: @escaping () -> Void
+    ) -> some View {
+        Button {
+            WKInterfaceDevice.current().play(.click)
+            action()
+        } label: {
+            Group {
+                if let systemImage {
+                    Image(systemName: systemImage).font(.system(size: 14, weight: .bold))
+                } else {
+                    Text(title ?? "")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 30)
+            .background(fill, in: Capsule())
+            .opacity(enabled ? 1 : 0.35)
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
     }
 
     private func show(hint text: String) {
@@ -1392,6 +1572,7 @@ struct WristStatsView: View {
 struct WristSettingsView: View {
     @Binding var zoomRaw: String
     @Binding var periodRaw: String
+    @Binding var tapModeRaw: String
     /// `WristGestureTrail`: off unless turned on here.
     @AppStorage(WristGestureTrail.enabledKey) private var gestureLog = false
     let settings: WristStatsSettings
@@ -1404,6 +1585,7 @@ struct WristSettingsView: View {
     let onEditBackground: (Bool) -> Void
 
     private var zoom: WristLocalSettings.Zoom { WristLocalSettings.Zoom(stored: zoomRaw) }
+    private var tapMode: WristLocalSettings.TapMode { WristLocalSettings.TapMode(stored: tapModeRaw) }
     /// Nil while the phone's period applies.
     private var watchPeriod: WristStatsPeriod? { WristStatsPeriod(rawValue: periodRaw) }
 
@@ -1418,6 +1600,13 @@ struct WristSettingsView: View {
                         count: WristLocalSettings.Zoom.allCases.count
                     ) {
                         zoomRaw = Self.next(after: zoom, in: WristLocalSettings.Zoom.allCases).rawValue
+                    }
+                    cycleRow(
+                        strings.tapMode, value: strings.tapModeLabel(tapMode),
+                        index: WristLocalSettings.TapMode.allCases.firstIndex(of: tapMode) ?? 0,
+                        count: WristLocalSettings.TapMode.allCases.count
+                    ) {
+                        tapModeRaw = Self.next(after: tapMode, in: WristLocalSettings.TapMode.allCases).rawValue
                     }
                     let periods: [WristStatsPeriod?] = [nil] + WristStatsPeriod.allCases
                     cycleRow(

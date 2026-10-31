@@ -232,6 +232,19 @@ final class WristSettingsCommandTests: XCTestCase {
         XCTAssertEqual(heights, heights.sorted(), "listed smallest first, the order the row cycles")
     }
 
+    /// The tap setting stays on select until the card is picked on the
+    /// watch; nothing stored, or something unknown, is select.
+    func testTapModeDefaultsToSelect() {
+        XCTAssertEqual(WristLocalSettings.TapMode.standard, .select)
+        XCTAssertEqual(WristLocalSettings.TapMode(stored: nil), .select)
+        XCTAssertEqual(WristLocalSettings.TapMode(stored: ""), .select)
+        XCTAssertEqual(WristLocalSettings.TapMode(stored: "sheet"), .select)
+        XCTAssertEqual(WristLocalSettings.TapMode(stored: "card"), .card)
+        XCTAssertEqual(WristLocalSettings.TapMode.allCases, [.select, .card], "the order the row cycles")
+        XCTAssertNotEqual(WristLocalSettings.tapModeKey, WristLocalSettings.zoomKey)
+        XCTAssertNotEqual(WristLocalSettings.tapModeKey, WristLocalSettings.statsPeriodKey)
+    }
+
     /// The drag at every zoom: the same hour of points is the same hour of
     /// the day, and the magnet reaches the same number of points (so fewer
     /// minutes the larger the zoom).
