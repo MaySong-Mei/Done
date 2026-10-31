@@ -5,8 +5,9 @@
 //  Survey S6 / gap G12: the restore's baseline replay names the SERVER.
 //  A row the cloud snapshot carried gets hash(cloud row)@cloud seq, so a
 //  row restored from the cloud reads clean and a keepLocal collision row
-//  reads dirty and is PATCHed on the cloud seq; a row the cloud did not
-//  carry keeps the legacy shape.
+//  reads dirty and is PATCHed on the cloud seq. A row the cloud did not
+//  carry keeps its entry after a merge and takes the legacy shape after an
+//  overwrite.
 //
 
 import XCTest
@@ -49,10 +50,10 @@ final class SyncRestoreBaselineTests: XCTestCase {
         service.baseline.entry(table: "calendar_events", id: event.id.uuidString)
     }
 
-    private func replay(calendar: [Event], snapshot: RestoreSnapshot? = nil) {
+    private func replay(calendar: [Event], snapshot: RestoreSnapshot? = nil, strategy: RestoreStrategy = .merge) {
         service.markRestoreCompleted(
             todoEvents: [], calendarEvents: calendar, logs: [], feedback: [],
-            todoLists: [], eventTypes: [], skills: [], snapshot: snapshot
+            todoLists: [], eventTypes: [], skills: [], snapshot: snapshot, strategy: strategy
         )
     }
 
@@ -95,14 +96,16 @@ final class SyncRestoreBaselineTests: XCTestCase {
         XCTAssertEqual(entry(localX)?.hash, hash(localX))
     }
 
-    func testRowTheCloudDidNotCarryKeepsTheLegacyShape() async throws {
+    func testRowTheCloudDidNotCarryKeepsItsEntryAfterAMergeAndTheLegacyShapeAfterAnOverwrite() async throws {
         let onlyLocal = makeEvent("only here")
         service.baseline.setEntry(SyncBaselineEntry(hash: "older", seq: 41), table: "calendar_events", id: onlyLocal.id.uuidString)
         let snapshot = try await service.fetchRestoreSnapshot()
 
         replay(calendar: [onlyLocal], snapshot: snapshot)
+        XCTAssertEqual(entry(onlyLocal), SyncBaselineEntry(hash: "older", seq: 41), "a merge learned nothing about it: the entry stays")
 
-        XCTAssertEqual(entry(onlyLocal), SyncBaselineEntry(hash: hash(onlyLocal), seq: 41), "local hash, the seq already known")
+        replay(calendar: [onlyLocal], snapshot: snapshot, strategy: .cloudOverwritesLocal)
+        XCTAssertEqual(entry(onlyLocal), SyncBaselineEntry(hash: hash(onlyLocal), seq: 41), "an overwrite: local hash, the seq already known")
     }
 
     func testSettingsKeptLocalReadDirtyAndArePatchedOnTheCloudSeq() async throws {
@@ -138,9 +141,12 @@ final class SyncRestoreBaselineTests: XCTestCase {
         XCTAssertEqual(server.requests.count, before)
     }
 
-    func testWithoutAnySnapshotTheReplayIsTheLocalState() {
+    func testWithoutAnySnapshotAMergeRecordsNothingAndAnOverwriteTakesTheLocalState() {
         let e = makeEvent("no fetch")
         replay(calendar: [e])
+        XCTAssertNil(entry(e), "a merge with nothing from the cloud records nothing as uploaded")
+
+        replay(calendar: [e], strategy: .cloudOverwritesLocal)
         XCTAssertEqual(entry(e), SyncBaselineEntry(hash: hash(e), seq: nil))
     }
 }

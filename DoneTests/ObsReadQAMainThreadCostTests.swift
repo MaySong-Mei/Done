@@ -291,7 +291,8 @@ final class ObsReadQAMainThreadCostTests: XCTestCase {
         let pool = median(9, poolRead)
         SpikeProbe.emit(.counter(FixWatchSignalID.meComputedVisible))
         XCTAssertNotNil(made.unwrittenDailyRecord(), "rig: the row has an unwritten day to fold")
-        let rowNew = median { _ = FixWatchAttention.needsAttention(location: self.location) }
+        let statisticsOff = StatisticsOffDefaults.make()
+        let rowNew = median { _ = FixWatchAttention.needsAttention(location: self.location, defaults: statisticsOff) }
         report("Settings appear, 3111ef1: flush (append)", flush)
         report("Settings appear, 3111ef1: + its first flush's revision lookup", revisionOld)
         report("Settings appear, 3111ef1: row read (daily + windows, evaluate)", rowRead)

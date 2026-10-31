@@ -1358,3 +1358,63 @@ final class TelemetryStatusLineTests: XCTestCase {
         XCTAssertNil(TelemetrySettingsCopy.quarantinedLine(count: 0, language: .english))
     }
 }
+
+// MARK: - Independent QA: the TestFlight default and the 观察站 dot (qa/restore-wait-and-obs-dot)
+
+/// The user's phone runs the TestFlight build: the dot is quiet there only
+/// if the TestFlight default writes the very switch the row reads. These
+/// tests drive the real default/withdraw/flip paths and then ask the row,
+/// against the same defaults — every registry entry is overdue by 2100, so
+/// a lit row is the positive control in each.
+@MainActor
+final class TelemetryDefaultSilencesObservatoryDotQATests: XCTestCase {
+    private var rig: ObservatoryRig!
+    private let later = Calendar.current.date(from: DateComponents(year: 2100, month: 1, day: 1, hour: 12))!
+
+    override func setUp() {
+        super.setUp()
+        rig = ObservatoryRig()
+    }
+
+    override func tearDown() {
+        rig.tearDown()
+        rig = nil
+        super.tearDown()
+    }
+
+    private var rowLit: Bool {
+        FixWatchAttention.needsAttention(now: later, location: rig.location, defaults: rig.defaults)
+    }
+
+    func testATestFlightInstallTheUserHasNotRuledOnShowsNoDot() async {
+        XCTAssertTrue(rowLit, "positive control: before StoreKit answers, the switch is unset and the row is lit")
+        let on = await rig.uploader(isTestFlight: true).applyTestFlightDefaultIfNeeded()
+        XCTAssertTrue(on, "fixture: the TestFlight default switched uploads on")
+        XCTAssertFalse(rowLit, "TestFlight, default on: no dot")
+    }
+
+    func testAnAppStoreInstallKeepsTheDot() async {
+        let on = await rig.uploader(isTestFlight: false).applyTestFlightDefaultIfNeeded()
+        XCTAssertFalse(on)
+        XCTAssertTrue(rowLit, "App Store, never switched on: the dot as before")
+    }
+
+    func testTurningStatisticsOffOnTestFlightBringsTheDotBackAndANewVersionDoesNotHideItAgain() async {
+        let first = rig.uploader(isTestFlight: true)
+        _ = await first.applyTestFlightDefaultIfNeeded()
+        XCTAssertFalse(rowLit, "positive control: defaulted on, quiet")
+        // The 观察站 toggle's binding: write, then the edge.
+        rig.defaults.set(false, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        TelemetrySwitchEdge.apply(from: true, to: false, defaults: rig.defaults, now: rig.clock, uploader: first)
+        XCTAssertTrue(rowLit, "the user turned statistics off: the dot is back")
+        _ = await rig.uploader(isTestFlight: true).applyTestFlightDefaultIfNeeded()
+        XCTAssertTrue(rowLit, "a later TestFlight launch never re-silences a user who turned it off")
+    }
+
+    func testADefaultedInstallMovedToTheAppStoreGetsTheDotBack() async {
+        _ = await rig.uploader(isTestFlight: true).applyTestFlightDefaultIfNeeded()
+        XCTAssertFalse(rowLit, "positive control: defaulted on, quiet")
+        _ = await rig.uploader(isTestFlight: false).applyTestFlightDefaultIfNeeded()
+        XCTAssertTrue(rowLit, "the App Store build withdraws the default: the dot as before")
+    }
+}

@@ -597,7 +597,7 @@ final class ObsReadQASettingsRowTests: XCTestCase {
     private func newRow(file: StaticString = #filePath, line: UInt = #line) -> Bool {
         let before = directorySnapshot()
         let triggersBefore = triggers.count
-        let lit = FixWatchAttention.needsAttention(now: rowNow, location: location)
+        let lit = FixWatchAttention.needsAttention(now: rowNow, location: location, defaults: StatisticsOffDefaults.make())
         XCTAssertEqual(directorySnapshot(), before, "the row wrote", file: file, line: line)
         XCTAssertEqual(triggers.count, triggersBefore, "the row triggered an upload", file: file, line: line)
         return lit
@@ -788,8 +788,19 @@ final class ObsReadQASettingsRowTests: XCTestCase {
         qaVisible(3)
         qaHidden(1)
 
+        // The row reads the switch the uploader reads: on, so it reads nothing.
         for _ in 0..<3 {                      // an appear and two pop-backs
-            _ = FixWatchAttention.needsAttention(location: location)
+            let reads = SpikeRunStore.wholeFileReads
+            XCTAssertFalse(FixWatchAttention.needsAttention(location: location, defaults: defaults), "uploads on: no dot")
+            XCTAssertEqual(SpikeRunStore.wholeFileReads, reads, "uploads on: the row read nothing")
+            await uploader.drain()
+        }
+        // The read path itself (the row with statistics off) still writes and sends nothing.
+        let statisticsOff = StatisticsOffDefaults.make()
+        for _ in 0..<3 {
+            let reads = SpikeRunStore.wholeFileReads
+            _ = FixWatchAttention.needsAttention(location: location, defaults: statisticsOff)
+            XCTAssertGreaterThan(SpikeRunStore.wholeFileReads, reads, "positive control: with statistics off the row read")
             await uploader.drain()
         }
         XCTAssertEqual(server.requests(.telemetryUpsert).count, 0, "Settings sent nothing")

@@ -4458,14 +4458,17 @@ final class EventStore: ObservableObject {
     ///
     /// For `strategy == .merge` the `resolution` decides ID collisions
     /// uniformly across all tables. `perRowDecisions` overrides that on a
-    /// per-row basis (per-row review path). For `.cloudOverwritesLocal` both
-    /// `resolution` and `perRowDecisions` are ignored — the cloud snapshot
-    /// fully replaces local state.
+    /// per-row basis (per-row review path). A cloud row in `pendingDeletes`
+    /// — one this device deleted and has not sent the delete for — is not
+    /// added back. For `.cloudOverwritesLocal` `resolution`,
+    /// `perRowDecisions` and `pendingDeletes` are all ignored — the cloud
+    /// snapshot fully replaces local state.
     func applyRestore(
         _ snapshot: RestoreSnapshot,
         strategy: RestoreStrategy,
         resolution: ConflictResolution,
-        perRowDecisions: PerRowDecisions? = nil
+        perRowDecisions: PerRowDecisions? = nil,
+        pendingDeletes: RestorePendingDeletes = .none
     ) -> RestoreApplySummary {
         var summary = RestoreApplySummary()
 
@@ -4490,27 +4493,32 @@ final class EventStore: ObservableObject {
             summary.addedTodoEvents = mergeByID(
                 local: &events, cloud: snapshot.todoEvents,
                 id: \.id, resolution: resolution,
-                perRowDecisions: perRowDecisions?.todoEvents
+                perRowDecisions: perRowDecisions?.todoEvents,
+                pendingDeletes: pendingDeletes.todoEvents
             )
             summary.addedCalendarEvents = mergeByID(
                 local: &rawCalendarEvents, cloud: snapshot.calendarEvents,
                 id: \.id, resolution: resolution,
-                perRowDecisions: perRowDecisions?.calendarEvents
+                perRowDecisions: perRowDecisions?.calendarEvents,
+                pendingDeletes: pendingDeletes.calendarEvents
             )
             summary.addedLogs = mergeByID(
                 local: &calendarEventLogRecords, cloud: snapshot.logs,
                 id: \.id, resolution: resolution,
-                perRowDecisions: perRowDecisions?.logs
+                perRowDecisions: perRowDecisions?.logs,
+                pendingDeletes: pendingDeletes.logs
             )
             summary.addedFeedback = mergeByID(
                 local: &calendarEventFeedbackRecords, cloud: snapshot.feedback,
                 id: \.id, resolution: resolution,
-                perRowDecisions: perRowDecisions?.feedback
+                perRowDecisions: perRowDecisions?.feedback,
+                pendingDeletes: pendingDeletes.feedback
             )
             summary.addedLists = mergeByID(
                 local: &todoLists, cloud: snapshot.todoLists,
                 id: \.id, resolution: resolution,
-                perRowDecisions: perRowDecisions?.todoLists
+                perRowDecisions: perRowDecisions?.todoLists,
+                pendingDeletes: pendingDeletes.todoLists
             )
         }
 
@@ -4729,7 +4737,9 @@ final class EventStore: ObservableObject {
     }
 
     /// Mutates `local` to be the merged result. Cloud rows whose ID is new are
-    /// always appended (returned in `addedCount`). Collisions are resolved
+    /// appended (returned in `addedCount`) unless the ID is in
+    /// `pendingDeletes`: a row deleted here whose delete has not reached the
+    /// cloud stays deleted. Collisions are resolved
     /// first via `perRowDecisions[id]` if present, then via `resolution`.
     /// `.keepLocal` leaves the local row alone, `.keepCloud` replaces it in
     /// place. Order of existing local rows is preserved.
@@ -4738,7 +4748,8 @@ final class EventStore: ObservableObject {
         cloud: [T],
         id: KeyPath<T, ID>,
         resolution: ConflictResolution,
-        perRowDecisions: [ID: ConflictResolution]? = nil
+        perRowDecisions: [ID: ConflictResolution]? = nil,
+        pendingDeletes: Set<ID> = []
     ) -> Int {
         // `CalendarOccurrenceKey.==` for `.singleEvent` only compares the
         // eventID, so two log/feedback records pointing at the same single
@@ -4758,7 +4769,7 @@ final class EventStore: ObservableObject {
                 if effective == .keepCloud {
                     local[idx] = c
                 }
-            } else {
+            } else if !pendingDeletes.contains(cid) {
                 local.append(c)
                 added += 1
             }

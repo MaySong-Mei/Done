@@ -193,8 +193,15 @@ struct RestoreSheet: View {
                     }
                     .font(.caption)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
+                } else if preview.addsFromCloud.totalCount > 0 || preview.keepsLocalOnly.totalCount > 0 {
+                    // A merge whose only effect is keeping deletes is
+                    // described by the line below alone.
                     Text("No content conflicts. Cloud-only rows will be added; your local-only rows stay untouched.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if preview.keptDeleted.totalCount > 0 {
+                    Text(LCount(.restoreKeptDeletesFormat, one: .restoreKeptDeletesOne, preview.keptDeleted.totalCount))
                         .font(.caption).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -204,31 +211,38 @@ struct RestoreSheet: View {
                 previewRow("Calendar events",
                            add: preview.addsFromCloud.calendarEvents,
                            keep: preview.keepsLocalOnly.calendarEvents,
-                           conflicts: preview.conflicts.calendarEvents.count)
+                           conflicts: preview.conflicts.calendarEvents.count,
+                           keptDeleted: preview.keptDeleted.calendarEvents)
                 previewRow("Todo items",
                            add: preview.addsFromCloud.todoEvents,
                            keep: preview.keepsLocalOnly.todoEvents,
-                           conflicts: preview.conflicts.todoEvents.count)
+                           conflicts: preview.conflicts.todoEvents.count,
+                           keptDeleted: preview.keptDeleted.todoEvents)
                 previewRow("Activity logs",
                            add: preview.addsFromCloud.logs,
                            keep: preview.keepsLocalOnly.logs,
-                           conflicts: preview.conflicts.logs.count)
+                           conflicts: preview.conflicts.logs.count,
+                           keptDeleted: preview.keptDeleted.logs)
                 previewRow("Feedback records",
                            add: preview.addsFromCloud.feedback,
                            keep: preview.keepsLocalOnly.feedback,
-                           conflicts: preview.conflicts.feedback.count)
+                           conflicts: preview.conflicts.feedback.count,
+                           keptDeleted: preview.keptDeleted.feedback)
                 previewRow("Lists",
                            add: preview.addsFromCloud.todoLists,
                            keep: preview.keepsLocalOnly.todoLists,
-                           conflicts: preview.conflicts.todoLists.count)
+                           conflicts: preview.conflicts.todoLists.count,
+                           keptDeleted: preview.keptDeleted.todoLists)
                 previewRow("Event types",
                            add: preview.addsFromCloud.eventTypes,
                            keep: preview.keepsLocalOnly.eventTypes,
-                           conflicts: preview.conflicts.eventTypes.count)
+                           conflicts: preview.conflicts.eventTypes.count,
+                           keptDeleted: preview.keptDeleted.eventTypes)
                 previewRow("Skill insights",
                            add: preview.addsFromCloud.skills,
                            keep: preview.keepsLocalOnly.skills,
-                           conflicts: preview.conflicts.skills.count)
+                           conflicts: preview.conflicts.skills.count,
+                           keptDeleted: preview.keptDeleted.skills)
             }
 
             if hasConflicts {
@@ -284,11 +298,11 @@ struct RestoreSheet: View {
         }
     }
 
-    /// One row showing the three numbers for a table. Shows a check mark if
-    /// all three are zero so the user can quickly scan for "nothing happens here".
+    /// One row showing a table's numbers. Shows a check mark if all are zero
+    /// so the user can quickly scan for "nothing happens here".
     @ViewBuilder
-    private func previewRow(_ title: String, add: Int, keep: Int, conflicts: Int) -> some View {
-        if add == 0 && keep == 0 && conflicts == 0 {
+    private func previewRow(_ title: String, add: Int, keep: Int, conflicts: Int, keptDeleted: Int) -> some View {
+        if add == 0 && keep == 0 && conflicts == 0 && keptDeleted == 0 {
             HStack {
                 Image(systemName: "checkmark.circle")
                     .foregroundStyle(.secondary)
@@ -313,6 +327,7 @@ struct RestoreSheet: View {
                 HStack(spacing: 12) {
                     if add > 0 { tag("+\(add) add", color: .blue) }
                     if keep > 0 { tag("\(keep) keep", color: .secondary) }
+                    if keptDeleted > 0 { tag(String(format: L(.restoreKeptDeletedTag), keptDeleted), color: .secondary) }
                     if conflicts > 0 { tag("\(conflicts) conflict", color: .orange) }
                 }
                 .font(.caption)

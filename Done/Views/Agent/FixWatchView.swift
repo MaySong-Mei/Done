@@ -383,12 +383,15 @@ struct FixWatchView: View {
 /// The alarm must be visible WITHOUT opening 观察站 — a tripwire whose
 /// firing can only be seen by navigating to the page it lives on is easy
 /// to miss, which defeats it. The settings ROW shows an indicator whenever
-/// any entry has a firing alarm or is past its review date. That indicator
-/// reads THIS device's records only (`loadRowVerdicts`); the deck, once a
-/// cloud read succeeds, shows this account's records merged across devices
-/// (`loadObservatory`). The two can therefore disagree — ruled acceptable,
-/// behaviour unchanged (§16 decision ③). Nothing here holds new state:
-/// every call is a passive re-read.
+/// any entry has a firing alarm or is past its review date — unless
+/// statistics uploads are on: the records then go to the cloud and are
+/// analysed there, so the row stays quiet and reads nothing (user decision
+/// 2026-10-30). That indicator reads THIS device's records only
+/// (`loadRowVerdicts`); the deck, once a cloud read succeeds, shows this
+/// account's records merged across devices (`loadObservatory`). The two
+/// can therefore disagree — ruled acceptable, behaviour unchanged (§16
+/// decision ③). Nothing here holds new state: every call is a passive
+/// re-read.
 enum FixWatchAttention {
     /// The settings row's read: this device's records, with the live
     /// resident's unwritten day (if any) folded over them the way collapse
@@ -508,13 +511,29 @@ enum FixWatchAttention {
         return FollowerReport.summarize(windows: windows, today: todays)
     }
 
-    /// The settings row's indicator: this device's records only — the deck
-    /// may read otherwise once it has merged the cloud (§16 decision ③). A
-    /// read: it writes nothing and triggers no upload.
+    /// The settings row's indicator. With statistics uploads on — the
+    /// stored switch the uploader gates its batches on — it is off and
+    /// nothing is read: the records are analysed from the cloud. With them
+    /// off: this device's records only — the deck may read otherwise once
+    /// it has merged the cloud (§16 decision ③). A read: it writes nothing
+    /// and triggers no upload.
     @MainActor
-    static func needsAttention(now: Date = Date(), location: SpikeRunStorageLocation = .production) -> Bool {
-        needsAttention(verdicts: loadRowVerdicts(currentSegment: .thisDevice(), location: location),
+    static func needsAttention(
+        now: Date = Date(), location: SpikeRunStorageLocation = .production, defaults: UserDefaults = .standard
+    ) -> Bool {
+        needsAttention(uploadsEnabled: defaults.bool(forKey: AppSettingsKeys.telemetryUploadsEnabled),
+                       verdicts: { loadRowVerdicts(currentSegment: .thisDevice(), location: location) },
                        entries: FixObservationRegistry.all, now: now)
+    }
+
+    /// The uploads gate, with the records read handed in so a test can see
+    /// it is skipped, not merely outvoted.
+    @MainActor
+    static func needsAttention(
+        uploadsEnabled: Bool, verdicts: () -> [FixVerdict], entries: [FixObservationEntry], now: Date
+    ) -> Bool {
+        guard !uploadsEnabled else { return false }
+        return needsAttention(verdicts: verdicts(), entries: entries, now: now)
     }
 
     /// Pure half, pinned by fixture: any firing alarm, or any entry past
