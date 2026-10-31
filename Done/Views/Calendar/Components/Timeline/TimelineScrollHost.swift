@@ -7,8 +7,8 @@
 //  `calendarUseUIScrollViewTimeline` flag is ON, `CalendarPageView`'s
 //  `timelineScroll(...)` produces this host instead of the SwiftUI tree, and
 //  band-collapse co-commits `contentSize` + `contentOffset` in a single
-//  `CATransaction` so the user-visible 1-frame mismatch (covered today by
-//  `timelineCollapseDim`) goes away.
+//  `CATransaction` so the user-visible 1-frame mismatch goes away. (The
+//  SwiftUI path now gets the same from `BoundaryBandOffsetKeeper`, gh#279.)
 //
 //  Architecture (the Plan agent's Path A):
 //    - `UIScrollView` (vertical) wraps a `UIHostingController` whose view
@@ -282,9 +282,7 @@ final class TimelineScrollProxy: ObservableObject {
     var contentSize: CGSize { scrollView?.contentSize ?? .zero }
 
     /// True once the host's `makeUIView` has installed the height constraint
-    /// — i.e. `coCommit(...)` will reach the UIScrollView. Used by
-    /// `applyCloseBandStateAtomicCoCommit`'s proxy-not-wired fallback
-    /// (deep-review C6).
+    /// — i.e. `coCommit(...)` will reach the UIScrollView.
     var isInstalled: Bool { contentHeightConstraint != nil }
 
     // MARK: Cold-start scroll-to-now

@@ -643,10 +643,14 @@ func calendarResolvedDragAnchorDate(
     dragOffset: DragOffset,
     dragMode: EventDragMode,
     dayColumnStep: CGFloat = 0,
+    renderDayStart: Date? = nil,
     calendar: Calendar = .current
 ) -> Date? {
     guard let draggingOriginalRange else { return nil }
-    let sourceDay = calendar.startOfDay(for: draggingOriginalRange.start)
+    // The column the drag began in. An event that started the day before
+    // is dragged in today's column, and its band above is today's, not the
+    // day it starts on. (gh#279)
+    let sourceDay = calendar.startOfDay(for: renderDayStart ?? draggingOriginalRange.start)
 
     guard dragMode == .move, dayColumnStep > 0 else {
         return sourceDay
@@ -790,6 +794,7 @@ func calendarResolvedDragEditMapping(
     dragMode: EventDragMode,
     dayColumnStep: CGFloat,
     hourHeight: CGFloat,
+    renderDayStart: Date? = nil,
     calendar: Calendar = .current
 ) -> (source: TimelineEditMappingSource, date: Date, range: Event.TimeRange)? {
     guard draggingEventID != nil else { return nil }
@@ -835,13 +840,14 @@ func calendarResolvedDragEditMapping(
     // Y aligns with the vertical-only range (no day shift mismatch).
     let anchorDate: Date
     if source == .moveDrag, let originalRange = draggingOriginalRange {
-        anchorDate = calendar.startOfDay(for: originalRange.start)
+        anchorDate = calendar.startOfDay(for: renderDayStart ?? originalRange.start)
     } else {
         anchorDate = calendarResolvedDragAnchorDate(
             draggingOriginalRange: draggingOriginalRange,
             dragOffset: dragOffset,
             dragMode: dragMode,
             dayColumnStep: dayColumnStep,
+            renderDayStart: renderDayStart,
             calendar: calendar
         ) ?? effectiveRange.start
     }

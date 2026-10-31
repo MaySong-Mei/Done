@@ -557,6 +557,11 @@ final class DayLayerHostView: UIView {
                 text.isWrapped = true
                 text.truncationMode = .end
                 text.alignmentMode = .left
+                // The redraw after a string change lands at the run loop's
+                // commit, outside `render`'s disabled actions, so a subtree
+                // recycled from another block faded its old title into the
+                // new one. (gh#279)
+                text.actions = ["contents": NSNull()]
             }
         }
 
@@ -572,6 +577,9 @@ final class DayLayerHostView: UIView {
         func resetAnimationState() {
             pulseSettleWork?.cancel()
             pulseSettleWork = nil
+            container.sublayers?
+                .filter { $0.name == DayLayerHostView.bandSplitVeilName }
+                .forEach { $0.removeFromSuperlayer() }
             container.removeAllAnimations()
             maskedContent.removeAllAnimations()
             border.removeAllAnimations()
@@ -611,6 +619,32 @@ final class DayLayerHostView: UIView {
 
     private var pool: [String: EventLayers] = [:]
     private var currentModel: Model?
+    /// Band hours above today at the last full render. A band opening or
+    /// closing there moves the y of every time by its height while the
+    /// scroll offset moves with it, so the screen stays still; the reflow
+    /// spring's remembered positions have to move the same way. (gh#279)
+    private var lastRenderedLeadingHours: Int?
+    /// The day the user has scrolled with a band open. A block showing its
+    /// handles (just dropped, or focused) waits for that scroll to split;
+    /// the scroll cancels its handles, but the model says so only once the
+    /// scroll stops. Cleared by a drag or the band closing. (gh#279)
+    private var bandPiecesDay: Date?
+    /// Occurrences the last full render drew in pieces, so the render that
+    /// starts drawing one in pieces can dissolve into the split.
+    private var bandSplitIDsLastRender: Set<String> = []
+    /// Whether the last full render had nothing being edited. A block that
+    /// splits on the render a drop lands in was last drawn mid-drag (another
+    /// column, dimmed), so there is no settled whole block to fade from.
+    private var bandPiecesAllowedLastRender = false
+    /// Blocks kept whole on the last full render because their column was
+    /// still moving; scroll culls and zoom repaints keep them whole too.
+    private var bandSplitDeferredIDs: Set<String> = []
+    private var bandSplitRetry: DispatchWorkItem?
+    private static let bandSplitVeilName = "bandSplitVeil"
+    /// About as long as the column glide (`applyInteractionState`'s reflow
+    /// spring) takes to settle.
+    private static let bandSplitRetryDelay: TimeInterval =
+        calendarCASpring(keyPath: "position", response: 0.25, dampingFraction: 0.85).settlingDuration + 0.05
 
     /// Blocks whose event was just deleted, detached from `pool` and left in
     /// the layer tree until their delete motion plays (`EventDeletionMotion`).
@@ -893,6 +927,7 @@ final class DayLayerHostView: UIView {
         // (which the pager/pinch coordinator may own) nor a display link, and
         // KVO callbacks land on the main thread for a main-thread scroll view.
         scrollOffsetObservation = sv.observe(\.contentOffset, options: [.new]) { [weak self] _, _ in
+            self?.splitBandPiecesOnceUserScrolls()
             self?.cullViewportIfChanged()
             // Window-frame moves with content offset; the header's
             // touch-driven date calc reads it to convert finger.y → canvas-y.
@@ -1647,11 +1682,47 @@ final class DayLayerHostView: UIView {
     // MARK: Render (static)
 
     private func render(_ model: Model) {
+        #if DEBUG
+        // Anything in here that lays out the hierarchy (`render(in:)` does)
+        // can re-enter through SwiftUI's update and recurse until the stack
+        // runs out. (gh#279)
+        debugRenderDepth += 1
+        debugMaxRenderDepth = max(debugMaxRenderDepth, debugRenderDepth)
+        if debugRenderDepth > 1 {
+            calendarDebugLog("dayLayer.render.reentered", fields: ["depth": "\(debugRenderDepth)"])
+        }
+        defer { debugRenderDepth -= 1 }
+        #endif
         // No implicit animations for the static S1 path: layer frame / path
         // changes must be instantaneous (animations are slice S5).
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
+
+        // A band above today opened or closed: carry each block's reflow
+        // origin into the new coordinates, or a block that also re-columns
+        // springs in from 12 h away. A spring already running was built in
+        // the old coordinates; it ends here and the block takes its frame.
+        if let lastLeading = lastRenderedLeadingHours, lastLeading != model.leadingExtendedHours {
+            let shift = CGFloat(model.leadingExtendedHours - lastLeading) * model.hourHeight
+            for layers in pool.values {
+                if layers.lastBlockY.isFinite { layers.lastBlockY += shift }
+                layers.container.removeAnimation(forKey: "s5.reflow.position")
+                layers.container.removeAnimation(forKey: "s5.reflow.bounds")
+                layers.container.removeAnimation(forKey: "resizeTween.position")
+                layers.container.removeAnimation(forKey: "resizeTween.bounds")
+            }
+
+        }
+        lastRenderedLeadingHours = model.leadingExtendedHours
+
+        if !bandPiecesAllowed(model) { bandPiecesDay = nil }
+        let piecesActive = bandPiecesAllowed(model)
+        let settledBefore = bandPiecesAllowedLastRender
+        bandPiecesAllowedLastRender = piecesActive
+        bandSplitDeferredIDs = []
+        var splitIDs = Set<String>()
+        var dissolvedSplits = 0
 
         // Horizontal placement comes from `CalendarLayout.overlapLayout`:
         // greedy column packing, with the committed (`.auto`) render allowed
@@ -2071,29 +2142,113 @@ final class DayLayerHostView: UIView {
             // per-frame configure cost ∝ visible-N, not total-N.
             let mustKeep = occurrence.id == manipulatedID
                 || occurrence.id == synthesizedPreview?.id
-            guard mustKeep || isWithinViewport(frame, visibleRect: visibleRect) else {
-                continue
+            var pieces = blockPieces(of: occurrence, model: model, active: piecesActive)
+            // A block on its way to another column splits once it gets
+            // there. Split mid-glide, today's piece would ride the glide set
+            // up for the whole block, behind the band piece, and the new band
+            // piece wouldn't glide with it.
+            if pieces.count > 1,
+               !bandSplitIDsLastRender.contains(occurrence.id),
+               let current = pool[occurrence.id],
+               current.container.animation(forKey: "s5.reflow.position") != nil
+                || (current.lastBlockX.isFinite
+                    && (abs(current.lastBlockX - frame.minX) > 0.5 || abs(current.lastBlockW - frame.width) > 0.5)) {
+                pieces = [BlockPiece(key: occurrence.id, window: nil)]
+                bandSplitDeferredIDs.insert(occurrence.id)
             }
+            if pieces.count > 1 { splitIDs.insert(occurrence.id) }
+            // Only a block already on screen whole dissolves into its pieces.
+            var dissolves = false
+            if pieces.count > 1,
+               settledBefore,
+               !bandSplitIDsLastRender.contains(occurrence.id),
+               let wholeLayers = pool[occurrence.id],
+               isWithinViewport(frame, visibleRect: visibleRect),
+               let todayWindow = pieces[0].window {
+                // The upper line the block crosses.
+                let line = todayWindow.lowerBound != .distantPast ? todayWindow.lowerBound : todayWindow.upperBound
+                let lineY = model.headerHeight + calendarTimelineYFraction(
+                    for: line,
+                    containing: model.date,
+                    leadingExtendedHours: model.leadingExtendedHours,
+                    trailingExtendedHours: model.trailingExtendedHours
+                ) * contentHeight
+                dissolves = dissolvesIntoPieces(wholeLayers, wholeFrame: frame, lineY: lineY)
+                if dissolves { dissolvedSplits += 1 }
+            }
+            for piece in pieces {
+                let pieceFrame = self.frame(
+                    of: piece, occurrence: occurrence, whole: frame, model: model,
+                    contentHeight: contentHeight, visibleStart: visibleStart, visibleEnd: visibleEnd
+                )
+                guard mustKeep || isWithinViewport(pieceFrame, visibleRect: visibleRect) else {
+                    continue
+                }
 
-            liveIDs.insert(occurrence.id)
-            let layers = acquireLayers(for: occurrence.id)
+                liveIDs.insert(piece.key)
+                let layers = acquireLayers(for: piece.key)
+                let span = visibleSpan(of: piece, visibleStart: visibleStart, visibleEnd: visibleEnd)
+                // Splitting or joining changes the block's height on this
+                // render. When its column changes on the same render, as a
+                // drop beside it does, the reflow spring would carry it from
+                // the whole block's middle and park today's piece behind the
+                // band piece until it settles; keep that spring sideways.
+                if (pieces.count > 1) != bandSplitIDsLastRender.contains(occurrence.id) {
+                    layers.lastBlockY = pieceFrame.minY
+                    layers.lastBlockH = pieceFrame.height
+                }
+                configure(
+                    layers,
+                    frame: pieceFrame,
+                    occurrence: occurrence,
+                    model: model,
+                    slot: slot,
+                    isEmbeddedChild: isEmbeddedChild,
+                    interrupt: interrupt,
+                    visibleStart: span.start,
+                    visibleEnd: span.end,
+                    stackPeekStripWidth: stackPeekStripWidthPt
+                )
+                applyInteractionState(
+                    layers, occurrence: occurrence, frame: pieceFrame, model: model,
+                    hidesTopHandle: piece.hidesTopHandle, hidesBottomHandle: piece.hidesBottomHandle
+                )
 
-            configure(
-                layers,
-                frame: frame,
-                occurrence: occurrence,
-                model: model,
-                slot: slot,
-                isEmbeddedChild: isEmbeddedChild,
-                interrupt: interrupt,
-                visibleStart: visibleStart,
-                visibleEnd: visibleEnd,
-                stackPeekStripWidth: stackPeekStripWidthPt
-            )
-            applyInteractionState(layers, occurrence: occurrence, frame: frame, model: model)
-
-            layers.container.zPosition = zPosition
+                layers.container.zPosition = zPosition
+                if dissolves, let window = piece.window {
+                    veil(
+                        layers, pieceFrame: pieceFrame, window: window, wholeFrame: frame,
+                        occurrence: occurrence, model: model, slot: slot,
+                        isEmbeddedChild: isEmbeddedChild, interrupt: interrupt,
+                        visibleStart: visibleStart, visibleEnd: visibleEnd,
+                        stackPeekStripWidth: stackPeekStripWidthPt, contentHeight: contentHeight
+                    )
+                }
+            }
         }
+        if !bandSplitDeferredIDs.isEmpty, bandSplitRetry == nil {
+            let retry = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.bandSplitRetry = nil
+                guard let model = self.currentModel else { return }
+                self.render(model)
+            }
+            bandSplitRetry = retry
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.bandSplitRetryDelay, execute: retry)
+        }
+        if splitIDs != bandSplitIDsLastRender || !bandSplitDeferredIDs.isEmpty {
+            calendarDebugLog("band.pieces", fields: [
+                "deferred": "\(bandSplitDeferredIDs.count)",
+                "split": "\(splitIDs.count)",
+                "newlySplit": "\(splitIDs.subtracting(bandSplitIDsLastRender).count)",
+                "joined": "\(bandSplitIDsLastRender.subtracting(splitIDs).count)",
+                "dissolved": "\(dissolvedSplits)",
+                "leading": "\(model.leadingExtendedHours)",
+                "trailing": "\(model.trailingExtendedHours)",
+                "userScrolled": "\(bandPiecesDay == model.date)"
+            ])
+        }
+        bandSplitIDsLastRender = splitIDs
 
         // ── Sibling-paint branch (#53 sub-bug A) ─────────────────────────
         // Cross-midnight: a sibling host (no local active session, but a
@@ -2673,6 +2828,7 @@ final class DayLayerHostView: UIView {
         }
         lastCullVisibleRect = visibleRect
         let manipulatedID = gestureController.activeEventSession?.occurrenceID
+        let piecesActive = bandPiecesAllowed(model)
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -2730,19 +2886,29 @@ final class DayLayerHostView: UIView {
                     slot: placement.slot, isEmbeddedChild: placement.isEmbeddedChild
                 )
                 let mustKeep = id == manipulatedID
-                guard mustKeep || isWithinViewport(frame, visibleRect: visibleRect) else { return }
-                liveIDs.insert(id)
-                let alreadyLive = pool[id] != nil
-                let layers = acquireLayers(for: id)
-                if !alreadyLive {
-                    configure(
-                        layers, frame: frame, occurrence: live, model: model,
-                        slot: placement.slot, isEmbeddedChild: placement.isEmbeddedChild,
-                        interrupt: interrupt, visibleStart: visibleStart, visibleEnd: visibleEnd,
-                        stackPeekStripWidth: cachedStackPeekStripWidth
+                for piece in blockPieces(of: live, model: model, active: piecesActive) {
+                    let pieceFrame = self.frame(
+                        of: piece, occurrence: live, whole: frame, model: model,
+                        contentHeight: contentHeight, visibleStart: visibleStart, visibleEnd: visibleEnd
                     )
-                    applyInteractionState(layers, occurrence: live, frame: frame, model: model)
-                    layers.container.zPosition = placement.zPosition
+                    guard mustKeep || isWithinViewport(pieceFrame, visibleRect: visibleRect) else { continue }
+                    liveIDs.insert(piece.key)
+                    let alreadyLive = pool[piece.key] != nil
+                    let layers = acquireLayers(for: piece.key)
+                    if !alreadyLive {
+                        let span = visibleSpan(of: piece, visibleStart: visibleStart, visibleEnd: visibleEnd)
+                        configure(
+                            layers, frame: pieceFrame, occurrence: live, model: model,
+                            slot: placement.slot, isEmbeddedChild: placement.isEmbeddedChild,
+                            interrupt: interrupt, visibleStart: span.start, visibleEnd: span.end,
+                            stackPeekStripWidth: cachedStackPeekStripWidth
+                        )
+                        applyInteractionState(
+                            layers, occurrence: live, frame: pieceFrame, model: model,
+                            hidesTopHandle: piece.hidesTopHandle, hidesBottomHandle: piece.hidesBottomHandle
+                        )
+                        layers.container.zPosition = placement.zPosition
+                    }
                 }
             }
             #if DEBUG
@@ -2773,19 +2939,29 @@ final class DayLayerHostView: UIView {
                     slot: placement.slot, isEmbeddedChild: placement.isEmbeddedChild
                 )
                 let mustKeep = occurrence.id == manipulatedID
-                guard mustKeep || isWithinViewport(frame, visibleRect: visibleRect) else { continue }
-                liveIDs.insert(occurrence.id)
-                let alreadyLive = pool[occurrence.id] != nil
-                let layers = acquireLayers(for: occurrence.id)
-                if !alreadyLive {
-                    configure(
-                        layers, frame: frame, occurrence: live, model: model,
-                        slot: placement.slot, isEmbeddedChild: placement.isEmbeddedChild,
-                        interrupt: interrupt, visibleStart: visibleStart, visibleEnd: visibleEnd,
-                        stackPeekStripWidth: cachedStackPeekStripWidth
+                for piece in blockPieces(of: live, model: model, active: piecesActive) {
+                    let pieceFrame = self.frame(
+                        of: piece, occurrence: live, whole: frame, model: model,
+                        contentHeight: contentHeight, visibleStart: visibleStart, visibleEnd: visibleEnd
                     )
-                    applyInteractionState(layers, occurrence: live, frame: frame, model: model)
-                    layers.container.zPosition = placement.zPosition
+                    guard mustKeep || isWithinViewport(pieceFrame, visibleRect: visibleRect) else { continue }
+                    liveIDs.insert(piece.key)
+                    let alreadyLive = pool[piece.key] != nil
+                    let layers = acquireLayers(for: piece.key)
+                    if !alreadyLive {
+                        let span = visibleSpan(of: piece, visibleStart: visibleStart, visibleEnd: visibleEnd)
+                        configure(
+                            layers, frame: pieceFrame, occurrence: live, model: model,
+                            slot: placement.slot, isEmbeddedChild: placement.isEmbeddedChild,
+                            interrupt: interrupt, visibleStart: span.start, visibleEnd: span.end,
+                            stackPeekStripWidth: cachedStackPeekStripWidth
+                        )
+                        applyInteractionState(
+                            layers, occurrence: live, frame: pieceFrame, model: model,
+                            hidesTopHandle: piece.hidesTopHandle, hidesBottomHandle: piece.hidesBottomHandle
+                        )
+                        layers.container.zPosition = placement.zPosition
+                    }
                 }
             }
         }
@@ -2824,6 +3000,261 @@ final class DayLayerHostView: UIView {
         }
     }
 
+    // MARK: Band pieces (gh#279)
+
+    /// One drawn piece of a block. A block that runs across today's 0:00 or
+    /// 24:00 into an open band is drawn as one piece per side of the line
+    /// once the user scrolls, so today's piece already looks the way the
+    /// block looks after the band closes out of view. The pieces are only
+    /// drawn apart: hit-testing and edits keep the whole occurrence.
+    private struct BlockPiece {
+        /// Layer pool key: the occurrence id for today's piece, which keeps
+        /// its layers across the band closing.
+        let key: String
+        /// The stretch of time this piece shows; nil for a block drawn whole.
+        let window: ClosedRange<Date>?
+        /// A piece's edge on the line is not the event's: no handle there.
+        var hidesTopHandle = false
+        var hidesBottomHandle = false
+    }
+
+    private static let bandPieceSplitDuration: CFTimeInterval = {
+        #if DEBUG
+        // Keyframe captures stretch the split: CALENDAR_BAND_SPLIT_SLOWMO=<factor>.
+        if let factor = ProcessInfo.processInfo.environment["CALENDAR_BAND_SPLIT_SLOWMO"].flatMap(Double.init),
+           factor > 0 {
+            return 0.3 * factor
+        }
+        #endif
+        return 0.3
+    }()
+
+    private func blockPieces(
+        of occurrence: CalendarLayout.EventOccurrence,
+        model: Model,
+        active: Bool
+    ) -> [BlockPiece] {
+        let whole = [BlockPiece(key: occurrence.id, window: nil)]
+        // The analyzing spinner's blur view is keyed by occurrence id, one
+        // per block.
+        guard active, occurrence.event.agenticIntake?.processingPhase != .analyzing else { return whole }
+        guard !bandSplitDeferredIDs.contains(occurrence.id) else { return whole }
+        let event = occurrence.event
+        let showsHandles = (model.focusedEventID == event.id
+            && (model.focusedOccurrenceID == nil || model.focusedOccurrenceID == occurrence.id))
+            || (model.graceResizeEventID == event.id
+                && (model.graceResizeOccurrenceID == nil || model.graceResizeOccurrenceID == occurrence.id))
+        guard !showsHandles || bandPiecesDay == model.date else { return whole }
+        let dayStart = Calendar.current.startOfDay(for: model.date)
+        let dayEnd = dayStart.addingTimeInterval(TimeInterval(calendarTimelineBaseVisibleHours * 3600))
+        let range = occurrence.range
+        let crossesStart = model.leadingExtendedHours > 0 && range.start < dayStart && range.end > dayStart
+        let crossesEnd = model.trailingExtendedHours > 0 && range.start < dayEnd && range.end > dayEnd
+        guard crossesStart || crossesEnd else { return whole }
+        var pieces = [BlockPiece(
+            key: occurrence.id,
+            window: (crossesStart ? dayStart : .distantPast)...(crossesEnd ? dayEnd : .distantFuture),
+            hidesTopHandle: crossesStart,
+            hidesBottomHandle: crossesEnd
+        )]
+        if crossesStart {
+            pieces.append(BlockPiece(
+                key: occurrence.id + "\u{1F}before", window: Date.distantPast...dayStart,
+                hidesBottomHandle: true
+            ))
+        }
+        if crossesEnd {
+            pieces.append(BlockPiece(
+                key: occurrence.id + "\u{1F}after", window: dayEnd...Date.distantFuture,
+                hidesTopHandle: true
+            ))
+        }
+        return pieces
+    }
+
+    /// Pieces are drawn only with a band open and nothing being edited: a
+    /// drag, a drag-create or a drop shows the block whole. Releasing splits
+    /// it, so no later scroll, close or change of day can show it cut at the
+    /// line without the user having seen it come apart.
+    private func bandPiecesAllowed(_ model: Model) -> Bool {
+        (model.leadingExtendedHours > 0 || model.trailingExtendedHours > 0)
+            && !model.isWeekMode
+            && !model.isThreeDayMode
+            && gestureController.activeEventSession == nil
+            // A drag that began in another day's column has no session here.
+            && gestureController.callbacks.dragState?.draggingEventID == nil
+            && foreignDragSession == nil
+            && dragPreviewOccurrence == nil
+            && model.creationPreviewRange == nil
+            && !model.externalDragActive
+    }
+
+    /// The first scroll the user makes with a band open also splits the
+    /// blocks still showing their handles. A scroll the app makes doesn't.
+    private func splitBandPiecesOnceUserScrolls() {
+        guard let model = currentModel, bandPiecesDay != model.date, bandPiecesAllowed(model),
+              let scrollView = observedScrollView, scrollView.isDragging || scrollView.isDecelerating
+        else { return }
+        bandPiecesDay = model.date
+        render(model)
+    }
+
+    /// Whether a block about to split fades into its pieces rather than
+    /// just splitting. Its text has to stay clear of the line: past it, the
+    /// fading copy would print over the title the lower piece fades in, as a
+    /// short block at a small zoom does.
+    private func dissolvesIntoPieces(_ layers: EventLayers, wholeFrame: CGRect, lineY: CGFloat) -> Bool {
+        guard wholeFrame.width > 0, wholeFrame.height > 0, !calendarReduceMotionEnabled else { return false }
+        let textBottom = [layers.title, layers.subtitle, layers.time]
+            .filter { !$0.isHidden && $0.string != nil }
+            .map(\.frame.maxY)
+            .max() ?? 0
+        return textBottom <= lineY - wholeFrame.minY
+    }
+
+    /// Lays a copy of the block, drawn whole, over this piece, clipped from
+    /// the line to the block's end on the piece's side, and fades it out:
+    /// the seam and the lower piece's title appear in place and nothing
+    /// slides. It sits inside the piece, so whatever was stacked on the
+    /// block stays on top. The copy is a layer tree configured like any
+    /// block; a bitmap of the block would need `render(in:)`, which lays out
+    /// the hierarchy from inside this render and re-enters it.
+    private func veil(
+        _ layers: EventLayers,
+        pieceFrame: CGRect,
+        window: ClosedRange<Date>,
+        wholeFrame: CGRect,
+        occurrence: CalendarLayout.EventOccurrence,
+        model: Model,
+        slot: CalendarLayout.EventOverlapSlot,
+        isEmbeddedChild: Bool,
+        interrupt: InterruptContext,
+        visibleStart: Date,
+        visibleEnd: Date,
+        stackPeekStripWidth: CGFloat,
+        contentHeight: CGFloat
+    ) {
+        func boundaryY(_ date: Date) -> CGFloat {
+            model.headerHeight + calendarTimelineYFraction(
+                for: date,
+                containing: model.date,
+                leadingExtendedHours: model.leadingExtendedHours,
+                trailingExtendedHours: model.trailingExtendedHours
+            ) * contentHeight
+        }
+        let top = window.lowerBound == .distantPast ? wholeFrame.minY : boundaryY(window.lowerBound)
+        let bottom = window.upperBound == .distantFuture ? wholeFrame.maxY : boundaryY(window.upperBound)
+        guard bottom > top else { return }
+        let veil = CALayer()
+        veil.name = Self.bandSplitVeilName
+        veil.masksToBounds = true
+        veil.frame = CGRect(x: 0, y: top - pieceFrame.minY, width: pieceFrame.width, height: bottom - top)
+        let whole = EventLayers()
+        let wholeInVeil = CGRect(
+            x: wholeFrame.minX - pieceFrame.minX,
+            y: wholeFrame.minY - top,
+            width: wholeFrame.width,
+            height: wholeFrame.height
+        )
+        configure(
+            whole, frame: wholeInVeil, occurrence: occurrence, model: model, slot: slot,
+            isEmbeddedChild: isEmbeddedChild, interrupt: interrupt,
+            visibleStart: visibleStart, visibleEnd: visibleEnd, stackPeekStripWidth: stackPeekStripWidth
+        )
+        applyInteractionState(whole, occurrence: occurrence, frame: wholeInVeil, model: model)
+        veil.addSublayer(whole.container)
+        layers.container.addSublayer(veil)
+        let duration = Self.bandPieceSplitDuration
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 1
+        fade.toValue = 0
+        fade.duration = duration
+        fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        veil.opacity = 0
+        veil.add(fade, forKey: "fade")
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak veil] in
+            veil?.removeFromSuperlayer()
+        }
+    }
+
+    private func frame(
+        of piece: BlockPiece,
+        occurrence: CalendarLayout.EventOccurrence,
+        whole: CGRect,
+        model: Model,
+        contentHeight: CGFloat,
+        visibleStart: Date,
+        visibleEnd: Date
+    ) -> CGRect {
+        guard let window = piece.window else { return whole }
+        let vertical = verticalFrame(
+            for: occurrence, model: model, contentHeight: contentHeight,
+            visibleStart: visibleStart, visibleEnd: visibleEnd, window: window
+        )
+        return CGRect(x: whole.minX, y: vertical.y, width: whole.width, height: vertical.height)
+    }
+
+    #if DEBUG
+    private var debugRenderDepth = 0
+    /// TEST-ONLY: the deepest `render` has been nested in itself.
+    private(set) var debugMaxRenderDepth = 0
+
+    /// TEST-ONLY: split as the user's first scroll with a band open would.
+    func debugSplitBandPieces() {
+        guard let model = currentModel, bandPiecesAllowed(model) else { return }
+        bandPiecesDay = model.date
+        render(model)
+    }
+
+    /// TEST-ONLY: the drawn pieces of an occurrence, by pool key.
+    func debugPieceContainers(of occurrenceID: String) -> [String: CALayer] {
+        pool.filter { $0.key == occurrenceID || $0.key.hasPrefix(occurrenceID + "\u{1F}") }
+            .mapValues(\.container)
+    }
+
+    /// TEST-ONLY: whole-block snapshot shares still fading over new pieces.
+    var debugSplitVeilCount: Int {
+        pool.values.reduce(0) { count, layers in
+            count + (layers.container.sublayers?.filter { $0.name == Self.bandSplitVeilName }.count ?? 0)
+        }
+    }
+
+    /// TEST-ONLY: settle every column glide and render again, as the retry
+    /// after one would.
+    func debugSettleReflowAndRender() {
+        for layers in pool.values {
+            layers.container.removeAnimation(forKey: "s5.reflow.position")
+            layers.container.removeAnimation(forKey: "s5.reflow.bounds")
+        }
+        guard let model = currentModel else { return }
+        render(model)
+    }
+
+    /// TEST-ONLY: the vertical travel of a piece's running reflow spring.
+    func debugReflowVerticalTravel(ofPiece key: String) -> CGFloat? {
+        guard let spring = pool[key]?.container.animation(forKey: "s5.reflow.position") as? CABasicAnimation,
+              let from = (spring.fromValue as? NSValue)?.cgPointValue,
+              let to = (spring.toValue as? NSValue)?.cgPointValue else { return nil }
+        return abs(to.y - from.y)
+    }
+
+    /// TEST-ONLY: a drawn piece's resize-handle opacities.
+    func debugHandleOpacities(ofPiece key: String) -> (top: Float, bottom: Float)? {
+        pool[key].map { ($0.topHandle.opacity, $0.bottomHandle.opacity) }
+    }
+
+    /// TEST-ONLY: the frame gestures hit-test an occurrence against.
+    func debugHitFrame(of occurrenceID: String) -> CGRect? { renderedFrames[occurrenceID]?.frame }
+    #endif
+
+    /// The time span a piece's layers lay out against (interrupt cut-outs).
+    private func visibleSpan(
+        of piece: BlockPiece, visibleStart: Date, visibleEnd: Date
+    ) -> (start: Date, end: Date) {
+        guard let window = piece.window else { return (visibleStart, visibleEnd) }
+        return (max(visibleStart, window.lowerBound), min(visibleEnd, window.upperBound))
+    }
+
     /// Vertical frame (Y + height) for an occurrence at the Model's current
     /// `hourHeight`. Pure reuse of the spec-03 fraction mapping — identical math
     /// to the full `render` loop, factored out so the cheap repaint path and the
@@ -2833,7 +3264,8 @@ final class DayLayerHostView: UIView {
         model: Model,
         contentHeight: CGFloat,
         visibleStart: Date,
-        visibleEnd: Date
+        visibleEnd: Date,
+        window: ClosedRange<Date>? = nil
     ) -> (y: CGFloat, height: CGFloat) {
         // Spec 07: clip to the DRAWABLE window (the REAL day, 24h when closed),
         // not the 48h coordinate window — so a cross-midnight event's band
@@ -2854,8 +3286,8 @@ final class DayLayerHostView: UIView {
                 TimeInterval((calendarTimelineBaseVisibleHours + model.drawableTrailingHours) * 3600)
             )
         )
-        let clippedStart = max(occurrence.range.start, drawableStart)
-        let clippedEnd = min(occurrence.range.end, drawableEnd)
+        let clippedStart = max(occurrence.range.start, drawableStart, window?.lowerBound ?? .distantPast)
+        let clippedEnd = min(occurrence.range.end, drawableEnd, window?.upperBound ?? .distantFuture)
         let blockSeconds = max(0, clippedEnd.timeIntervalSince(clippedStart))
 
         let heightFrac = calendarTimelineDurationFraction(
@@ -3090,7 +3522,9 @@ final class DayLayerHostView: UIView {
         _ layers: EventLayers,
         occurrence: CalendarLayout.EventOccurrence,
         frame: CGRect,
-        model: Model
+        model: Model,
+        hidesTopHandle: Bool = false,
+        hidesBottomHandle: Bool = false
     ) {
         let event = occurrence.event
         let session = gestureController.activeEventSession
@@ -3369,8 +3803,8 @@ final class DayLayerHostView: UIView {
             if isGraceTarget { return Float(model.graceResizeHandleOpacity) }
             return 0
         }()
-        let targetTop: Float = showHandles ? handleOpacity : 0
-        let targetBottom: Float = showHandles ? handleOpacity : 0
+        let targetTop: Float = showHandles && !hidesTopHandle ? handleOpacity : 0
+        let targetBottom: Float = showHandles && !hidesBottomHandle ? handleOpacity : 0
 
         // §13 active-resize emphasis easeOut(0.2) (EventBlock:2801-2802); §14
         // grace fade rides the model's `graceResizeHandleOpacity` linear ramp.
@@ -3979,6 +4413,7 @@ final class DayLayerHostView: UIView {
         let visibleRect = bufferedVisibleRect()
         lastCullVisibleRect = visibleRect ?? .null
         let manipulatedID = gestureController.activeEventSession?.occurrenceID
+        let piecesActive = bandPiecesAllowed(model)
 
         // Sub-linear cull decision (issue #14): binary-search the start-sorted
         // index for the candidate slice that COULD intersect the viewport at the
@@ -4048,29 +4483,39 @@ final class DayLayerHostView: UIView {
             if let candidateIDs, !mustKeep, !candidateIDs.contains(occurrence.id) {
                 continue
             }
-            guard mustKeep || isWithinViewport(frame, visibleRect: visibleRect) else { continue }
-            liveIDs.insert(occurrence.id)
-            let layers = acquireLayers(for: occurrence.id)
+            for piece in blockPieces(of: live, model: model, active: piecesActive) {
+                let pieceFrame = self.frame(
+                    of: piece, occurrence: live, whole: frame, model: model,
+                    contentHeight: contentHeight, visibleStart: visibleStart, visibleEnd: visibleEnd
+                )
+                guard mustKeep || isWithinViewport(pieceFrame, visibleRect: visibleRect) else { continue }
+                liveIDs.insert(piece.key)
+                let layers = acquireLayers(for: piece.key)
+                let span = visibleSpan(of: piece, visibleStart: visibleStart, visibleEnd: visibleEnd)
 
-            // Re-run `configure` so the silhouette mask, border, hatch,
-            // handles, and TEXT re-fit at the new height (the SwiftUI path
-            // re-fits text on every hourHeight change — spec 03 §3 text ramp).
-            // This is the same routine the full path uses; only the
-            // hourHeight-invariant overlap/horizontal work is skipped.
-            configure(
-                layers,
-                frame: frame,
-                occurrence: live,
-                model: model,
-                slot: placement.slot,
-                isEmbeddedChild: placement.isEmbeddedChild,
-                interrupt: interrupt,
-                visibleStart: visibleStart,
-                visibleEnd: visibleEnd,
-                stackPeekStripWidth: cachedStackPeekStripWidth
-            )
-            applyInteractionState(layers, occurrence: live, frame: frame, model: model)
-            layers.container.zPosition = placement.zPosition
+                // Re-run `configure` so the silhouette mask, border, hatch,
+                // handles, and TEXT re-fit at the new height (the SwiftUI path
+                // re-fits text on every hourHeight change — spec 03 §3 text ramp).
+                // This is the same routine the full path uses; only the
+                // hourHeight-invariant overlap/horizontal work is skipped.
+                configure(
+                    layers,
+                    frame: pieceFrame,
+                    occurrence: live,
+                    model: model,
+                    slot: placement.slot,
+                    isEmbeddedChild: placement.isEmbeddedChild,
+                    interrupt: interrupt,
+                    visibleStart: span.start,
+                    visibleEnd: span.end,
+                    stackPeekStripWidth: cachedStackPeekStripWidth
+                )
+                applyInteractionState(
+                    layers, occurrence: live, frame: pieceFrame, model: model,
+                    hidesTopHandle: piece.hidesTopHandle, hidesBottomHandle: piece.hidesBottomHandle
+                )
+                layers.container.zPosition = placement.zPosition
+            }
         }
 
         // Sibling-paint (#53 sub-bug A): re-position the painted sibling
