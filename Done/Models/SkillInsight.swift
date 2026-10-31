@@ -146,16 +146,20 @@ final class SkillInsightStore: ObservableObject {
 
     /// Apply a cloud restore snapshot.
     ///
-    /// - `.merge`: union by ID. Cloud rows with new IDs are appended. Same-ID
-    ///   collisions resolve to `.keepLocal` (no-op) or `.keepCloud` (replace).
-    /// - `.cloudOverwritesLocal`: replace `insights` entirely. `resolution` is ignored.
+    /// - `.merge`: union by ID. Cloud rows with new IDs are appended, except
+    ///   those in `pendingDeletes` (deleted here, the delete not yet in the
+    ///   cloud), which stay deleted. Same-ID collisions resolve to
+    ///   `.keepLocal` (no-op) or `.keepCloud` (replace).
+    /// - `.cloudOverwritesLocal`: replace `insights` entirely. `resolution`
+    ///   and `pendingDeletes` are ignored.
     /// Returns the number of insights added (or set, when overwriting).
     @discardableResult
     func applyRestore(
         insights incoming: [SkillInsight],
         strategy: RestoreStrategy,
         resolution: ConflictResolution,
-        perRowDecisions: [UUID: ConflictResolution]? = nil
+        perRowDecisions: [UUID: ConflictResolution]? = nil,
+        pendingDeletes: Set<UUID> = []
     ) -> Int {
         switch strategy {
         case .cloudOverwritesLocal:
@@ -176,7 +180,7 @@ final class SkillInsightStore: ObservableObject {
                         insights[idx] = cloud
                         didMutate = true
                     }
-                } else {
+                } else if !pendingDeletes.contains(cloud.id) {
                     insights.append(cloud)
                     added += 1
                     didMutate = true

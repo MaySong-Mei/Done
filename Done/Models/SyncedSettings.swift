@@ -369,3 +369,10 @@ enum SyncedSettings {
         return f
     }()
 }
+
+// MARK: - App Settings Keys
+// Lives here (not ContentView) so UIKit-free targets compile it.
+
+// `AppSettingsKeys` lives in Models/AppSettingsKeys.swift — the app's settings
+// keys, not the sync path (SyncUserDefaultsScanTests reads this file whole).
+

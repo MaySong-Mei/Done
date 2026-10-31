@@ -142,7 +142,7 @@ final class EraseInFlightWriteTests: XCTestCase {
             .deletingLastPathComponent()   // DoneTests/
             .deletingLastPathComponent()   // repo root
         let source = try String(
-            contentsOf: repoRoot.appendingPathComponent("Done/Views/Agent/AgentSettingsView.swift"),
+            contentsOf: repoRoot.appendingPathComponent("Done/Services/LocalDataEraser.swift"),
             encoding: .utf8
         )
         guard let start = source.range(of: "func resetAllLocalData(keepingSession: Bool) {") else {

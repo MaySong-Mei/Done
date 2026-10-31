@@ -4521,6 +4521,48 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    func testDraggingAnEventFromTheDayBeforeInTodaysColumnOpensTodaysBandAbove() {
+        // 22:00 the day before to 1:45, picked up in today's column: the
+        // band above today has to open, not the one below. (gh#279)
+        let calendar = Calendar(identifier: .gregorian)
+        let today = calendar.date(from: DateComponents(year: 2026, month: 10, day: 31))!
+        let range = Event.TimeRange(
+            start: today.addingTimeInterval(-2 * 3600),
+            end: today.addingTimeInterval(1.75 * 3600)
+        )
+        func bands(renderDay: Date?) -> (leading: Int, trailing: Int) {
+            let mapping = calendarResolvedDragEditMapping(
+                draggingEventID: UUID(),
+                draggingOriginalRange: range,
+                dragOffset: DragOffset(x: 0, y: -10),
+                dragMode: .move,
+                dayColumnStep: 0,
+                hourHeight: 56,
+                renderDayStart: renderDay,
+                calendar: calendar
+            )!
+            return calendarTimelineBoundaryExtensionHours(
+                mappingState: TimelineEditMappingState(source: mapping.source, anchorDate: mapping.date, range: mapping.range),
+                calendar: calendar
+            )
+        }
+        let inToday = bands(renderDay: today)
+        XCTAssertGreaterThan(inToday.leading, 0)
+        XCTAssertEqual(inToday.trailing, 0)
+        let byStartDay = bands(renderDay: nil)
+        XCTAssertEqual(byStartDay.leading, 0, "control: anchored on the start day it read as crossing that day's end")
+        XCTAssertGreaterThan(byStartDay.trailing, 0)
+
+        let resizeAnchor = calendarResolvedDragAnchorDate(
+            draggingOriginalRange: range,
+            dragOffset: DragOffset(x: 0, y: -10),
+            dragMode: .resizeTop,
+            renderDayStart: today,
+            calendar: calendar
+        )
+        XCTAssertEqual(resizeAnchor, today)
+    }
+
     func testResolvedDragAnchorDateFollowsHorizontalDayMoveWithoutUsingPreviewStart() {
         let calendar = Calendar(identifier: .gregorian)
         let originalRange = Event.TimeRange(
@@ -15085,5 +15127,471 @@ final class CalendarDayColumnPreviewTests: XCTestCase {
         XCTAssertEqual(resolved?.range.start, tomorrow)
         XCTAssertEqual(resolved?.range.end, crossing.end)
         XCTAssertNil(resolved?.title)
+    }
+}
+
+/// gh#279: a band closes only once it is wholly out of view, and a band
+/// above today opens and closes with the offset moved in the same layout
+/// pass.
+@MainActor
+final class BoundaryBandCloseTests: XCTestCase {
+    private let hourHeight: CGFloat = 44
+    private let topInset: CGFloat = 80
+    private let header: CGFloat = 14
+    private let viewport: CGFloat = 500
+
+    private func visibility(offsetY: CGFloat, leading: Int = 12, trailing: Int = 0)
+        -> (leadingVisible: Bool, trailingVisible: Bool) {
+        calendarTimelineBoundaryExtensionVisibility(
+            currentOffsetY: offsetY,
+            viewportHeight: viewport,
+            contentTopInset: topInset,
+            allDayHeight: 0,
+            headerHeight: header,
+            hourHeight: hourHeight,
+            state: TimelineBoundaryExtensionState(leadingHours: leading, trailingHours: trailing, source: nil)
+        )
+    }
+
+    /// Today's 0:00 in content coordinates while the band above is open.
+    private var todayStartY: CGFloat { topInset + header + 12 * hourHeight }
+
+    func testBandAboveStaysWhileAnySliverShows() {
+        // One hour of the band still on screen: the old rule closed it here.
+        XCTAssertTrue(visibility(offsetY: todayStartY - hourHeight).leadingVisible)
+        XCTAssertTrue(visibility(offsetY: todayStartY - 2).leadingVisible)
+    }
+
+    func testBandAboveClosesOnceTodayStartCrossesTheTopEdge() {
+        XCTAssertFalse(visibility(offsetY: todayStartY).leadingVisible)
+        XCTAssertFalse(visibility(offsetY: todayStartY + 3 * hourHeight).leadingVisible)
+    }
+
+    func testBandBelowClosesOnceTodayEndCrossesTheBottomEdge() {
+        // Band below open, none above: today's 24:00 sits at origin + 24 h.
+        let todayEndY = topInset + header + 24 * hourHeight
+        XCTAssertTrue(visibility(offsetY: todayEndY - viewport + 2, leading: 0, trailing: 12).trailingVisible)
+        XCTAssertFalse(visibility(offsetY: todayEndY - viewport, leading: 0, trailing: 12).trailingVisible)
+    }
+
+    private func scrollView(contentHeight: CGFloat, offsetY: CGFloat) -> UIScrollView {
+        let view = UIScrollView(frame: CGRect(x: 0, y: 0, width: 375, height: viewport))
+        view.contentSize = CGSize(width: 375, height: contentHeight)
+        view.contentOffset = CGPoint(x: 0, y: offsetY)
+        return view
+    }
+
+    func testKeeperMovesTheOffsetInsideTheContentShrink() {
+        let band = 12 * hourHeight
+        let view = scrollView(contentHeight: 2000, offsetY: 700)
+        let keeper = BoundaryBandOffsetKeeper()
+        keeper.attach(view)
+        XCTAssertTrue(keeper.expect(heightChange: -band))
+        view.contentSize.height = 2000 - band
+        XCTAssertEqual(view.contentOffset.y, 700 - band, accuracy: 0.01)
+    }
+
+    func testKeeperMovesTheOffsetInsideTheContentGrowthWhenTheBandOpens() {
+        let band = 12 * hourHeight
+        let view = scrollView(contentHeight: 1500, offsetY: 40)
+        let keeper = BoundaryBandOffsetKeeper()
+        keeper.attach(view)
+        XCTAssertTrue(keeper.expect(heightChange: band))
+        view.contentSize.height = 1400          // shrinks: not this band
+        XCTAssertEqual(view.contentOffset.y, 40, accuracy: 0.01)
+        view.contentSize.height = 1400 + band
+        XCTAssertEqual(view.contentOffset.y, 40 + band, accuracy: 0.01)
+    }
+
+    func testKeeperShiftsOnlyOnce() {
+        let band = 12 * hourHeight
+        let view = scrollView(contentHeight: 2000, offsetY: 700)
+        let keeper = BoundaryBandOffsetKeeper()
+        keeper.attach(view)
+        XCTAssertTrue(keeper.expect(heightChange: -band))
+        view.contentSize.height = 2000 - band
+        view.contentSize.height = 2000 - 2 * band
+        XCTAssertEqual(view.contentOffset.y, 700 - band, accuracy: 0.01)
+    }
+
+    func testKeeperWaitsOutChangesThatAreNotTheBandClosing() {
+        let band = 12 * hourHeight
+        let view = scrollView(contentHeight: 2000, offsetY: 700)
+        let keeper = BoundaryBandOffsetKeeper()
+        keeper.attach(view)
+        XCTAssertTrue(keeper.expect(heightChange: -band))
+        view.contentSize.height = 2100          // grows: something else
+        view.contentSize.height = 2100 - 20     // barely shrinks: something else
+        XCTAssertEqual(view.contentOffset.y, 700, accuracy: 0.01)
+        view.contentSize.height = 2080 - band   // the band
+        XCTAssertEqual(view.contentOffset.y, 700 - band, accuracy: 0.01)
+    }
+
+    func testKeeperUsesTheOffsetFromBeforeUIKitClampsIt() {
+        // At rest UIKit clamps the offset into the shorter range before the
+        // size change is reported; the keeper must start from where the
+        // user was, not from the clamped value.
+        let band = 12 * hourHeight
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 375, height: 667))
+        let view = scrollView(contentHeight: 2000, offsetY: 1400)
+        window.addSubview(view)
+        window.isHidden = false
+        var seen: [CGFloat] = []
+        let watch = view.observe(\.contentOffset, options: [.new]) { _, change in
+            if let y = change.newValue?.y { seen.append(y) }
+        }
+        let keeper = BoundaryBandOffsetKeeper()
+        keeper.attach(view)
+        XCTAssertTrue(keeper.expect(heightChange: -band))
+        view.contentSize.height = 2000 - band
+        watch.invalidate()
+        XCTAssertTrue(seen.contains { abs($0 - (2000 - band - viewport)) < 0.5 },
+                      "UIKit did not clamp first, so this test proves nothing: \(seen)")
+        XCTAssertEqual(view.contentOffset.y, 1400 - band, accuracy: 0.01)
+    }
+
+    func testBandThatNoScrollCanHideIsReportedUnreachable() {
+        let state = TimelineBoundaryExtensionState(leadingHours: 12, trailingHours: 12, source: nil)
+        func canLeave(hourHeight hh: CGFloat, bottomPad: CGFloat = 60) -> (leading: Bool, trailing: Bool) {
+            let contentHeight = topInset + header + 48 * hh + bottomPad
+            return calendarTimelineBoundaryExtensionCanLeaveView(
+                contentHeight: contentHeight, viewportHeight: viewport,
+                contentTopInset: topInset, allDayHeight: 0, headerHeight: header,
+                hourHeight: hh, state: state
+            )
+        }
+        // A day well taller than the screen: both sides can be scrolled away.
+        XCTAssertTrue(canLeave(hourHeight: 44).leading)
+        XCTAssertTrue(canLeave(hourHeight: 44).trailing)
+        // 24 h plus what lies below 24:00 shorter than the screen: the band
+        // above can never cross the top edge.
+        XCTAssertFalse(canLeave(hourHeight: 12).leading)
+        // Today's 24:00 above the screen's bottom at offset 0: the band below
+        // can never cross the bottom edge.
+        let below = calendarTimelineBoundaryExtensionCanLeaveView(
+            contentHeight: topInset + header + 36 * 12 + 60, viewportHeight: viewport,
+            contentTopInset: topInset, allDayHeight: 0, headerHeight: header, hourHeight: 12,
+            state: TimelineBoundaryExtensionState(leadingHours: 0, trailingHours: 12, source: nil)
+        )
+        XCTAssertFalse(below.trailing)
+        XCTAssertTrue(below.leading, "a closed side is never unreachable")
+    }
+
+    func testKeeperDoesNothingUnarmed() {
+        let view = scrollView(contentHeight: 2000, offsetY: 700)
+        let keeper = BoundaryBandOffsetKeeper()
+        keeper.attach(view)
+        view.contentSize.height = 1400
+        XCTAssertEqual(view.contentOffset.y, 700, accuracy: 0.01)
+    }
+
+    func testKeeperWithoutAScrollViewLeavesTheCallerToScroll() {
+        XCTAssertFalse(BoundaryBandOffsetKeeper().expect(heightChange: -528))
+    }
+
+    func testKeeperArmedShiftExpires() {
+        let band = 12 * hourHeight
+        let view = scrollView(contentHeight: 2000, offsetY: 700)
+        let keeper = BoundaryBandOffsetKeeper()
+        keeper.attach(view)
+        XCTAssertTrue(keeper.expect(heightChange: -band))
+        let waited = expectation(description: "past the arm window")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { waited.fulfill() }
+        wait(for: [waited], timeout: 2)
+        view.contentSize.height = 2000 - band
+        XCTAssertEqual(view.contentOffset.y, 700, accuracy: 0.01)
+    }
+}
+
+/// A block that runs across today's 0:00 or 24:00 into an open band is drawn
+/// as one piece per side once nothing is being edited, so the band closing
+/// out of view leaves today's piece exactly as it was. (gh#279)
+@MainActor
+final class BoundaryBandPieceTests: XCTestCase {
+    private let hourHeight: CGFloat = 56
+    private let band = 12
+
+    func testTodaysPieceIsTheBlockTheClosedBandLeaves() {
+        let crossing = occurrence(-2.25, 4.5)
+        let open = makeHost([crossing], leading: band)
+        let pieces = open.debugPieceContainers(of: crossing.id)
+        XCTAssertEqual(pieces.count, 2)
+        let today = try! XCTUnwrap(pieces[crossing.id])
+        let bandPiece = try! XCTUnwrap(pieces.first { $0.key != crossing.id }?.value)
+
+        let closed = makeHost([crossing], leading: 0)
+        let closedFrame = try! XCTUnwrap(closed.debugPieceContainers(of: crossing.id)[crossing.id]).frame
+        let shift = CGFloat(band) * hourHeight
+        XCTAssertEqual(today.frame.offsetBy(dx: 0, dy: -shift), closedFrame)
+        XCTAssertEqual(bandPiece.frame.minX, today.frame.minX)
+        XCTAssertEqual(bandPiece.frame.width, today.frame.width)
+        XCTAssertEqual(today.frame.minY - bandPiece.frame.maxY, 3, accuracy: 0.01, "the usual gap between blocks")
+    }
+
+    func testGesturesStillHitTheWholeBlock() {
+        let crossing = occurrence(-2.25, 4.5)
+        let host = makeHost([crossing], leading: band)
+        let hit = try! XCTUnwrap(host.debugHitFrame(of: crossing.id))
+        let today = try! XCTUnwrap(host.debugPieceContainers(of: crossing.id)[crossing.id])
+        let bandPiece = try! XCTUnwrap(host.debugPieceContainers(of: crossing.id).first { $0.key != crossing.id }?.value)
+        XCTAssertEqual(hit.minY, bandPiece.frame.minY, accuracy: 0.01, "from the event's start")
+        XCTAssertEqual(hit.maxY, today.frame.maxY, accuracy: 0.01, "to its end")
+    }
+
+    func testAJustDroppedBlockSplitsWhenItsHandlesGoAndDissolvesInPlace() {
+        let crossing = occurrence(-2.25, 4.5)
+        let host = makeHost([crossing], leading: band, graceEvent: crossing.event.id)
+        XCTAssertEqual(host.debugPieceContainers(of: crossing.id).count, 1, "whole while its handles show")
+        let whole = try! XCTUnwrap(host.debugPieceContainers(of: crossing.id)[crossing.id])
+        let wholeZ = whole.zPosition
+        XCTAssertEqual(host.debugSplitVeilCount, 0)
+
+        host.apply(makeModel([crossing], leading: band))
+        host.layoutIfNeeded()
+        let pieces = host.debugPieceContainers(of: crossing.id)
+        XCTAssertEqual(pieces.count, 2)
+        XCTAssertTrue(pieces[crossing.id] === whole, "today's piece keeps the block's layers")
+        XCTAssertEqual(host.debugSplitVeilCount, 2, "the whole block fades out over its pieces, a share in each")
+        XCTAssertFalse(pieces.values.contains(where: isTweening), "nothing slides")
+        XCTAssertEqual(Set(pieces.values.map(\.zPosition)), [wholeZ], "no piece rises over what was stacked on the block")
+
+        host.apply(makeModel([crossing], leading: 0))
+        host.layoutIfNeeded()
+        let after = host.debugPieceContainers(of: crossing.id)
+        XCTAssertEqual(after.count, 1)
+        XCTAssertTrue(after[crossing.id] === whole, "the close redraws nothing")
+    }
+
+    func testTheUsersScrollSplitsABlockShowingHandlesWithNoHandleAtTheLine() {
+        let crossing = occurrence(-2.25, 4.5)
+        let host = makeHost([crossing], leading: band, graceEvent: crossing.event.id)
+        host.debugSplitBandPieces()
+        let keys = Array(host.debugPieceContainers(of: crossing.id).keys)
+        XCTAssertEqual(keys.count, 2)
+        let bandKey = try! XCTUnwrap(keys.first { $0 != crossing.id })
+        let today = try! XCTUnwrap(host.debugHandleOpacities(ofPiece: crossing.id))
+        let bandPiece = try! XCTUnwrap(host.debugHandleOpacities(ofPiece: bandKey))
+        XCTAssertEqual(today.top, 0)
+        XCTAssertGreaterThan(today.bottom, 0, "control: the event's own end keeps its handle")
+        XCTAssertEqual(bandPiece.bottom, 0)
+        XCTAssertGreaterThan(bandPiece.top, 0, "control: the event's own start keeps its handle")
+    }
+
+    func testAShortBlockWhoseTextRunsPastTheLineSplitsWithoutTheFade() {
+        // Title and time stacked in a block an hour each side of 0:00 at a
+        // small zoom run past the line, where the fading copy would print
+        // over today's title.
+        let crossing = occurrence(-1, 1)
+        let small = makeHost([crossing], leading: band, graceEvent: crossing.event.id, hourHeight: 24)
+        small.apply(makeModel([crossing], leading: band, hourHeight: 24))
+        small.layoutIfNeeded()
+        XCTAssertEqual(small.debugPieceContainers(of: crossing.id).count, 2)
+        XCTAssertEqual(small.debugSplitVeilCount, 0)
+
+        let tall = makeHost([crossing], leading: band, graceEvent: crossing.event.id)
+        tall.apply(makeModel([crossing], leading: band))
+        tall.layoutIfNeeded()
+        XCTAssertEqual(tall.debugSplitVeilCount, 2, "control: with room above the line it fades")
+    }
+
+    func testABlockThatSplitsAsADropLandsSplitsWithoutTheFade() {
+        // Mid-edit the block was drawn for the drag (another column,
+        // dimmed); fading from that would flash the old look.
+        let crossing = occurrence(-2.25, 4.5)
+        let host = makeHost([crossing], leading: band, creating: true)
+        XCTAssertEqual(host.debugPieceContainers(of: crossing.id).count, 1, "whole while something is edited")
+        host.apply(makeModel([crossing], leading: band))
+        host.layoutIfNeeded()
+        XCTAssertEqual(host.debugPieceContainers(of: crossing.id).count, 2)
+        XCTAssertEqual(host.debugSplitVeilCount, 0)
+    }
+
+    func testASplitWaitsForAColumnChangeToSettle() {
+        // A draft beside the block shares its column; once it goes the
+        // block glides to the full width, and splits when it gets there.
+        let crossing = occurrence(-2.25, 4.5)
+        let host = makeHost([crossing], leading: band, creating: true, draftAt: (-1, 1))
+        let whole = try! XCTUnwrap(host.debugPieceContainers(of: crossing.id)[crossing.id])
+        XCTAssertLessThan(whole.frame.width, 300, "control: the draft takes half the column")
+
+        host.apply(makeModel([crossing], leading: band))
+        host.layoutIfNeeded()
+        XCTAssertEqual(host.debugPieceContainers(of: crossing.id).count, 1, "whole while it glides")
+        let travel = try! XCTUnwrap(
+            host.debugReflowVerticalTravel(ofPiece: crossing.id),
+            "control: the column change glides"
+        )
+        XCTAssertEqual(travel, 0, accuracy: 0.01, "sideways only")
+
+        host.debugSettleReflowAndRender()
+        XCTAssertEqual(host.debugPieceContainers(of: crossing.id).count, 2)
+        XCTAssertEqual(host.debugSplitVeilCount, 2, "split from a settled block, so it fades")
+    }
+
+    func testTheFadeDoesNotLayOutTheHierarchyFromInsideARender() {
+        // On device a split's fade drew the block with `render(in:)`, which
+        // laid out the hosting view from inside the render; SwiftUI handed
+        // the column a new model there and it rendered again, until the
+        // stack ran out.
+        let crossing = occurrence(-2.25, 4.5)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 360, height: 3200))
+        let parent = ReapplyingParent(frame: window.bounds)
+        window.addSubview(parent)
+        let host = DayLayerHostView(frame: parent.bounds)
+        parent.addSubview(host)
+        host.apply(makeModel([crossing], leading: band, graceEvent: crossing.event.id))
+        parent.layoutIfNeeded()
+
+        parent.onLayout = { [unowned self] in
+            host.apply(self.makeModel([crossing], leading: band, hourHeight: hourHeight + 1))
+        }
+        parent.setNeedsLayout()
+        host.apply(makeModel([crossing], leading: band))
+        XCTAssertEqual(host.debugPieceContainers(of: crossing.id).count, 2)
+        XCTAssertGreaterThan(host.debugSplitVeilCount, 0, "control: it faded")
+        XCTAssertEqual(host.debugMaxRenderDepth, 1)
+    }
+
+    func testABandPiecesEdgeFadesWithTheBand() {
+        // The fade keeps a strip of the band beside the line opaque; the
+        // band piece's border must lie outside it.
+        let crossing = occurrence(-2.25, 4.5)
+        let host = makeHost([crossing], leading: band)
+        let bandPiece = try! XCTUnwrap(host.debugPieceContainers(of: crossing.id).first { $0.key != crossing.id }?.value)
+        let lineY = 16 + CGFloat(band) * hourHeight
+        XCTAssertLessThanOrEqual(bandPiece.frame.maxY, lineY - calendarBandFadeSeamOverhang)
+        XCTAssertGreaterThan(calendarBandFadeSeamOverhang, 0, "control: the midnight line still gets its strip")
+    }
+
+    func testABlockAcrossTodaysEndSplitsThere() {
+        let crossing = occurrence(22, 25.5)
+        let host = makeHost([crossing], trailing: band)
+        let pieces = host.debugPieceContainers(of: crossing.id)
+        XCTAssertEqual(pieces.count, 2)
+        let closed = makeHost([crossing], trailing: 0)
+        XCTAssertEqual(
+            pieces[crossing.id]?.frame,
+            closed.debugPieceContainers(of: crossing.id)[crossing.id]?.frame,
+            "nothing above moves when a band below closes"
+        )
+    }
+
+    func testBlocksThatDontCrossStayWhole() {
+        let inside = occurrence(9, 10)
+        let inBand = occurrence(-5, -3)
+        let host = makeHost([inside, inBand], leading: band)
+        XCTAssertEqual(host.debugPieceContainers(of: inside.id).count, 1)
+        XCTAssertEqual(host.debugPieceContainers(of: inBand.id).count, 1)
+    }
+
+    func testNoSplitWithTheBandClosed() {
+        let crossing = occurrence(-2.25, 4.5)
+        let host = makeHost([crossing], leading: 0)
+        host.debugSplitBandPieces()
+        XCTAssertEqual(host.debugPieceContainers(of: crossing.id).count, 1)
+    }
+
+    func testDoneStaysOnTheDayAnEventRunsIntoFromTheBandAbove() {
+        XCTAssertTrue(calendarCreatedEventStaysOnSelectedDay(
+            startDayOffset: -1, endDayOffset: 0, selectedDayOffset: 0, leadingBandHours: 12
+        ))
+        XCTAssertFalse(calendarCreatedEventStaysOnSelectedDay(
+            startDayOffset: -1, endDayOffset: -1, selectedDayOffset: 0, leadingBandHours: 12
+        ), "wholly the day before: page there")
+        XCTAssertFalse(calendarCreatedEventStaysOnSelectedDay(
+            startDayOffset: -1, endDayOffset: 0, selectedDayOffset: 0, leadingBandHours: 0
+        ), "no band showing its start")
+        XCTAssertFalse(calendarCreatedEventStaysOnSelectedDay(
+            startDayOffset: -2, endDayOffset: 0, selectedDayOffset: 0, leadingBandHours: 12
+        ))
+    }
+
+    // MARK: Fixtures
+
+    /// Stands in for the hosting view: laying it out hands the column a new
+    /// model, once.
+    private final class ReapplyingParent: UIView {
+        var onLayout: (() -> Void)?
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            let work = onLayout
+            onLayout = nil
+            work?()
+        }
+    }
+
+    private var day: Date { Calendar.current.startOfDay(for: Date()) }
+
+    private func occurrence(_ start: Double, _ end: Double) -> CalendarLayout.EventOccurrence {
+        let range = Event.TimeRange(
+            start: day.addingTimeInterval(start * 3600), end: day.addingTimeInterval(end * 3600)
+        )
+        let event = Event(title: "A", timeRanges: [range], type: "Study")
+        return CalendarLayout.EventOccurrence(
+            id: "\(event.id.uuidString)-\(range.start.timeIntervalSince1970)-\(range.end.timeIntervalSince1970)",
+            event: event, range: range
+        )
+    }
+
+    private func isTweening(_ layer: CALayer) -> Bool {
+        layer.animationKeys()?.contains(where: { $0.hasPrefix("resizeTween.") }) == true
+    }
+
+    private func makeHost(
+        _ occurrences: [CalendarLayout.EventOccurrence],
+        leading: Int = 0,
+        trailing: Int = 0,
+        graceEvent: UUID? = nil,
+        hourHeight: CGFloat? = nil,
+        creating: Bool = false,
+        draftAt: (Double, Double) = (9, 10)
+    ) -> DayLayerHostView {
+        let host = DayLayerHostView(frame: CGRect(x: 0, y: 0, width: 360, height: 3200))
+        host.apply(makeModel(
+            occurrences, leading: leading, trailing: trailing, graceEvent: graceEvent, hourHeight: hourHeight,
+            creating: creating, draftAt: draftAt
+        ))
+        host.layoutIfNeeded()
+        return host
+    }
+
+    private func makeModel(
+        _ occurrences: [CalendarLayout.EventOccurrence],
+        leading: Int = 0,
+        trailing: Int = 0,
+        graceEvent: UUID? = nil,
+        hourHeight: CGFloat? = nil,
+        creating: Bool = false,
+        draftAt: (Double, Double) = (9, 10)
+    ) -> DayLayerHostView.Model {
+        var model = DayLayerHostView.Model(
+            date: day,
+            occurrences: occurrences,
+            contentWidth: 360,
+            headerHeight: 16,
+            hourHeight: hourHeight ?? self.hourHeight,
+            eventHorizontalInset: 8,
+            leadingExtendedHours: leading,
+            trailingExtendedHours: trailing,
+            drawableLeadingHours: leading,
+            drawableTrailingHours: trailing,
+            useImperativeDayLayerModel: false,
+            showEventText: true,
+            isWeekMode: false,
+            isThreeDayMode: false,
+            titleFontSizeSetting: 13,
+            showTimeBelowTitle: true,
+            multiTypeEnabled: false,
+            nearFutureHorizonDays: 7,
+            isPinchActive: false,
+            frozenSlotMinutes: nil
+        )
+        model.graceResizeEventID = graceEvent
+        if creating {
+            model.creationPreviewRange = Event.TimeRange(
+                start: day.addingTimeInterval(draftAt.0 * 3600), end: day.addingTimeInterval(draftAt.1 * 3600)
+            )
+        }
+        return model
     }
 }

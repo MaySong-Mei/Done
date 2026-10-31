@@ -341,6 +341,47 @@ extension EventStore {
         )
     }
 
+    /// The detail's quick-write pattern, on the store so the Mac inspector
+    /// writes the same record the phone reads: when the occurrence has no
+    /// log record yet, the new one is first seeded from `prefilledDraft`
+    /// (read fresh, at write time), then `mutate` applies the change. Moved
+    /// verbatim from CalendarEventDetailView's applyQuickEffort /
+    /// applyQuickCompletion / saveDetailNoteAndTemplate.
+    func upsertSeededLogRecord(
+        for occurrence: CalendarEventOccurrenceContext,
+        coalesced: Bool = false,
+        mutate: (inout CalendarEventLogRecord) -> Void
+    ) {
+        let shouldSeedDraft = logRecord(for: occurrence) == nil
+        let draft = shouldSeedDraft ? prefilledDraft(for: occurrence) : .empty
+
+        upsertLogRecord(for: occurrence, coalesced: coalesced) { record in
+            if shouldSeedDraft {
+                record.selectedTemplateID = draft.selectedTemplateID?.rawValue
+                record.completionStatus = draft.completionStatus
+                record.actualDurationMinutes = draft.actualDurationMinutes
+                record.summary = draft.summary
+                record.note = draft.note
+                record.effort = draft.effort
+                record.emotions = draft.emotions
+                record.behaviors = draft.behaviors
+                record.templateAnswers = draft.templateAnswers
+                record.timelineItems = draft.timelineNotes.map(EventLogTimelineItem.note)
+            }
+            mutate(&record)
+        }
+    }
+
+    /// Effort for one occurrence. The record is the truth; the event's
+    /// `colorDepth` is the store's mirror of it (`upsertLogRecord`).
+    func applyQuickEffort(_ effort: Int?, for occurrence: CalendarEventOccurrenceContext) {
+        upsertSeededLogRecord(for: occurrence) { $0.effort = effort }
+    }
+
+    func applyQuickCompletion(_ status: EventLogCompletionStatus, for occurrence: CalendarEventOccurrenceContext) {
+        upsertSeededLogRecord(for: occurrence) { $0.completionStatus = status }
+    }
+
     /// The detail screen's quick tag pickers' single durable-write point
     /// (gh#216). The picker's Button passes USER INTENT — "make `tagID`
     /// ON/OFF", where `targetSelected` was judged from what the user saw
@@ -370,9 +411,9 @@ extension EventStore {
     /// The fresh read goes through `prefilledDraft(for:)` — the same chain
     /// the picker renders from (record → legacy feedback → empty prefill) —
     /// so when no record exists yet, the seeded fields AND the base tag set
-    /// both come from tap-time state, matching the sibling quick-write
-    /// handlers in CalendarEventDetailView (`applyQuickCompletion`,
-    /// `applyQuickEffort`, `saveDetailNoteAndTemplate`).
+    /// both come from tap-time state, matching the sibling quick writes
+    /// (`upsertSeededLogRecord` and its `applyQuickCompletion` /
+    /// `applyQuickEffort`).
     ///
     /// Lives on the store, not the view, for the same reason
     /// `calendarEffortDragShouldCommit` does (gh#162 W1): a handler that

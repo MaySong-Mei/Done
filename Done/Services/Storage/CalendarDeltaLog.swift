@@ -405,8 +405,13 @@ enum CalendarDeltaFold {
 /// to decide when the log is read, appended to, quarantined or cleared — the
 /// same reason the freeze guard lives inside `commit` rather than at its call
 /// sites.
-@MainActor
-final class CalendarDeltaLog {
+///
+/// SINGLE-CONTEXT CONTRACT (same as `AtomicValueFile`): instances are not
+/// thread-safe. The iOS owner is `DurableEventStorage` held by the
+/// @MainActor `EventStore`; `nonisolated` exists because
+/// `DurableEventStorage` itself is `nonisolated` so the Mac target can own
+/// one from an actor — it is not a license to share an instance.
+nonisolated final class CalendarDeltaLog {
     /// Why the last `loadRecords` refused to answer. The two cases are
     /// deliberately NOT collapsed: the repo's own `readEnvelope` takes
     /// opposite postures on them for the primary (`.io` moves not one byte,

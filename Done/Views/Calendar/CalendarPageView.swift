@@ -132,6 +132,21 @@ func calendarPendingEventCreationCompletionNavigation(
     return .stayOnAnchorVisibleDate
 }
 
+/// Whether a created event is already in view on the day on screen, so
+/// Done stays there instead of paging to the day it starts: one that starts
+/// the day before and runs into this day shows whole, its first part in the
+/// band above. Paging would show it cut at that day's end. (gh#279)
+func calendarCreatedEventStaysOnSelectedDay(
+    startDayOffset: Int,
+    endDayOffset: Int,
+    selectedDayOffset: Int,
+    leadingBandHours: Int
+) -> Bool {
+    leadingBandHours > 0
+        && startDayOffset == selectedDayOffset - 1
+        && endDayOffset >= selectedDayOffset
+}
+
 // Extracted for regression tests: resolve the final moved range using the same Y-snap rule as drag preview.
 func calendarDroppedRangeFromDrag(
     draggedRange: Event.TimeRange,
@@ -807,18 +822,19 @@ func calendarTimelineBoundaryExtensionVisibility(
     let visibleTop = normalizedOffsetY
     let visibleBottom = normalizedOffsetY + normalizedViewportHeight
     let extensionOriginY = contentTopInset + allDayHeight + headerHeight
-    // Minimum visible height for an extension region to be
-    // considered "visible".  At max pinch the extension region
-    // might be technically visible but too small to be useful —
-    // dismiss it automatically with a fade.
-    let minVisibleHeight = hourHeight * 2
+    // A band counts as visible while any of it is inside the scroll view,
+    // the part under the translucent top bar included: it closes only once
+    // today's 0:00 (or 24:00) has crossed the screen edge, so the close
+    // never removes something the user can see. (gh#279: this used to close
+    // a band with under two hours showing, in plain sight.)
+    let minVisibleOverlap: CGFloat = 0.5
 
     let leadingVisible: Bool = {
         guard state.leadingHours > 0 else { return false }
         let regionTop = extensionOriginY
         let regionBottom = regionTop + CGFloat(state.leadingHours) * hourHeight
         let overlap = min(regionBottom, visibleBottom) - max(regionTop, visibleTop)
-        return overlap >= minVisibleHeight
+        return overlap >= minVisibleOverlap
     }()
 
     let trailingVisible: Bool = {
@@ -827,10 +843,34 @@ func calendarTimelineBoundaryExtensionVisibility(
             + CGFloat(state.leadingHours + calendarTimelineBaseVisibleHours) * hourHeight
         let regionBottom = regionTop + CGFloat(state.trailingHours) * hourHeight
         let overlap = min(regionBottom, visibleBottom) - max(regionTop, visibleTop)
-        return overlap >= minVisibleHeight
+        return overlap >= minVisibleOverlap
     }()
 
     return (leadingVisible, trailingVisible)
+}
+
+/// Whether some scroll position takes each open band side wholly out of
+/// view. Zooming out until a day is about as short as the screen leaves a
+/// band that no scroll can hide, so the out-of-view close would never come.
+/// (gh#279)
+func calendarTimelineBoundaryExtensionCanLeaveView(
+    contentHeight: CGFloat,
+    viewportHeight: CGFloat,
+    contentTopInset: CGFloat,
+    allDayHeight: CGFloat,
+    headerHeight: CGFloat,
+    hourHeight: CGFloat,
+    state: TimelineBoundaryExtensionState
+) -> (leading: Bool, trailing: Bool) {
+    let extensionOriginY = contentTopInset + allDayHeight + headerHeight
+    let maxOffsetY = max(0, contentHeight - viewportHeight)
+    let leadingBottom = extensionOriginY + CGFloat(state.leadingHours) * hourHeight
+    let trailingTop = extensionOriginY
+        + CGFloat(state.leadingHours + calendarTimelineBaseVisibleHours) * hourHeight
+    return (
+        leading: state.leadingHours == 0 || maxOffsetY >= leadingBottom - 0.5,
+        trailing: state.trailingHours == 0 || trailingTop >= viewportHeight - 0.5
+    )
 }
 
 func calendarCollapsedTimelineBoundaryExtensionState(
@@ -1123,17 +1163,6 @@ struct CalendarPageView: View {
     @State private var allDayOccurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
     @State private var maxAllDayCountCache: Int = 0
     @State private var dayRange: ClosedRange<Int> = CalendarLayout.defaultDayRange
-    /// #55: visual y-offset applied to TimelineView content during the
-    /// boundary-extension OPEN animation. Cancels the layout jump caused
-    /// by `leading` snapping to 12 in logical state while scroll catches
-    /// up over 0.28s. Computed each animator tick as `scrollY - targetY`
-    /// (negative during animation, 0 at end), so events stay glued to the
-    /// finger position visually:
-    ///   event_viewport_y = layout_y + dragOffset.y + visualOffset - scrollY
-    ///                    = layout_y + dragOffset.y + (scrollY - targetY) - scrollY
-    ///                    = layout_y + dragOffset.y - targetY
-    /// which equals the pre-open position + finger delta.
-    @State private var boundaryExtensionVisualYOffset: CGFloat = 0
     @State private var selectedEventDetailRoute: CalendarEventDetailRoute? = nil
     @State private var selectedEventChatOccurrence: CalendarEventOccurrenceContext? = nil
     @State private var selectedEventForEdit: Event? = nil
@@ -1293,158 +1322,6 @@ struct CalendarPageView: View {
         }
     }
 
-    /// Close-path co-commit (issue #57). Drives the boundary-extension
-    /// state to `.none` and the matching scroll compensation in ONE
-    /// `CATransaction`, so the user never sees a frame where contentSize
-    /// has shrunk but contentOffset hasn't compensated. Replaces the
-    /// `timelineCollapseDim` opacity-dip workaround on the flag-ON path.
-    /// Caller is responsible for the existing guard
-    /// (`timelineRawBoundaryExtensionState.source == nil`) and any
-    /// pre-collapse fade animation; this method only owns the atomic
-    /// shrink+scroll write.
-    /// Atomic boundary-extension state transition for the issue-#57 flag-ON
-    /// path. Supports both FULL close (`.none`) and PARTIAL close (one side
-    /// goes to 0 while the other stays open) — the latter is what
-    /// `collapseTimelineBoundaryExtensionsIfNeeded` produces on scroll-tick
-    /// auto-collapse and was previously missing the co-commit wiring,
-    /// causing the user-visible cross-midnight flash even with the flag
-    /// ON (memory `feedback_calayer_parity_multi_state_gates` —
-    /// multi-state-OR-port silently dropped a branch).
-    ///
-    /// Caller passes only the SwiftUI fade reset they want — close paths
-    /// that fully close zero both; partial-close paths leave the surviving
-    /// side's fade progress alone.
-    /// Legacy (UIScrollView, non-imperative) close-path: the contentSize +
-    /// contentOffset atomic co-commit used to hide the 1-frame mismatch when
-    /// the band collapses. Imperative single-day NEVER reaches this — its
-    /// callers fork upstream to `handleImperativeBandStateChange` (band
-    /// visibility is `contentInset`, not contentSize; see spec 07 §5 S2).
-    ///
-    /// S7 deletion gate: this function + `TimelineScrollProxy.coCommit` +
-    /// `applyCloseLeadingTransientCompensation` all become dead code once the
-    /// flag default flips ON and the legacy fallback is removed.
-    private func applyCloseBandStateAtomicCoCommit(
-        targetState newState: TimelineBoundaryExtensionState,
-        resetLeadingFade: Bool,
-        resetTrailingFade: Bool,
-        callSite: String = #function
-    ) {
-        let previousState = timelineBoundaryExtensionState
-        guard previousState != newState else { return }
-        // Spec 07 §5 S2: imperative callers fork upstream, so this is now
-        // unreachable on the imperative path. Assert in debug; on release we
-        // still defend by redirecting to the inset path so any future caller
-        // added without the upstream fork doesn't write contentSize into a
-        // 48h-constant substrate.
-        assert(!usesImperativeDayLayerModel, "applyCloseBandStateAtomicCoCommit reached on imperative path — caller missing spec-07 S2 fork")
-        if usesImperativeDayLayerModel {
-            handleImperativeBandStateChange(newState)
-            return
-        }
-        print("⭐️[#57.coCommit.close] site=\(callSite) from=(\(previousState.leadingHours),\(previousState.trailingHours)) to=(\(newState.leadingHours),\(newState.trailingHours)) scrollY=\(String(format: "%.1f", timelineScrollProxy.currentOffsetY)) installed=\(timelineScrollProxy.isInstalled) animator=\(boundaryExtensionScrollAnimator != nil) sameDayReb=\(sameDayRebounceAnimator != nil) visualY=\(String(format: "%.1f", boundaryExtensionVisualYOffset))")
-        // Proxy-not-wired fallback (deep-review C6): if the scroll view
-        // hasn't installed yet (cold start, mid-dismantle, flag flicker),
-        // a coCommit silently no-ops on the offset write — but our SwiftUI
-        // state mutation would still apply the new band hours, causing
-        // the next `updateUIView` to shrink contentSize with no
-        // compensating offset → visible jump. Fall back to the flag-OFF
-        // path's transactional collapse instead.
-        guard timelineScrollProxy.isInstalled else {
-            var tx = Transaction(); tx.disablesAnimations = true
-            withTransaction(tx) {
-                applyTimelineBoundaryExtensionState(newState)
-                if resetLeadingFade { timelineLeadingFadeProgress = 0 }
-                if resetTrailingFade { timelineTrailingFadeProgress = 0 }
-            }
-            return
-        }
-        // Cancel any in-flight scroll animator + pending compensation
-        // task BEFORE we mutate state and co-commit — mirrors the
-        // flag-OFF `applyTimelineBoundaryExtensionState`'s reentry guard
-        // (step-2 review C1). The 0.3s both-sides fade path could still
-        // have a 0.28s open-during-drag spring writing scrollTo ticks;
-        // without this cancel they fight the co-commit's offset write.
-        pendingBoundaryExtensionScrollTask?.cancel()
-        pendingBoundaryExtensionScrollTask = nil
-        if boundaryExtensionScrollAnimator != nil {
-            boundaryExtensionScrollAnimator?.cancel(reason: "coCommitClose reentry")
-            boundaryExtensionScrollAnimator = nil
-            boundaryExtensionVisualYOffset = 0
-        }
-        // Compute the destination contentH via the SAME canonical formula
-        // `timelineScrollUIKit` feeds into `updateUIView` (deep-review C3).
-        let hourHeight = calendarState.timelineHourHeight
-        let topOverlayInset = lastTimelineTopOverlayInset
-        let newContentH = calendarTimelineHostContentHeight(
-            headerHeight: calendarTimelineTopInset(hourHeight: hourHeight),
-            allDayHeight: timelineAllDayHeight,
-            hourHeight: hourHeight,
-            effectiveSlotMinutes: calendarLegendSlotMinutes(forHourHeight: hourHeight),
-            leadingExtendedHours: newState.leadingHours,
-            trailingExtendedHours: newState.trailingHours,
-            timelineBottomInset: calendarTimelineBottomInset(hourHeight: hourHeight),
-            topOverlayInset: topOverlayInset,
-            timelineBottomScrollPadding: lastTimelineBottomScrollPadding
-        )
-        let targetY = calendarResolvedVerticalScrollOffsetForBoundaryExtensionChange(
-            currentOffsetY: timelineScrollProxy.currentOffsetY,
-            previousState: previousState,
-            newState: newState,
-            hourHeight: hourHeight
-        ) ?? timelineScrollProxy.currentOffsetY
-        // SwiftUI state mutation MUST be inside `disablesAnimations` —
-        // TimelineView attaches an `.animation(_:value:)` to
-        // `leadingExtendedHours` / `trailingExtendedHours` that defaults
-        // to a ~0.28s spring outside drag. Without the suppression, the
-        // day-layer frame springs over 0.28s AFTER our atomic
-        // CATransaction has already snapped contentSize + offset — visible
-        // as the "1-frame flash" the close-path PR was supposed to fix.
-        // (Mirrors the flag-OFF path's outer
-        // `withTransaction(disablesAnimations: true)` wrapping.)
-        var swiftUITx = Transaction()
-        swiftUITx.disablesAnimations = true
-        withTransaction(swiftUITx) {
-            timelineBoundaryExtensionState = newState
-            if resetLeadingFade { timelineLeadingFadeProgress = 0 }
-            if resetTrailingFade { timelineTrailingFadeProgress = 0 }
-        }
-        // UIScrollView atomic write — separate from the SwiftUI transaction
-        // because the disablesAnimations flag only affects SwiftUI animation
-        // contexts; UIScrollView/CALayer get their own
-        // `CATransaction.setDisableActions(true)` inside `coCommit`.
-        //
-        // LEADING-collapse stale-Model compensation: on a leading close,
-        // the day-layer's KVO `contentOffset` observer + the
-        // `layoutIfNeeded` fired inside `coCommit` BOTH re-render against
-        // the OLD `leadingExtendedHours` Model field (SwiftUI's body
-        // re-eval hasn't propagated yet). Events render at OLD absoluteY
-        // (= NEW absoluteY + bandClose*hourHeight) against the NEW
-        // compensated offset, so they appear shifted DOWN by
-        // `bandClose*hourHeight` for one frame, then snap back UP on
-        // the next SwiftUI tick — the user-reported "events flash down
-        // then up by ~322pt" bug.
-        //
-        // Fix: translate the hosted content view UP by the same band
-        // amount inside the SAME CATransaction as `coCommit`, then clear
-        // the transform on the next runloop tick (after SwiftUI's tick
-        // has rendered against the new Model). The earlier
-        // `DispatchQueue.main.async` deferral of `coCommit` itself (in
-        // commit 1e41081) produced the OPPOSITE artifact (events flashed
-        // UP first) because Model was new but offset still old — that
-        // path was reverted. This compensation keeps the offset write
-        // atomic AND papers over the SwiftUI-Model lag at the same time.
-        //
-        // Trailing collapses (no leading-hours change) pass `deltaY = 0`
-        // and the compensation is a no-op (the chopped trailing band sits
-        // BELOW the viewport so absoluteY values are unchanged).
-        let leadingHoursClosed = previousState.leadingHours - newState.leadingHours
-        let compensationDeltaY = CGFloat(max(0, leadingHoursClosed)) * hourHeight
-        timelineScrollProxy.coCommit(
-            contentHeight: newContentH,
-            offsetY: targetY,
-            transientHostYCompensation: compensationDeltaY
-        )
-    }
     @State private var timelineBoundaryExtensionState: TimelineBoundaryExtensionState = .none
     @State private var timelineRawBoundaryExtensionState: TimelineBoundaryExtensionState = .none
     @State private var timelineScrollViewportHeight: CGFloat = 0
@@ -1453,10 +1330,10 @@ struct CalendarPageView: View {
     /// receive it) can compute boundary-extension visibility for the
     /// fade-out-only-when-scrolled-away guard. (#55 follow-on)
     @State private var lastTimelineTopOverlayInset: CGFloat = 0
-    /// Latched `metrics.timelineBottomScrollPadding` so the close-path
-    /// `applyCloseBandStateAtomicCoCommit` can compute contentH via the
-    /// canonical formula without needing `metrics` plumbed through every
-    /// boundary-extension handler. Refreshed inside `timelineScrollUIKit`
+    /// Latched `metrics.timelineBottomScrollPadding` so content-height math
+    /// (`todoStackTimelineContentHeight`) can use the canonical formula
+    /// without needing `metrics` plumbed through every boundary-extension
+    /// handler. Refreshed inside `timelineScrollUIKit`
     /// + `timelineScrollSwiftUI` on each evaluation.
     @State private var lastTimelineBottomScrollPadding: CGFloat = 0
     /// Pinch-frozen slot density mirrored out of `TimelinePagerView` so the
@@ -1475,11 +1352,6 @@ struct CalendarPageView: View {
     @State private var isVerticallyScrolling: Bool = false
     @State private var timelineVisibleDayFrameGlobal: CGRect = .zero
     @State private var pendingBoundaryExtensionScrollTask: Task<Void, Never>? = nil
-    /// Spring animator for the proactive boundary-extension OPEN transition
-    /// during drag. CADisplayLink-paced, runs scrollTo 60×/sec over ~0.28s in
-    /// lockstep with `.animation(_:value:leading)` so the canvas unfolds
-    /// smoothly instead of snapping. (#55)
-    @State private var boundaryExtensionScrollAnimator: BoundaryExtensionScrollAnimator? = nil
     /// Single-overshoot scroll rebounce after a cross-midnight commit
     /// follows the event to the new day. CADisplayLink-driven, ~0.4s, one
     /// damped half-sine peak. Decouples cleanly from the open animator —
@@ -1524,11 +1396,9 @@ struct CalendarPageView: View {
     /// bands dissolve separately — abandoning one must not fade the other.
     @State private var timelineLeadingFadeProgress: CGFloat = 0
     @State private var timelineTrailingFadeProgress: CGFloat = 0
-    /// Whole-timeline opacity, briefly dipped to cover the same-day collapse's
-    /// single-frame layout flash (the pre/post visible content is identical, so
-    /// a quick fade-out → instant collapse-while-dim → fade-in hides the jump
-    /// without trying to co-commit contentSize+scroll). 1 = normal. (#55)
-    @State private var timelineCollapseDim: Double = 1
+    /// Moves the scroll offset in the same layout pass that a closing band
+    /// above today shrinks the content, so nothing on screen moves. (gh#279)
+    @State private var boundaryBandOffsetKeeper = BoundaryBandOffsetKeeper()
     @State private var progressiveCacheTask: Task<Void, Never>? = nil
     /// Captured page geometry, written by `.onGeometryChange` on the body root.
     /// Reading geometry through @State (instead of a top-level GeometryReader
@@ -3661,7 +3531,16 @@ private extension CalendarPageView {
             if newState.hasAnyExtension {
                 // In the zone (intent to cross) → keep the band solid.
                 if !wasOpen {
-                    fadeInBoundaryExtension()
+                    // Solid from the first frame. The offset moves with the
+                    // open, so the band arrives above or below what's on
+                    // screen and scrolls in; a fade-in only left the part of
+                    // the dragged event inside it faint, as if cut. (gh#279)
+                    var solidTransaction = Transaction()
+                    solidTransaction.disablesAnimations = true
+                    withTransaction(solidTransaction) {
+                        timelineLeadingFadeProgress = 0
+                        timelineTrailingFadeProgress = 0
+                    }
                 } else {
                     // Re-engaging: make SOLID only the side(s) currently being
                     // crossed (per `newState`). Leave the other side at its
@@ -3767,50 +3646,16 @@ private extension CalendarPageView {
                                 }
                                 return
                             }
-                            // The band is off-screen and the displayed content
-                            // (base day from 0:00) is IDENTICAL before and after
-                            // the collapse — only the 1-frame contentSize+scroll
-                            // co-commit flashes.
-                            // Flag-ON path (issue #57): one atomic CATransaction
-                            // shrinks contentSize + scrolls the offset
-                            // simultaneously — no 1-frame mismatch to cover.
-                            // Flag-OFF path: keep the brief opacity dip workaround
-                            // (fade to 0, collapse while invisible, fade back).
-                            if useUIScrollViewTimeline {
-                                // (Outer guard at line :2937 already verified
-                                // `source == nil` for this completion frame;
-                                // no need to re-check.)
-                                // Spec 07 §5 S2: imperative skips the
-                                // contentSize co-commit machinery — band
-                                // visibility is `contentInset`, not size.
-                                if usesImperativeDayLayerModel {
-                                    handleImperativeBandStateChange(.none)
-                                } else {
-                                    applyCloseBandStateAtomicCoCommit(
-                                        targetState: .none,
-                                        resetLeadingFade: true,
-                                        resetTrailingFade: true
-                                    )
-                                }
-                            } else {
-                                if useUIScrollViewTimeline {
-                                    print("🚨[#57.dim.UNREACHABLE] dim fade fired on flag-ON path — fork broken at single-side rebounce close")
-                                }
-                                withAnimation(.easeIn(duration: 0.09)) { timelineCollapseDim = 0 }
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.09) { [self] in
-                                    // Re-engaged during the dim window → restore, skip.
-                                    guard timelineRawBoundaryExtensionState.source == nil else {
-                                        withAnimation(.easeOut(duration: 0.14)) { timelineCollapseDim = 1 }
-                                        return
-                                    }
-                                    var tx = Transaction(); tx.disablesAnimations = true
-                                    withTransaction(tx) {
-                                        applyTimelineBoundaryExtensionState(.none)
-                                        timelineLeadingFadeProgress = 0
-                                        timelineTrailingFadeProgress = 0
-                                    }
-                                    withAnimation(.easeOut(duration: 0.14)) { timelineCollapseDim = 1 }
-                                }
+                            // The band has faded out and been scrolled off the
+                            // edge, and the close keeps the offset in step with
+                            // the shorter content, so nothing visible changes.
+                            // (gh#279: this used to dim the whole timeline to
+                            // cover a close that could land a frame late.)
+                            var tx = Transaction(); tx.disablesAnimations = true
+                            withTransaction(tx) {
+                                applyTimelineBoundaryExtensionState(.none)
+                                timelineLeadingFadeProgress = 0
+                                timelineTrailingFadeProgress = 0
                             }
                         }
                     )
@@ -3833,36 +3678,29 @@ private extension CalendarPageView {
                             }
                             return
                         }
-                        // Collapse animation-free in lockstep with the scroll snap.
                         // Band is already invisible from the fade, so the collapse
                         // removes nothing visible. (#53 single-day follow-on)
-                        // Flag-ON (issue #57): atomic co-commit (contentSize +
-                        // contentOffset in one CATransaction). Flag-OFF: SwiftUI
-                        // transaction (1-frame mismatch hidden by the
-                        // already-invisible band).
-                        if useUIScrollViewTimeline {
-                            // Spec 07 §5 S2: imperative skips the contentSize
-                            // co-commit machinery — band visibility is
-                            // `contentInset`, not size.
-                            if usesImperativeDayLayerModel {
-                                handleImperativeBandStateChange(.none)
-                            } else {
-                                applyCloseBandStateAtomicCoCommit(
-                                    targetState: .none,
-                                    resetLeadingFade: true,
-                                    resetTrailingFade: true
-                                )
-                            }
-                        } else {
-                            var transaction = Transaction()
-                            transaction.disablesAnimations = true
-                            withTransaction(transaction) {
-                                applyTimelineBoundaryExtensionState(.none)
-                                timelineLeadingFadeProgress = 0
-                                timelineTrailingFadeProgress = 0
-                            }
+                        var transaction = Transaction()
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) {
+                            applyTimelineBoundaryExtensionState(.none)
+                            timelineLeadingFadeProgress = 0
+                            timelineTrailingFadeProgress = 0
                         }
                     }
+                }
+            } else {
+                // The scroll can take the band away here, so it stays until
+                // it is out of view with the scroll at rest. A side the drag
+                // left dissolved under the finger comes back solid, or
+                // scrolling to it shows an empty stretch. A side already out
+                // of view closes now, not on the next scroll. (gh#279)
+                withAnimation(.easeOut(duration: 0.2)) {
+                    timelineLeadingFadeProgress = 0
+                    timelineTrailingFadeProgress = 0
+                }
+                DispatchQueue.main.async {
+                    collapseTimelineBoundaryExtensionsIfNeeded(topOverlayInset: lastTimelineTopOverlayInset)
                 }
             }
         }
@@ -3892,15 +3730,49 @@ private extension CalendarPageView {
             UINotificationFeedbackGenerator().notificationOccurred(.warning)
         }
 
+        // The live offset, not `timelineVerticalScrollY`: that one only
+        // follows changes of 2pt or more, and the write below lands after
+        // the keeper's exact shift. (gh#279)
         let targetY = calendarResolvedVerticalScrollOffsetForBoundaryExtensionChange(
-            currentOffsetY: timelineVerticalScrollY,
+            currentOffsetY: boundaryBandOffsetKeeper.liveOffsetY ?? timelineVerticalScrollY,
             previousState: previousState,
             newState: newState,
             hourHeight: calendarState.timelineHourHeight
         )
 
-
-        timelineBoundaryExtensionState = newState
+        // The band above today sits at the top of the content, so opening or
+        // closing it moves everything below by its height, and the offset
+        // must move by the same height in the pass the content resizes,
+        // whatever a finger, a coast or an edge autoscroll is doing. The
+        // keeper does that from inside the scroll view. The band's height
+        // must not spring then, or the rows would slide while the offset has
+        // already moved. (gh#279) A focus expand keeps its deferred write.
+        let leadingDelta = newState.leadingHours - previousState.leadingHours
+        let keeperHoldsOffset = leadingDelta != 0
+            && newState.source != .focused
+            && boundaryBandOffsetKeeper.expect(
+                heightChange: CGFloat(leadingDelta) * calendarState.timelineHourHeight
+            )
+        if keeperHoldsOffset {
+            var bandTransaction = Transaction()
+            bandTransaction.disablesAnimations = true
+            withTransaction(bandTransaction) {
+                timelineBoundaryExtensionState = newState
+            }
+        } else {
+            timelineBoundaryExtensionState = newState
+        }
+        calendarDebugLog(
+            "band.apply",
+            fields: [
+                "from": "\(previousState.leadingHours),\(previousState.trailingHours)",
+                "to": "\(newState.leadingHours),\(newState.trailingHours)",
+                "source": newState.source.map { "\($0)" } ?? "nil",
+                "scrollY": String(format: "%.1f", timelineVerticalScrollY),
+                "scrolling": "\(isVerticallyScrolling)",
+                "keeper": "\(keeperHoldsOffset)"
+            ]
+        )
 
         // A Todo-stack drag drives the scroll through its OWN accumulator; a
         // band open/close compensates the offset out from under it. Re-seed,
@@ -3913,47 +3785,19 @@ private extension CalendarPageView {
         guard let targetY else { return }
 
         pendingBoundaryExtensionScrollTask?.cancel()
-        if boundaryExtensionScrollAnimator != nil {
-            boundaryExtensionScrollAnimator?.cancel(reason: "applyState reentry")
-            boundaryExtensionScrollAnimator = nil
-            boundaryExtensionVisualYOffset = 0
-        }
-        let targetPoint = CGPoint(x: 0, y: targetY)
-
-        // Spring-animate scroll when opening the extension during drag
-        // (#55): SwiftUI ScrollPosition.scrollTo snaps in one frame on iOS
-        // 26 regardless of ambient animation, so we feed it 60 interpolated
-        // targets/sec from a CADisplayLink. The `.animation(_:value:)`
-        // modifier on `leading` springs over the same 0.28s duration, so
-        // both canvas height and scroll position move on the same time
-        // axis and the dragged event stays glued to its visible window
-        // position as the canvas unfolds above it.
-        if leadingOpened, newState.source == .moveDrag || newState.source == .resizeTop {
-            let startY = timelineVerticalScrollY
-            let delta = targetY - startY
-            // Seed the visual offset to -delta so the first rendered frame
-            // shows pre-open positions (cancels the leading-snap layout jump).
-            boundaryExtensionVisualYOffset = -delta
-            boundaryExtensionScrollAnimator = BoundaryExtensionScrollAnimator(
-                onTick: { progress in
-                    let y = startY + delta * progress
-                    // offset = scrollY - targetY: at progress=0 → -delta, at progress=1 → 0.
-                    // Keeps events glued to their pre-open visible position throughout the spring.
-                    let offset = y - targetY
-                    var transaction = Transaction()
-                    transaction.disablesAnimations = true
-                    withTransaction(transaction) {
-                        scrollVerticallyTo(y: y)
-                        boundaryExtensionVisualYOffset = offset
-                    }
-                },
-                onComplete: {
-                    boundaryExtensionVisualYOffset = 0
-                    boundaryExtensionScrollAnimator = nil
-                }
-            )
+        // The keeper alone moves the offset while the user moves the scroll
+        // (a ScrollPosition write loses to the finger or stops the coast) and
+        // during an edit drag (the edge autoscroll moves the offset between
+        // this read of it and the write's landing; this replaces the 0.28 s
+        // open animator, whose absolute writes stalled that autoscroll). At
+        // rest the write goes too: SwiftUI applies it after the keeper in the
+        // same update, so it replaces any target a scripted scroll (the
+        // settle, the follow) queued this update in the old coordinates.
+        if keeperHoldsOffset,
+           boundaryBandOffsetKeeper.userIsScrolling || newState.source != nil {
             return
         }
+        let targetPoint = CGPoint(x: 0, y: targetY)
 
         if calendarShouldApplyBoundaryExtensionScrollCompensationImmediately(source: newState.source) {
             pendingBoundaryExtensionScrollTask = nil
@@ -3975,9 +3819,30 @@ private extension CalendarPageView {
         }
     }
 
-    func collapseTimelineBoundaryExtensionsIfNeeded(topOverlayInset: CGFloat) {
+    /// Closes each band side that is wholly out of view, once the scroll is
+    /// at rest. Called on every scroll tick and when the scroll settles.
+    /// (gh#279)
+    ///
+    /// `closeUnreachable`: also close a side that no scroll can take out of
+    /// view any more, which a zoom-out leaves behind, or scrolling the other
+    /// side away when both were open. Only where the timeline has just
+    /// changed under the user or come to rest: the end of a pinch, and
+    /// the scroll settling.
+    func collapseTimelineBoundaryExtensionsIfNeeded(
+        topOverlayInset: CGFloat,
+        closeUnreachable: Bool = false
+    ) {
         guard timelineRawBoundaryExtensionState.source == nil else { return }
         guard timelineBoundaryExtensionState.hasAnyExtension else { return }
+        // A scripted settle owns the offset until it finishes and closes the
+        // band itself; closing under it would leave its next frame in the
+        // old coordinates.
+        guard sameDayRebounceAnimator == nil, crossDayRebounceAnimator == nil else { return }
+        // While the user scrolls, `VerticalScrollGate` holds the timeline's
+        // layout, so a close now would draw only when the scroll stops: in a
+        // later update, out of reach of this transaction and of the offset
+        // keeper. The scroll settling runs this check again.
+        guard !isVerticallyScrolling else { return }
 
         let visibility = calendarTimelineBoundaryExtensionVisibility(
             currentOffsetY: timelineVerticalScrollY,
@@ -3988,76 +3853,35 @@ private extension CalendarPageView {
             hourHeight: calendarState.timelineHourHeight,
             state: timelineBoundaryExtensionState
         )
+        let reachable = closeUnreachable
+            ? calendarTimelineBoundaryExtensionCanLeaveView(
+                contentHeight: todoStackTimelineContentHeight(),
+                viewportHeight: timelineScrollViewportHeight,
+                contentTopInset: topOverlayInset,
+                allDayHeight: timelineAllDayHeight,
+                headerHeight: timelineHeaderHeight,
+                hourHeight: calendarState.timelineHourHeight,
+                state: timelineBoundaryExtensionState
+            )
+            : (leading: true, trailing: true)
         let collapsedState = calendarCollapsedTimelineBoundaryExtensionState(
             currentState: timelineBoundaryExtensionState,
-            leadingVisible: visibility.leadingVisible,
-            trailingVisible: visibility.trailingVisible
+            leadingVisible: visibility.leadingVisible && reachable.leading,
+            trailingVisible: visibility.trailingVisible && reachable.trailing
         )
         guard collapsedState != timelineBoundaryExtensionState else { return }
-        // Spec 07: imperative substrate — auto-collapse is an inset rebounce to
-        // the collapsed state, NOT a contentSize co-commit. Reset fade only on
-        // sides that actually collapsed this tick.
-        if usesImperativeDayLayerModel {
-            let hourHeight = calendarState.timelineHourHeight
-            let leadingCollapsed = timelineBoundaryExtensionState.leadingHours > 0
-                && collapsedState.leadingHours == 0
-            let trailingCollapsed = timelineBoundaryExtensionState.trailingHours > 0
-                && collapsedState.trailingHours == 0
-            timelineBoundaryExtensionState = collapsedState
-            let (t, b) = imperativeBandInsetTargets(for: collapsedState, hourHeight: hourHeight)
-            timelineScrollProxy.setBandInset(top: t, bottom: b, animated: true)
-            var tx = Transaction(); tx.disablesAnimations = true
-            withTransaction(tx) {
-                if leadingCollapsed { timelineLeadingFadeProgress = 0 }
-                if trailingCollapsed { timelineTrailingFadeProgress = 0 }
-            }
-            return
-        }
-        // Issue #57 (deep follow-up): when the UIScrollView path is ON,
-        // route the auto-collapse through the same atomic co-commit as the
-        // drag-release close paths. Without this, EVERY scroll tick that
-        // crosses the band's outer edge fires
-        // `applyTimelineBoundaryExtensionState` (flag-OFF path) → SwiftUI
-        // contentSize shrinks → contentOffset doesn't co-commit → 1-frame
-        // flash. This was the third close-path entry the prior reviews
-        // didn't catch (memory `feedback_calayer_parity_multi_state_gates`).
-        // Reset fade ONLY on sides that actually collapsed in this tick.
-        if useUIScrollViewTimeline {
-            // Spec 07 §5 S2: imperative skips the contentSize co-commit
-            // machinery — band visibility is `contentInset`, not size.
-            // Note: `handleImperativeBandStateChange(collapsedState)` with
-            // `source == nil` currently routes through the unconditional
-            // full-close release branch (sets state to `.none`) — byte-
-            // identical to today's defensive-redirect behavior. A future
-            // slice can teach the imperative path partial-side close if
-            // visual A/B surfaces a regression.
-            if usesImperativeDayLayerModel {
-                handleImperativeBandStateChange(collapsedState)
-            } else {
-                applyCloseBandStateAtomicCoCommit(
-                    targetState: collapsedState,
-                    resetLeadingFade: timelineBoundaryExtensionState.leadingHours > 0
-                        && collapsedState.leadingHours == 0,
-                    resetTrailingFade: timelineBoundaryExtensionState.trailingHours > 0
-                        && collapsedState.trailingHours == 0
-                )
-            }
-            return
-        }
-        // Mirror the drag-end dismiss path's `disablesAnimations` guard
-        // (see 2580-2591). `applyTimelineBoundaryExtensionState` now snaps
-        // scroll via `disablesAnimations = true` on the inner scrollTo
-        // transaction in BOTH directions (since
-        // `calendarResolvedVerticalScrollOffsetForBoundaryExtensionChange`
-        // became symmetric in #53). The outer
-        // `withAnimation(.easeOut(0.25))` here used to wrap a path that
-        // never compensated scroll, so leading and scroll could each have
-        // their own animations — but post-PR, scroll snaps while
-        // `leading` springs via TimelineView's `.animation(_:value:)`
-        // modifier (returns ~0.28s spring outside drag). The two get
-        // out-of-sync, content drifts ~0.28s. Suppress the leading
-        // spring with the same transaction so leading + scroll snap in
-        // lockstep, matching the drag-end dismiss flow.
+        calendarDebugLog(
+            "band.collapse",
+            fields: [
+                "from": "\(timelineBoundaryExtensionState.leadingHours),\(timelineBoundaryExtensionState.trailingHours)",
+                "to": "\(collapsedState.leadingHours),\(collapsedState.trailingHours)",
+                "scrollY": String(format: "%.1f", timelineVerticalScrollY),
+                "scrolling": "\(isVerticallyScrolling)",
+                "unreachable": "\(!reachable.leading || !reachable.trailing)"
+            ]
+        )
+        // No spring on the band's height: the close is meant to change
+        // nothing on screen, and a top close moves the offset at once.
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
@@ -4079,24 +3903,21 @@ private extension CalendarPageView {
         guard timelineBoundaryExtensionState != .none
             || timelineRawBoundaryExtensionState != .none
             || pendingBoundaryExtensionScrollTask != nil
-            || boundaryExtensionScrollAnimator != nil
             || sameDayRebounceAnimator != nil
         else { return }
         pendingBoundaryExtensionScrollTask?.cancel()
         pendingBoundaryExtensionScrollTask = nil
-        boundaryExtensionScrollAnimator?.cancel(reason: "clearState")
-        boundaryExtensionScrollAnimator = nil
         sameDayRebounceAnimator?.cancel()
         sameDayRebounceAnimator = nil
-        boundaryExtensionVisualYOffset = 0
-        // Restore the abandon-collapse opacity dip + per-side fades so a
-        // teardown landing mid-animation (leave day mode / change day / detail
-        // route) can't strand the timeline dim or faded. (#55)
-        timelineCollapseDim = 1
+        // Restore the per-side fades so a teardown landing mid-animation
+        // (leave day mode / change day / detail route) can't strand the
+        // timeline faded. (#55)
         timelineLeadingFadeProgress = 0
         timelineTrailingFadeProgress = 0
         timelineRawBoundaryExtensionState = .none
-        timelineBoundaryExtensionState = .none
+        // Through the one state writer, so a band above today that closes
+        // here keeps the hours on screen where they are. (gh#279)
+        applyTimelineBoundaryExtensionState(.none)
     }
 
     /// If the persisted hourHeight is below the current viewport's pinch
@@ -4192,12 +4013,12 @@ private extension CalendarPageView {
                     // timeline content consume the trailing page inset.
                     .padding(.trailing, -metrics.horizontalPadding)
                     .geometryGroup()
-                    .opacity(timelineCollapseDim)
             }
             .padding(.top, topOverlayInset)
             .padding(.horizontal, metrics.horizontalPadding)
             .padding(.bottom, metrics.timelineBottomScrollPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .background(BoundaryBandOffsetKeeperProbe(keeper: boundaryBandOffsetKeeper))
         }
         .scrollPosition($verticalScrollPosition)
         .task {
@@ -4235,6 +4056,15 @@ private extension CalendarPageView {
             let isScrollingNow = (newPhase == .interacting || newPhase == .decelerating)
             if isVerticallyScrolling != isScrollingNow {
                 isVerticallyScrolling = isScrollingNow
+            }
+            // With both bands open, scrolling one away can leave the other
+            // where no scroll reaches past it; close that one once the
+            // scroll comes to rest. (gh#279)
+            if newPhase == .idle {
+                collapseTimelineBoundaryExtensionsIfNeeded(
+                    topOverlayInset: topOverlayInset,
+                    closeUnreachable: true
+                )
             }
         }
         // FINGER-DRIVEN dissolve: re-run on every drag-offset change so an
@@ -4363,7 +4193,6 @@ private extension CalendarPageView {
                 )
                     .padding(.trailing, -metrics.horizontalPadding)
                     .geometryGroup()
-                    .opacity(timelineCollapseDim)
             }
             .padding(.top, topOverlayInset)
             .padding(.horizontal, metrics.horizontalPadding)
@@ -4634,7 +4463,6 @@ private extension CalendarPageView {
             selectedDayOffset: $calendarState.selectedDayOffset,
             rangeMode: $calendarState.rangeMode,
             hourHeight: timelineHourHeightBinding,
-            boundaryExtensionVisualYOffset: boundaryExtensionVisualYOffset,
             suppressDayColumnHorizontalAnimation: suppressDayColumnHorizontalAnimation,
             useImperativeDayLayerModel: usesImperativeDayLayerModel,
             leadingFadeProgress: timelineLeadingFadeProgress,
@@ -4684,6 +4512,17 @@ private extension CalendarPageView {
                 // (deep-review C2).
                 if rangePinchFrozenSlotMinutes != frozen {
                     rangePinchFrozenSlotMinutes = frozen
+                }
+                // Pinch ended: a zoom-out may have left a band that no scroll
+                // can take out of view. Next pass, once the new height has
+                // laid out. (gh#279)
+                if frozen == nil {
+                    DispatchQueue.main.async {
+                        collapseTimelineBoundaryExtensionsIfNeeded(
+                            topOverlayInset: lastTimelineTopOverlayInset,
+                            closeUnreachable: true
+                        )
+                    }
                 }
             },
             boundaryExtensionStateOverride: timelineBoundaryExtensionState,
@@ -5194,29 +5033,34 @@ private extension CalendarPageView {
     }
 
     func rebuildOccurrencesCache() {
-        let allEvents = store.canvasRenderableCalendarEvents
-        let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
         let center = calendarState.selectedDayOffset
+        // Follower probe (perf batch 2a): Phase 1 is one `occurrenceSync`
+        // run; every Phase 2 batch is one `occurrenceBatch` run.
+        let urgentRange = FollowerTiming.measure(.occurrenceSync) { () -> ClosedRange<Int> in
+            let allEvents = store.canvasRenderableCalendarEvents
+            let calendar = Calendar.current
+            let today = calendar.startOfDay(for: Date())
 
-        // Phase 1 — synchronously compute the visible window so the UI
-        // has data for the columns that are on screen right now.
-        let urgentRange = max(dayRange.lowerBound, center - 7)...min(dayRange.upperBound, center + 7)
-        var newCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
-        var newAllDay: [Int: [CalendarLayout.EventOccurrence]] = [:]
-        for offset in urgentRange {
-            let day = calendar.date(byAdding: .day, value: offset, to: today)!
-            newCache[offset] = CalendarLayout.occurrencesForDate(allEvents, date: day, calendar: calendar)
-            newAllDay[offset] = CalendarLayout.allDayOccurrencesForDate(allEvents, date: day, calendar: calendar)
+            // Phase 1 — synchronously compute the visible window so the UI
+            // has data for the columns that are on screen right now.
+            let urgentRange = max(dayRange.lowerBound, center - 7)...min(dayRange.upperBound, center + 7)
+            var newCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
+            var newAllDay: [Int: [CalendarLayout.EventOccurrence]] = [:]
+            for offset in urgentRange {
+                let day = calendar.date(byAdding: .day, value: offset, to: today)!
+                newCache[offset] = CalendarLayout.occurrencesForDate(allEvents, date: day, calendar: calendar)
+                newAllDay[offset] = CalendarLayout.allDayOccurrencesForDate(allEvents, date: day, calendar: calendar)
+            }
+            occurrencesCache = newCache
+            allDayOccurrencesCache = newAllDay
+            recomputeMaxAllDayCountCache()
+            return urgentRange
         }
-        occurrencesCache = newCache
-        allDayOccurrencesCache = newAllDay
-        recomputeMaxAllDayCountCache()
 
         // Phase 2 — progressively fill the rest of dayRange outward from
         // center so each batch yields back to the run-loop.
         let remaining = dayRange.filter { !urgentRange.contains($0) }
-        scheduleProgressiveCacheLoad(offsets: remaining, center: center)
+        scheduleProgressiveCacheLoad(offsets: remaining, center: center, follower: .occurrenceBatch)
     }
 
     /// Recompute the cached max all-day count.  Called whenever
@@ -5356,7 +5200,12 @@ private extension CalendarPageView {
     /// Progressively loads occurrences for the given offsets, sorted by
     /// distance from `center` so the nearest days fill first.  Each batch
     /// yields back to the main run-loop so scrolling stays fluid.
-    private func scheduleProgressiveCacheLoad(offsets: [Int], center: Int) {
+    ///
+    /// `follower` names the batches for the follower probe (perf batch 2a):
+    /// the full rebuild after a store change passes `.occurrenceBatch`; the
+    /// range-growth fill, which no store change caused, passes nil and is
+    /// not measured.
+    private func scheduleProgressiveCacheLoad(offsets: [Int], center: Int, follower: FollowerID? = nil) {
         progressiveCacheTask?.cancel()
         let sorted = offsets.sorted { abs($0 - center) < abs($1 - center) }
         progressiveCacheTask = Task { @MainActor in
@@ -5368,7 +5217,7 @@ private extension CalendarPageView {
             for batch in stride(from: 0, to: sorted.count, by: batchSize) {
                 guard !Task.isCancelled else { return }
                 let end = min(batch + batchSize, sorted.count)
-                withAnimation(.easeIn(duration: 0.25)) {
+                let fill = {
                     for offset in sorted[batch..<end] {
                         guard occurrencesCache[offset] == nil else { continue }
                         let day = calendar.date(byAdding: .day, value: offset, to: today)!
@@ -5378,6 +5227,13 @@ private extension CalendarPageView {
                         if allDay.count > maxAllDayCountCache {
                             didUpdateAllDayCache = true
                         }
+                    }
+                }
+                withAnimation(.easeIn(duration: 0.25)) {
+                    if let follower {
+                        FollowerTiming.measure(follower, fill)
+                    } else {
+                        fill()
                     }
                 }
                 // Yield after each batch so the run-loop can service scroll
@@ -6233,7 +6089,15 @@ private extension CalendarPageView {
 
         switch pendingCreate?.completionNavigation ?? .focusCreatedEvent {
         case .focusCreatedEvent:
-            calendarState.selectedDayOffset = offset
+            let staysOnScreen = calendarCreatedEventStaysOnSelectedDay(
+                startDayOffset: offset,
+                endDayOffset: dayOffset(for: preferredRange.end.addingTimeInterval(-1)),
+                selectedDayOffset: calendarState.selectedDayOffset,
+                leadingBandHours: timelineBoundaryExtensionState.leadingHours
+            )
+            if !staysOnScreen {
+                calendarState.selectedDayOffset = offset
+            }
             let occurrenceID = calendarResolvedFocusedOccurrenceID(
                 event: event,
                 preferredRange: preferredRange

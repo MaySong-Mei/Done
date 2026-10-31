@@ -86,15 +86,25 @@ final class LLMUsageStore {
 
     private let lock = NSLock()
     private var buckets: [String: LLMUsageBucket]
-    private let fileURL: URL
+    /// Not private, so a test can pin the file the erase's `clearAll()` on
+    /// `shared` actually rewrites.
+    let fileURL: URL
     private let dayFormatter: DateFormatter
+
+    /// Redirected under XCTest, same reasoning as `MeAvatarStore.fileName`:
+    /// `DoneTests` runs inside Done.app's container, `Documents` is not
+    /// redirected for it, and `clearAll()` on `shared` sits in
+    /// `resetAllLocalData` and rewrites the file whole.
+    static var defaultDirectoryName: String {
+        EventStorageLocation.isRunningUnderXCTest ? "DeveloperStats-test-host" : "DeveloperStats"
+    }
 
     /// - Parameter directoryURL: override the storage location (tests);
     ///   defaults to `Documents/DeveloperStats`.
     init(fileManager: FileManager = .default, directoryURL: URL? = nil) {
         let directory = directoryURL
             ?? fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("DeveloperStats", isDirectory: true)
+                .appendingPathComponent(Self.defaultDirectoryName, isDirectory: true)
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         fileURL = directory.appendingPathComponent("llm-usage.json")
 

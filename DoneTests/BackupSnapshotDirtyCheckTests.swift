@@ -216,7 +216,7 @@ final class BackupSnapshotDirtyCheckTests: XCTestCase {
         // the anchor. Found by mutation, not by reading.
         let body = try EraseWiringScan.functionBody(
             of: "func resetAllLocalData(keepingSession: Bool) {",
-            inFileAt: "Done/Views/Agent/AgentSettingsView.swift"
+            inFileAt: "Done/Services/LocalDataEraser.swift"
         )
 
         guard let callIndex = body.range(of: "backupSnapshotService.wipe()") else {

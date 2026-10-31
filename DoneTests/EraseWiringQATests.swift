@@ -44,7 +44,7 @@ final class EraseWiringQATests: XCTestCase {
     func testEveryPurgeIsStillWiredIntoTheErase() throws {
         let body = try EraseWiringScan.functionBody(
             of: "func resetAllLocalData(keepingSession: Bool) {",
-            inFileAt: "Done/Views/Agent/AgentSettingsView.swift"
+            inFileAt: "Done/Services/LocalDataEraser.swift"
         )
 
         // call site -> what survives the erase without it
@@ -76,6 +76,13 @@ final class EraseWiringQATests: XCTestCase {
             ("telemetryUploader?.forgetAfterErase()",
              "the uploader's in-memory status — last upload time, row counts, the request sample, the last "
              + "outcome and the daily throttle clock — describing the previous owner's uploads (gh#273)"),
+            ("ResidentObservationCenter.shared?.forgetAfterErase()",
+             "the resident observer's day in memory — counters, followers, an open auto-window and the "
+             + "daily id with its owner — which the next flush wrote back into the wiped directory "
+             + "under the erased owner"),
+            ("SpikeSessionCoordinator.shared?.forgetAfterErase()",
+             "a manual spike run armed from the Developer page, still shown as armed and still "
+             + "measuring after the erase, and the runners' last completed run — the erased owner's"),
             ("AppSettingsKeys.removeResettableKeys(from: defaults)",
              "the by-name sweep, which now also carries the telemetry switch, its consent moment, "
              + "the note opt-in, the decided bit and the by-default bit (gh#273): the next account on "
@@ -116,7 +123,7 @@ final class EraseWiringQATests: XCTestCase {
     func testTheAccountSwitchRunsTheOneEraseAndOnlyTheSignOutIsKept() throws {
         let erase = try EraseWiringScan.functionBody(
             of: "func resetAllLocalData(keepingSession: Bool) {",
-            inFileAt: "Done/Views/Agent/AgentSettingsView.swift"
+            inFileAt: "Done/Services/LocalDataEraser.swift"
         )
         let collapsed = erase.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         XCTAssertTrue(collapsed.contains("if !keepingSession { authService.signOut() }"),
@@ -138,7 +145,7 @@ final class EraseWiringQATests: XCTestCase {
     func testTheSnapshotWipeStillComesAfterTheAvatarDelete() throws {
         let body = try EraseWiringScan.functionBody(
             of: "func resetAllLocalData(keepingSession: Bool) {",
-            inFileAt: "Done/Views/Agent/AgentSettingsView.swift"
+            inFileAt: "Done/Services/LocalDataEraser.swift"
         )
         let avatar = try XCTUnwrap(body.range(of: "MeAvatarStore.delete()"))
         let snapshot = try XCTUnwrap(body.range(of: "backupSnapshotService.wipe()"))
@@ -150,6 +157,26 @@ final class EraseWiringQATests: XCTestCase {
                        + "something other than the call, which is how this went green before")
     }
 
+    /// The resident's forget mints the next daily id under the owner that holds
+    /// at the moment it runs, so it must follow everything that changes that
+    /// owner or that answers for it: the sign-out, the wipe of the records'
+    /// directory, and the uploader's reset (which drops the owner it cached
+    /// before attaching to a session).
+    func testTheResidentForgetsAfterTheSignOutTheWipeAndTheUploaderReset() throws {
+        let body = try EraseWiringScan.functionBody(
+            of: "func resetAllLocalData(keepingSession: Bool) {",
+            inFileAt: "Done/Services/LocalDataEraser.swift"
+        )
+        let forget = try XCTUnwrap(body.range(of: "ResidentObservationCenter.shared?.forgetAfterErase()"))
+        for earlier in ["authService.signOut()", "SpikeRunStore.wipe()", "telemetryUploader?.forgetAfterErase()"] {
+            let call = try XCTUnwrap(body.range(of: earlier), "liveness: \(earlier) is in the erase")
+            XCTAssertTrue(call.lowerBound < forget.lowerBound,
+                          "\(earlier) must run before the resident forgets: its fresh id is minted for the owner after it")
+        }
+        XCTAssertEqual(body.components(separatedBy: "ResidentObservationCenter.shared?.forgetAfterErase()").count - 1, 1,
+                       "exactly one occurrence — more means the scan matches something other than the call")
+    }
+
     /// gh#239 made the widget render its chrome from the App Group's language
     /// mirror. `store.clearAllLocalData()` stamps that mirror from the
     /// pre-erase settings, and the sweep that resets the language runs after
@@ -157,7 +184,7 @@ final class EraseWiringQATests: XCTestCase {
     func testTheWidgetMirrorIsRestampedAfterTheSettingsSweep() throws {
         let body = try EraseWiringScan.functionBody(
             of: "func resetAllLocalData(keepingSession: Bool) {",
-            inFileAt: "Done/Views/Agent/AgentSettingsView.swift"
+            inFileAt: "Done/Services/LocalDataEraser.swift"
         )
         let sweep = try XCTUnwrap(body.range(of: "AppSettingsKeys.removeResettableKeys(from: defaults)"))
         let flush = try XCTUnwrap(body.range(of: "store.flushWidgetSnapshotSync()"),
@@ -222,6 +249,27 @@ final class EraseWiringQATests: XCTestCase {
             SharedWidgetData.suiteName.hasSuffix(".test-host"),
             "clearAllLocalData() flushes the widget payload synchronously, and 22 test call "
             + "sites reach it — unredirected they blank the dogfood device's real widget")
+        XCTAssertEqual(
+            ReportStore().directoryURL.lastPathComponent,
+            "Reports-test-host",
+            "ReportStore().wipe() is in the erase and removes the whole directory — "
+            + "unredirected, a suite run deletes the device's reports, userNote included")
+        XCTAssertEqual(
+            LLMUsageStore.shared.fileURL.deletingLastPathComponent().lastPathComponent,
+            "DeveloperStats-test-host",
+            "LLMUsageStore.shared.clearAll() is in the erase and rewrites llm-usage.json whole")
+        XCTAssertEqual(
+            AgentConversationRepository.shared.directory.lastPathComponent,
+            "AgentChat-TestHost",
+            "AgentConversationRepository.shared.wipe() is in the erase — the chat history")
+        XCTAssertEqual(
+            OccurrenceKeyMetadataStore.shared.directory.lastPathComponent,
+            "OccurrenceKey-TestHost",
+            "OccurrenceKeyMetadataStore.shared.wipe() is in the erase — the frozen reference zone")
+        XCTAssertEqual(
+            EventTypeCatalog.shared.directory.lastPathComponent,
+            "EventTypes-TestHost",
+            "resetToDefaults() on the app's store is in the erase and rewrites the event types whole")
     }
 
     /// The assertion above pins the suite's NAME; this pins the INSTANCE the

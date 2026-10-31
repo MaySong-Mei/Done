@@ -22,6 +22,10 @@
 //       finalizes (re-uploads, dead-row inserts) and computes the one
 //       prompt, and the tables that owe a flush get one.
 //
+//  A cloud restore moves the cursor back (`cursorWasRewound`): a chain that
+//  began before that gives up at its next resumption, status `rewound`, and
+//  the next chain starts from the new cursor.
+//
 //  Feed unavailable (§7 (7), the seat belt): a 404 / `PGRST2xx` from the
 //  feed RPC or the epoch GET means migration 015 is not applied. The engine
 //  marks `feedUnavailable`, logs `sync.feed.unavailable`, and opens I1 so
@@ -33,7 +37,6 @@
 //
 
 import Foundation
-import UIKit
 
 @MainActor
 final class SyncPuller {
@@ -96,6 +99,14 @@ final class SyncPuller {
     /// connection: one stall is one line, however many polls it spans.
     private var missedRingLogged = false
     private var missedRingCheck: SyncScheduledWork?
+    /// Moves on every `cursorWasRewound`. A chain reads it together with
+    /// its starting cursor and gives up at its next resumption once it has
+    /// moved: every page it would still apply was asked for from a position
+    /// past the rewound cursor, its commit (`max(old, seq)`) would carry
+    /// the cursor straight back over the range the rewind is there to
+    /// re-deliver, and its head work (pending-verify) would judge rows by a
+    /// pull that never covered that range.
+    private var cursorRewinds = 0
 
     /// Test seam: every chain's reason and status, in order.
     var trace: ((String) -> Void)?
@@ -158,7 +169,7 @@ final class SyncPuller {
         // A new session probes the feed afresh (design §6.6 下次登录重探).
         engine.outboundFallback = false
         adoptEpochHeader(engine.cursor.epoch)
-        recovery.refreshBadge()
+        recovery.refreshBadge(recordingShelfRead: true)
         doorbell?.credentialsDidChange()
         doorbell?.start()
         startPolling()
@@ -226,7 +237,7 @@ final class SyncPuller {
     private func observeForeground() {
         guard observesForeground, foregroundObserver == nil else { return }
         foregroundObserver = NotificationCenter.default.addObserver(
-            forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main
+            forName: AppLifecycle.willEnterForeground, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.foregroundDidReturn() }
         }
@@ -267,6 +278,16 @@ final class SyncPuller {
         chain = Task { [weak self] in
             await self?.runChains(reason: reason, generation: generation)
         }
+    }
+
+    /// The engine moved the cursor back (a cloud restore,
+    /// `SupabaseSyncService.rewindCursorAfterRestore`): a chain in flight
+    /// is abandoned at its next resumption (`cursorRewinds`) and a pull
+    /// from the new cursor runs at once — as the rerun of that chain, or
+    /// as a new one.
+    func cursorWasRewound(reason: String) {
+        cursorRewinds += 1
+        requestPull(reason: reason)
     }
 
     /// Test convenience: trigger and wait for every chain the trigger (and
@@ -314,6 +335,7 @@ final class SyncPuller {
             return
         }
         var since = engine.cursor.value ?? 0
+        let rewinds = cursorRewinds
         var seen: Set<SyncBaselineKey> = []
         var lastIssue = pullIssue
         var pages = 0
@@ -337,6 +359,7 @@ final class SyncPuller {
                 break pageLoop
             }
             guard generation == sessionGeneration else { return }
+            guard rewinds == cursorRewinds else { status = "rewound"; break pageLoop }
 
             let epochRow: SyncEpochRow
             do {
@@ -346,6 +369,7 @@ final class SyncPuller {
                 break pageLoop
             }
             guard generation == sessionGeneration else { return }
+            guard rewinds == cursorRewinds else { status = "rewound"; break pageLoop }
             // Both feed reads answered: migration 015 is there.
             engine.noteFeedAvailability(.available)
 
@@ -375,6 +399,7 @@ final class SyncPuller {
             if !page.isEmpty {
                 let ancestry = await preQueryAncestry(page)
                 guard generation == sessionGeneration else { return }
+                guard rewinds == cursorRewinds else { status = "rewound"; break pageLoop }
                 var context = SyncApplyContext(engine: engine, shelf: shelf, eraseToken: token, pullIssue: issue)
                 context.eventTypeStore = eventTypeStore
                 context.skillStore = skillStore
@@ -397,6 +422,7 @@ final class SyncPuller {
                 if !outcome.directTombstones.isEmpty {
                     await tombstoneEventTypeLosers(outcome.directTombstones)
                     guard generation == sessionGeneration else { return }
+                    guard rewinds == cursorRewinds else { status = "rewound"; break pageLoop }
                 }
             }
             if head { break pageLoop }

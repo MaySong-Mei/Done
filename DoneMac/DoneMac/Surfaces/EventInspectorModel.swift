@@ -1,0 +1,602 @@
+//
+//  EventInspectorModel.swift
+//  DoneMac
+//
+//  The interaction hub, Mac-side: a right-inspector edit surface for the
+//  selected event — the phone's tap→detail model, made a live pane you
+//  edit while the calendar stays visible.
+//
+//  Mutators are ID-ADDRESSED and take an explicit `now`: a context-menu
+//  quick action or a text field flushing on teardown must act on the block
+//  it was invoked for, never on whatever happens to be selected at commit
+//  time (QA F1/#1 selection corruption, review #3 draft loss).
+//
+//  RECURRING SERIES (A1b): a field edit on a series occurrence CUSTOMIZES
+//  that one occurrence — it materializes a `.single` exception (matching iOS
+//  `editOccurrence`) and re-selects the concrete instance. The repeat RULE
+//  and DELETE are the only scoped (this/following/all) operations. Nothing
+//  is refused; the earlier fail-closed gate is gone.
+//
+//  Pickers/toggles/dates commit immediately (one store commit each); text
+//  fields commit on submit/blur so typing stays a zero-commit action (the
+//  budget-5 discipline). Every write goes through the QA'd store path
+//  (replaceCalendarEvent seeds from renderTimeRanges and rebases exception
+//  mirrors). Effort, notes and reflection are the occurrence's log record,
+//  written through the phone's store calls (the store mirrors effort onto
+//  colorDepth).
+//
+
+import SwiftUI
+
+@MainActor
+@Observable
+final class EventInspectorModel {
+    private(set) var selectedID: UUID?
+
+    @ObservationIgnored private let store: MacEventStore
+    @ObservationIgnored private let calendar: Calendar
+
+    /// The shared store, for the pane to observe (see EventInspectorView).
+    var journalStore: EventStore { store.shared }
+
+    init(store: MacEventStore, calendar: Calendar) {
+        self.store = store
+        self.calendar = calendar
+    }
+
+    /// The live event, re-read from the store each access so the pane never
+    /// edits a stale snapshot.
+    var event: Event? {
+        guard let selectedID else { return nil }
+        return store.calendarEvents.first { $0.id == selectedID }
+    }
+
+    /// Presentation follows the SELECTION, not liveness: an event dropped
+    /// out-of-band (a sync round-trip) leaves the pane on an honest
+    /// "unavailable" state instead of silently closing and then reopening if
+    /// the same id ever returns (review #7).
+    var isOpen: Bool { selectedID != nil }
+
+    /// A text field in the pane has focus — a draft that has not committed
+    /// yet. The window counts as busy only then (not merely open), so an
+    /// inspector left open for days does not hold off a time-zone change
+    /// forever; pickers commit at once and a blurred draft has committed.
+    private(set) var isEditingText = false
+    private var focusedTextFields = 0
+
+    func textField(focused: Bool) {
+        focusedTextFields = max(0, focusedTextFields + (focused ? 1 : -1))
+        isEditingText = focusedTextFields > 0
+    }
+
+    /// The occurrence day the selection was made on — a series renders one
+    /// block per occurrence all sharing the template's id, so a field edit
+    /// needs to know WHICH day to customize. nil once the selection is a
+    /// concrete (non-recurring) row.
+    private(set) var selectedOccurrenceDate: Date?
+
+    func select(_ id: UUID, occurrenceDate: Date? = nil) {
+        // A different event opens on its overview, as the phone's detail does,
+        // with no sheet carried over from the previous one.
+        if id != selectedID || occurrenceDate != selectedOccurrenceDate {
+            page = .overview
+            isSharing = false
+            isChatting = false
+        }
+        selectedID = id
+        selectedOccurrenceDate = occurrenceDate
+    }
+
+    /// The phone detail's two pages (an event's inspector shows a switch).
+    enum Page: Hashable { case overview, reflection }
+    var page: Page = .overview
+
+    /// What a block's context menu asks for — the phone's long-press menu:
+    /// View Details / Log, plus Add Note.
+    enum Intent { case details, log, addNote, share }
+
+    /// The share sheet is up (the phone's CalendarEventShareSheet).
+    var isSharing = false
+    /// The event chat is up (the phone detail's chat tool).
+    var isChatting = false
+
+    func open(_ id: UUID, occurrenceDate: Date?, intent: Intent, now: Date) {
+        select(id, occurrenceDate: occurrenceDate)
+        switch intent {
+        case .details:
+            page = .overview
+        case .share:
+            isSharing = occurrenceRange != nil
+        case .log:
+            page = .reflection
+        case .addNote:
+            page = .overview
+            if let occurrence, occurrenceRange != nil, !(event?.isAllDay ?? true) {
+                let timeline = timeline(for: occurrence)
+                if !timeline.isComposing { timeline.beginAdding(now: now) }
+            }
+        }
+    }
+    func close() {
+        selectedID = nil
+        selectedOccurrenceDate = nil
+        isSharing = false
+        isChatting = false
+    }
+
+    /// The event chat needs the assistant's API key, which the Mac has no
+    /// screen to enter (and which deliberately does not sync). Without it
+    /// the chat would save a conversation holding only the seed prompt and
+    /// an error, and link it to the occurrence the phone then opens.
+    var canChat: Bool {
+        !(UserDefaults.standard.string(forKey: AppSettingsKeys.agentAPIKey) ?? "").isEmpty
+    }
+
+    /// True when the selected row is a recurring series template — the pane
+    /// shows the repeat rule + scope controls, and field edits customize a
+    /// single occurrence (materializing an exception).
+    var isRecurringSeries: Bool { event?.isRecurringSeries ?? false }
+
+    /// Human summary of the current repeat rule (for the Repeat section).
+    var repeatSummary: String {
+        guard let event, event.repeatUnit != .none else { return "Does not repeat" }
+        let n = max(1, event.repeatInterval)
+        let unit: String
+        switch event.repeatUnit {
+        case .none: unit = ""
+        case .day: unit = n == 1 ? "day" : "days"
+        case .week: unit = n == 1 ? "week" : "weeks"
+        case .month: unit = n == 1 ? "month" : "months"
+        case .year: unit = n == 1 ? "year" : "years"
+        }
+        let base = n == 1 ? "Every \(unit)" : "Every \(n) \(unit)"
+        switch event.repeatEndType {
+        case .none: return base
+        case .onDate: return base + " · until a date"
+        case .afterCount: return base + " · \(event.repeatEndCount ?? 0)×"
+        }
+    }
+
+    /// The time range to SHOW and edit — for a series occurrence this is the
+    /// selected day's projected range (day + the template's time-of-day +
+    /// duration), NOT the template's own day-0 range, so the Time picker
+    /// displays and writes the occurrence you clicked (QA F1: seeding from
+    /// the template dropped the edit onto day 0 and deleted the real day).
+    var occurrenceRange: Event.TimeRange? {
+        guard let event else { return nil }
+        if event.isRecurringSeries, let day = selectedOccurrenceDate,
+           let template = event.primaryTimeRange {
+            let start = Event.dateByCombining(day: calendar.startOfDay(for: day),
+                                              timeFrom: template.start, calendar: calendar)
+            return Event.TimeRange(start: start, end: start.addingTimeInterval(event.duration))
+        }
+        return event.renderTimeRanges(calendar: calendar).first
+    }
+
+    /// The occurrence the pane is on, in the phone's detail-route shape: the
+    /// per-occurrence log record (effort, notes, reflection) is keyed by it.
+    var occurrence: CalendarEventOccurrenceContext? {
+        guard let selectedID else { return nil }
+        return occurrenceContext(id: selectedID)
+    }
+
+    private func occurrenceContext(id: UUID) -> CalendarEventOccurrenceContext? {
+        guard let event = store.calendarEvents.first(where: { $0.id == id }) else { return nil }
+        let day = (id == selectedID ? selectedOccurrenceDate : nil)
+            ?? event.primaryTimeRange?.start ?? event.deadline ?? Date()
+        return CalendarEventOccurrenceContext(eventID: id, occurrenceDate: day, occurrenceID: nil,
+                                              isAllDay: event.isAllDay, source: .timelineTap)
+    }
+
+    /// The timeline/note state for an occurrence, kept while the pane stays
+    /// on it so a redraw never drops an open draft.
+    @ObservationIgnored private var cachedTimeline: InspectorTimelineModel?
+
+    func timeline(for occurrence: CalendarEventOccurrenceContext) -> InspectorTimelineModel {
+        if let cachedTimeline, cachedTimeline.occurrence.id == occurrence.id { return cachedTimeline }
+        let model = InspectorTimelineModel(occurrence: occurrence, store: store.shared)
+        cachedTimeline = model
+        return model
+    }
+
+    @ObservationIgnored private var cachedReflection: InspectorReflectionModel?
+
+    /// Quit with a draft open: keep the note being typed and land the
+    /// debounced reflection-note commit.
+    func flushDrafts(now: Date) {
+        if let cachedTimeline {
+            let range = cachedTimeline.occurrence.id == occurrence?.id ? occurrenceRange : nil
+            cachedTimeline.flush(now: now, range: range)
+        }
+        cachedReflection?.flush()
+    }
+
+    func reflection(for occurrence: CalendarEventOccurrenceContext) -> InspectorReflectionModel {
+        if let cachedReflection, cachedReflection.occurrence.id == occurrence.id { return cachedReflection }
+        let model = InspectorReflectionModel(occurrence: occurrence, store: store.shared)
+        cachedReflection = model
+        return model
+    }
+
+    /// The Reflection page's images live on the event's intake record (the
+    /// phone's saveDetailImages); on a series occurrence this customizes
+    /// that one day, as the phone's editOccurrence does.
+    func setIntakeImages(id: UUID, _ refs: [AgenticIntakeImageRef], now: Date) {
+        apply(id: id, now: now) { event in
+            var intake = event.agenticIntake ?? AgenticIntakeRecord(rawText: "", source: .classicFallback)
+            intake.images = refs
+            event.agenticIntake = intake
+        }
+    }
+
+    /// The occurrence's effort as the phone reads it: the log record (or its
+    /// legacy/prefill chain), not the event's colorDepth mirror.
+    var effortRating: Int? {
+        guard let occurrence else { return nil }
+        return store.shared.prefilledDraft(for: occurrence).effort
+    }
+
+    // MARK: - Field commits (ID-addressed, now-explicit)
+
+    func setTitle(id: UUID, _ title: String, now: Date) {
+        apply(id: id, now: now) { $0.title = title }
+    }
+
+    func setNote(id: UUID, _ note: String, now: Date) {
+        apply(id: id, now: now) { $0.note = note }
+    }
+
+    func setKind(id: UUID, _ kind: Event.Kind, now: Date) {
+        apply(id: id, now: now) { $0.kind = kind }
+    }
+
+    func setType(id: UUID, _ type: String, now: Date) {
+        apply(id: id, now: now) { $0.type = type }
+    }
+
+    func setDeadline(id: UUID, _ deadline: Date?, now: Date) {
+        apply(id: id, now: now) { $0.deadline = deadline }
+    }
+
+    /// nil clears effort back to the unlogged default. Writes the occurrence's log record through the phone's quick-effort
+    /// path; the store mirrors it onto colorDepth (so the block re-tints).
+    /// Writing colorDepth directly, as this did before, left the phone's
+    /// effort control reading "unset" and its next edit overwriting it.
+    func setEffort(id: UUID, _ rating: Int?, now: Date) {
+        guard let occurrence = occurrenceContext(id: id) else { return }
+        store.shared.applyQuickEffort(rating, for: occurrence)
+    }
+
+    // MARK: - Todo lifecycle
+
+    func toggleDone(id: UUID, now: Date) {
+        apply(id: id, now: now) { event in
+            guard event.kind == .todo else { return }
+            if event.isDone {
+                event.isDone = false
+                event.status = .active
+                event.completeAt = nil
+            } else {
+                event.isDone = true
+                event.status = .completed
+                event.completeAt = now
+            }
+        }
+    }
+
+    /// Context-menu toggle: acts on the right-clicked occurrence (explicit
+    /// day), never on the pane's selection, and does not re-select — a
+    /// quick action on a possibly-unselected block (#1).
+    func toggleDoneOccurrence(id: UUID, occurrenceDate: Date?, now: Date) {
+        guard let event = store.calendarEvents.first(where: { $0.id == id }) else { return }
+        let change: (inout Event) -> Void = { e in
+            guard e.kind == .todo else { return }
+            if e.isDone {
+                e.isDone = false; e.status = .active; e.completeAt = nil
+            } else {
+                e.isDone = true; e.status = .completed; e.completeAt = now
+            }
+        }
+        if event.isRecurringSeries {
+            let day = occurrenceDate ?? event.primaryTimeRange?.start ?? now
+            _ = store.applyRecurringEdit(seriesID: id, occurrenceDate: day, scope: .single, now: now, edit: change)
+        } else {
+            var updated = event
+            change(&updated)
+            store.replaceCalendarEvent(updated, now: now)
+        }
+    }
+
+    func returnToStack(id: UUID, now: Date) {
+        // canReturnToStack excludes recurring, so this only ever runs on a
+        // concrete row — no series routing needed.
+        apply(id: id, now: now) { event in
+            guard event.canReturnToStack else { return }
+            event.timeRanges = []
+        }
+    }
+
+    // MARK: - Repeat rule + scoped delete
+
+    /// Change the repeat RULE of the selected series with an explicit scope
+    /// (all events / this-and-following). Unlike field edits (which customize
+    /// one occurrence), the rule is a series-level change the user must scope.
+    ///
+    /// KNOWN DEFERRAL (QA F3): turning a series OFF (unit `.none`, scope
+    /// `.all`) leaves its already-materialized exception instances parented to
+    /// the now-non-series row — they render as independent blocks on their
+    /// days. What SHOULD happen to customized occurrences when a series loses
+    /// its cadence (re-absorb / delete / keep) is a product decision, tracked
+    /// for A1 follow-up; the current behavior (keep as standalone) is the
+    /// least-destructive default.
+    func applyRepeat(unit: Event.RepeatUnit, interval: Int,
+                     endType: Event.RepeatEndType, endDate: Date?, endCount: Int?,
+                     scope: Event.RecurrenceEditScope, now: Date) {
+        guard let id = selectedID, let event else { return }
+        let day = selectedOccurrenceDate ?? event.primaryTimeRange?.start ?? now
+        let rule = RepeatRuleNormalizer.normalized(
+            unit: unit, interval: interval, endType: endType,
+            endDate: endDate, endCount: endCount, now: now, calendar: calendar
+        )
+        let newID = store.applyRecurringEdit(seriesID: id, occurrenceDate: day, scope: scope, now: now) { e in
+            rule.apply(to: &e)
+        }
+        if scope == .following, let newID { select(newID, occurrenceDate: day) }
+    }
+
+    /// Delete the selection, scoped for a series (this / this-and-following /
+    /// all) or a plain removal for a one-off.
+    func deleteScoped(scope: Event.RecurrenceEditScope, now: Date) {
+        guard let id = selectedID, let event else { return }
+        if event.isRecurringSeries {
+            let day = selectedOccurrenceDate ?? event.primaryTimeRange?.start ?? now
+            store.removeRecurringOccurrence(seriesID: id, occurrenceDate: day, scope: scope, now: now)
+        } else {
+            store.removeCalendarEvent(id: id, now: now)
+        }
+        selectedID = nil
+        selectedOccurrenceDate = nil
+    }
+
+    func delete(id: UUID, occurrenceDate: Date?, now: Date) {
+        if let e = store.calendarEvents.first(where: { $0.id == id }), e.isRecurringSeries {
+            // A context-menu delete on a series occurrence removes just that
+            // day (the scope prompt lives in the inspector's Delete).
+            let day = occurrenceDate ?? e.primaryTimeRange?.start ?? now
+            store.removeRecurringOccurrence(seriesID: id, occurrenceDate: day, scope: .single, now: now)
+        } else {
+            store.removeCalendarEvent(id: id, now: now)
+        }
+        // Only the pane's own selection collapses; deleting some OTHER block
+        // via the context menu must not tear down an open inspection (#1).
+        if selectedID == id { selectedID = nil; selectedOccurrenceDate = nil }
+    }
+
+    // MARK: - Commit plumbing
+
+    /// A field edit on a SERIES customizes one occurrence — materialize a
+    /// `.single` exception and re-select it, so the pane now targets the
+    /// concrete instance (matches iOS `editOccurrence`). A concrete row edits
+    /// in place.
+    private func apply(id: UUID, now: Date, _ change: (inout Event) -> Void) {
+        guard let event = store.calendarEvents.first(where: { $0.id == id }) else { return }
+        if event.isRecurringSeries {
+            // No-op guard (QA F2): `Event.applyEdit(.single)` always forks an
+            // exception before running the edit, so the store's array-equality
+            // guard can't catch a field write that changes nothing (a new id
+            // is always added). Detect the no-op here — re-tapping the current
+            // type/effort must NOT silently detach the day from the series.
+            var probe = event
+            change(&probe)
+            guard probe != event else { return }
+
+            let day = selectedOccurrenceDate ?? event.primaryTimeRange?.start ?? now
+            if let newID = store.applyRecurringEdit(
+                seriesID: id, occurrenceDate: day, scope: .single, now: now, edit: change
+            ) {
+                // Re-select ONLY when this edit targets the pane's current
+                // selection (review F1): a text field flushing on teardown
+                // after the user clicked away or closed the pane must commit
+                // its exception WITHOUT hijacking the new selection or
+                // resurrecting a just-closed pane.
+                if selectedID == id {
+                    selectedID = newID
+                    selectedOccurrenceDate = nil   // the exception is a concrete row now
+                }
+            }
+        } else {
+            var updated = event
+            change(&updated)
+            store.replaceCalendarEvent(updated, now: now)
+        }
+    }
+
+    /// The Start picker RESIZES (keeps the end), symmetric with setEnd — two
+    /// labeled pickers should both resize; moving the whole event when Start
+    /// changes silently shifts the end and surprises the user (code-review
+    /// F2). Start is clamped so the event keeps its 15-min minimum.
+    func setStart(id: UUID, _ start: Date, now: Date) {
+        if isAllDay(id) { return setAllDayDays(id: id, start: start, end: nil, now: now) }
+        applyTimed(id: id, now: now) { ranges in
+            let end = ranges[0].end
+            ranges[0] = Event.TimeRange(start: min(start, end.addingTimeInterval(-900)), end: end)
+        }
+    }
+
+    func setEnd(id: UUID, _ end: Date, now: Date) {
+        if isAllDay(id) { return setAllDayDays(id: id, start: nil, end: end, now: now) }
+        applyTimed(id: id, now: now) { ranges in
+            let start = ranges[0].start
+            ranges[0] = Event.TimeRange(start: start,
+                                        end: max(end, start.addingTimeInterval(900)))
+        }
+    }
+
+    private func isAllDay(_ id: UUID) -> Bool {
+        store.calendarEvents.first { $0.id == id }?.isAllDay ?? false
+    }
+
+    /// An all-day event's date pickers move whole civil days, stored the way
+    /// the phone form stores them (allDayStorageStart / allDayStorageEnd);
+    /// the end never lands before the start's day.
+    private func setAllDayDays(id: UUID, start: Date?, end: Date?, now: Date) {
+        applyTimed(id: id, now: now) { ranges in
+            let newStart = CalendarEventFormData.allDayStorageStart(for: start ?? ranges[0].start, calendar: calendar)
+            let pickedEnd = max(end ?? ranges[0].end, newStart)
+            let newEnd = CalendarEventFormData.allDayStorageEnd(for: pickedEnd, seedStart: newStart, calendar: calendar)
+            ranges[0] = Event.TimeRange(start: newStart, end: max(newEnd, Event.endOfDay(for: newStart, calendar: calendar)))
+        }
+    }
+
+    // MARK: - Absorbed todos (the phone detail's absorbedTodosSection)
+
+    /// The todos absorbed into an event (they leave the canvas and live here).
+    func absorbedTodos(of parentID: UUID) -> [Event] {
+        store.calendarEvents.filter { $0.absorbedIntoEventID == parentID }
+    }
+
+    /// Unabsorbed todos, most recent first, filtered by title — the phone's
+    /// addAbsorptionPicker list.
+    func absorbCandidates(matching search: String) -> [Event] {
+        let q = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return store.calendarEvents
+            .filter { $0.kind == .todo && $0.absorbedIntoEventID == nil }
+            .filter { q.isEmpty || $0.title.lowercased().contains(q) }
+            .sorted {
+                ($0.renderPrimaryTimeRange(calendar: calendar)?.start ?? .distantPast)
+                    > ($1.renderPrimaryTimeRange(calendar: calendar)?.start ?? .distantPast)
+            }
+    }
+
+    func absorb(todoID: UUID, into parentID: UUID, now: Date) {
+        store.shared.absorbTodoIntoEvent(todoID: todoID, parentEventID: parentID, now: now)
+    }
+
+    func releaseAbsorption(todoID: UUID) {
+        store.shared.releaseTodoAbsorption(todoID: todoID)
+    }
+
+    // MARK: - People ("With", the phone form's people picker)
+
+    /// The selectable roster (archived people drop out, as on the phone).
+    var activePeople: [Person] { store.shared.activePeople }
+    var friendGroups: [FriendGroup] { store.shared.friendGroups }
+
+    /// Names for the event's people, archived ones included so history still
+    /// resolves (People.swift).
+    func people(for event: Event) -> [Person] {
+        let byID = Dictionary(store.shared.people.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        return (event.peopleIDs ?? []).compactMap { byID[$0] }
+    }
+
+    /// Empty stores nil, as CalendarEventFormData does; a series day is
+    /// customized, as every field edit here is.
+    func setPeople(id: UUID, _ ids: [UUID], now: Date) {
+        var seen = Set<UUID>()
+        let unique = ids.filter { seen.insert($0).inserted }
+        apply(id: id, now: now) { $0.peopleIDs = unique.isEmpty ? nil : unique }
+    }
+
+    func togglePerson(id: UUID, _ personID: UUID, now: Date) {
+        guard let event = store.calendarEvents.first(where: { $0.id == id }) else { return }
+        var ids = event.peopleIDs ?? []
+        if let i = ids.firstIndex(of: personID) { ids.remove(at: i) } else { ids.append(personID) }
+        setPeople(id: id, ids, now: now)
+    }
+
+    /// A friend group's CURRENT active members (the group itself is not
+    /// stored on the event — later membership edits never rewrite history).
+    func groupMembers(_ group: FriendGroup) -> [UUID] {
+        let active = Set(activePeople.map(\.id))
+        return group.memberIDs.filter { active.contains($0) }
+    }
+
+    func isGroupSelected(_ group: FriendGroup, on event: Event) -> Bool {
+        let members = groupMembers(group)
+        let ids = Set(event.peopleIDs ?? [])
+        return !members.isEmpty && members.allSatisfy { ids.contains($0) }
+    }
+
+    /// The phone picker's toggleAll: a group whose members are all on the
+    /// event comes off as a whole; otherwise its missing members are added.
+    func toggleGroup(id: UUID, _ group: FriendGroup, now: Date) {
+        guard let event = store.calendarEvents.first(where: { $0.id == id }) else { return }
+        let members = groupMembers(group)
+        if isGroupSelected(group, on: event) {
+            setPeople(id: id, (event.peopleIDs ?? []).filter { !members.contains($0) }, now: now)
+        } else {
+            setPeople(id: id, (event.peopleIDs ?? []) + members, now: now)
+        }
+    }
+
+    /// The picker's "New Person": dedupes by name against active people.
+    func addNewPerson(id: UUID, named name: String, now: Date) {
+        guard let person = store.shared.addPerson(named: name),
+              let event = store.calendarEvents.first(where: { $0.id == id }) else { return }
+        if !(event.peopleIDs ?? []).contains(person.id) {
+            setPeople(id: id, (event.peopleIDs ?? []) + [person.id], now: now)
+        }
+    }
+
+    /// The phone overview's ±15-minute stepper: moves the end, keeping at
+    /// least 15 minutes (calendarEventAdjustedRangeForDurationDelta).
+    static let durationStepMinutes = 15
+
+    func adjustDuration(id: UUID, byMinutes delta: Int, now: Date) {
+        applyTimed(id: id, now: now) { ranges in
+            let start = ranges[0].start
+            let current = ranges[0].end.timeIntervalSince(start)
+            guard current > 0 else { return }
+            let target = max(900, current + TimeInterval(delta * 60))
+            guard abs(target - current) >= 1 else { return }
+            ranges[0] = Event.TimeRange(start: start, end: start.addingTimeInterval(target))
+        }
+    }
+
+    /// The phone form's All-day switch: on snaps the occurrence's range to
+    /// whole civil days with the form's own storage helpers (gh#188/#207
+    /// residue-aware end); off keeps the stored range, as the form does.
+    func setAllDay(id: UUID, _ on: Bool, now: Date) {
+        apply(id: id, now: now) { event in
+            guard event.isAllDay != on else { return }
+            var ranges = event.renderTimeRanges(calendar: calendar)
+            if on, let first = ranges.first {
+                ranges[0] = Event.TimeRange(
+                    start: CalendarEventFormData.allDayStorageStart(for: first.start, calendar: calendar),
+                    end: CalendarEventFormData.allDayStorageEnd(for: first.end, seedStart: first.start,
+                                                                calendar: calendar))
+            }
+            event.isAllDay = on
+            if !ranges.isEmpty { event.timeRanges = ranges }
+        }
+    }
+
+    /// Time edits fold into `apply` so a series occurrence materializes a
+    /// single exception the same way. The exception the engine mints already
+    /// carries the occurrence's range, so `renderTimeRanges` inside the edit
+    /// closure reads that range and the picker adjusts it.
+    private func applyTimed(id: UUID, now: Date,
+                            _ change: (inout [Event.TimeRange]) -> Void) {
+        // No-op guard in the OCCURRENCE frame: the generic `apply` probe
+        // compares the SERIES template's day-0 range, which always differs
+        // from an occurrence-day range, so a time picker reverted to the same
+        // time would still mint a phantom exception (code-review F4). Check
+        // the intended range against the occurrence's CURRENT range first.
+        if let event = store.calendarEvents.first(where: { $0.id == id }),
+           event.isRecurringSeries, let occ = occurrenceRange {
+            var probe = [occ]
+            change(&probe)
+            guard probe != [occ] else { return }
+        }
+        apply(id: id, now: now) { event in
+            var ranges = event.renderTimeRanges(calendar: calendar)
+            if ranges.isEmpty {
+                let start = calendar.startOfDay(for: now).addingTimeInterval(9 * 3600)
+                ranges = [Event.TimeRange(start: start, end: start.addingTimeInterval(3600))]
+            }
+            change(&ranges)
+            event.timeRanges = ranges
+        }
+    }
+
+}

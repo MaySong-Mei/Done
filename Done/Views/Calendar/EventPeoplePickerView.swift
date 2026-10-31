@@ -13,116 +13,7 @@ import PhotosUI
 
 // MARK: - Avatar image storage
 
-/// Stores uploaded person avatars as downscaled JPEGs on disk (Application
-/// Support/PersonAvatars), keyed by a unique filename held on `Person`. Keeps
-/// image bytes out of UserDefaults. An in-memory `NSCache` avoids re-reading
-/// from disk on every render.
-enum PersonAvatarStore {
-    private static let cache = NSCache<NSString, UIImage>()
-
-    /// Where the JPEGs live.
-    ///
-    /// Test-host aware, the same way `SpikeRunStore`, `EventTypeTemplateStore`,
-    /// `AgentConversationRepository` and `OccurrenceKeyMetadataStore` already
-    /// are. This was the ONE purge-capable store without the seam, and
-    /// `removeAll()` below removes the whole directory — so a suite run on a
-    /// device or simulator holding real data would have taken every contact
-    /// photo the user ever attached, permanently, with the `avatarImageName`
-    /// references still pointing at the gone files.
-    private static var directoryName: String {
-        EventStorageLocation.isRunningUnderXCTest ? "PersonAvatars-test-host" : "PersonAvatars"
-    }
-
-    /// Resolves WITHOUT creating. Used by the destructive paths: an accessor
-    /// that mkdirs as a side effect made `removeAll()` create a directory in
-    /// order to delete it on a device that never had an avatar.
-    ///
-    /// Not private, so a test can assert against the location the store
-    /// ACTUALLY uses instead of hardcoding "PersonAvatars" — the hardcoding
-    /// was half of why the first version of that test pointed at the real
-    /// container.
-    static var resolvedDirectory: URL? {
-        FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-            .appendingPathComponent(directoryName, isDirectory: true)
-    }
-
-    /// Resolves AND creates. Used by `save`.
-    private static var directory: URL? {
-        guard let dir = resolvedDirectory else { return nil }
-        let fm = FileManager.default
-        if !fm.fileExists(atPath: dir.path) {
-            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        }
-        return dir
-    }
-
-    static func image(named name: String) -> UIImage? {
-        if let cached = cache.object(forKey: name as NSString) { return cached }
-        guard let url = resolvedDirectory?.appendingPathComponent(name),
-              let data = try? Data(contentsOf: url),
-              let image = UIImage(data: data) else { return nil }
-        cache.setObject(image, forKey: name as NSString)
-        return image
-    }
-
-    /// Downscale + save as JPEG under a fresh unique filename; returns it.
-    /// A new filename each time avoids stale `NSCache`/SwiftUI image reuse
-    /// when a person's photo is replaced.
-    static func save(_ image: UIImage) -> String? {
-        let resized = image.resizedForAvatar()
-        guard let data = resized.jpegData(compressionQuality: 0.85),
-              let dir = directory else { return nil }
-        let name = "\(UUID().uuidString).jpg"
-        do {
-            try data.write(to: dir.appendingPathComponent(name), options: .atomic)
-            cache.setObject(resized, forKey: name as NSString)
-            return name
-        } catch {
-            return nil
-        }
-    }
-
-    static func delete(named name: String) {
-        cache.removeObject(forKey: name as NSString)
-        if let url = resolvedDirectory?.appendingPathComponent(name) {
-            try? FileManager.default.removeItem(at: url)
-        }
-    }
-
-    /// Take every avatar, for "erase all local data" (gh#263).
-    ///
-    /// `delete(named:)` is reached only from the picker's replace and remove
-    /// flows, so before this existed an erase left the JPEGs behind in a
-    /// directory that iOS Device Backup includes.
-    ///
-    /// And it left them UNIDENTIFIABLE: the erase sets `people = []` first,
-    /// which destroys every `Person.avatarImageName` — the only thing that
-    /// said which file belonged to whom. Orphaned that way, not even a
-    /// manual cleanup could tell them apart. These are photographs of other
-    /// people, so the order of those two facts is the whole problem.
-    ///
-    /// The in-memory `cache` is cleared too: without it a wiped avatar can
-    /// still render from memory for the rest of the process.
-    static func removeAll() {
-        cache.removeAllObjects()
-        guard let dir = resolvedDirectory else { return }
-        try? FileManager.default.removeItem(at: dir)
-    }
-}
-
-private extension UIImage {
-    /// Cap the longest side so saved avatars stay small.
-    func resizedForAvatar(maxDimension: CGFloat = 256) -> UIImage {
-        let longest = max(size.width, size.height)
-        guard longest > maxDimension, longest > 0 else { return self }
-        let scale = maxDimension / longest
-        let newSize = CGSize(width: size.width * scale, height: size.height * scale)
-        return UIGraphicsImageRenderer(size: newSize).image { _ in
-            draw(in: CGRect(origin: .zero, size: newSize))
-        }
-    }
-}
+// `PersonAvatarStore` (and its avatar resize) lives in Models/PersonAvatarStore.swift (shared with the Mac target).
 
 // MARK: - Shared color / chip helpers
 
@@ -165,8 +56,8 @@ struct PersonAvatar: View {
     var size: CGFloat = 28
 
     var body: some View {
-        if let name = person.avatarImageName, let image = PersonAvatarStore.image(named: name) {
-            Image(uiImage: image)
+        if let image = personAvatarImage(named: person.avatarImageName) {
+            image
                 .resizable()
                 .scaledToFill()
                 .frame(width: size, height: size)
@@ -182,6 +73,17 @@ struct PersonAvatar: View {
                 .frame(width: size, height: size)
         }
     }
+}
+
+/// A person's uploaded avatar photo, or nil for the initials circle. Avatar
+/// photos are phone-only (PersonAvatarStore stores UIImage JPEGs).
+func personAvatarImage(named name: String?) -> Image? {
+    #if canImport(UIKit)
+    guard let name, let image = PersonAvatarStore.image(named: name) else { return nil }
+    return Image(uiImage: image)
+    #else
+    return nil
+    #endif
 }
 
 /// Compact name + avatar chip used in the event form's "With" row.
@@ -249,7 +151,7 @@ struct EventPeoplePickerView: View {
                 .padding(.top, 8)
                 .padding(.bottom, 32)
             }
-            .toolbar(.hidden, for: .navigationBar)
+            .platformHiddenNavigationBar()
             .safeAreaInset(edge: .top) {
                 pickerHeader
                     .padding(.horizontal, 16)
@@ -258,7 +160,7 @@ struct EventPeoplePickerView: View {
             }
             .alert(L(.newPerson), isPresented: $showAddPerson) {
                 TextField(L(.personNamePlaceholder), text: $newPersonName)
-                    .textInputAutocapitalization(.words)
+                    .platformWordsCapitalization()
                 Button(L(.add), action: commitNewPerson)
                     .disabled(trimmedNewName.isEmpty)
                 Button(L(.cancel), role: .cancel) { newPersonName = "" }
@@ -511,7 +413,7 @@ struct PersonEditSheet: View {
                 .padding(.top, 8)
                 .padding(.bottom, 32)
             }
-            .toolbar(.hidden, for: .navigationBar)
+            .platformHiddenNavigationBar()
             .safeAreaInset(edge: .top) {
                 editHeader
                     .padding(.horizontal, 16)
@@ -520,7 +422,7 @@ struct PersonEditSheet: View {
             }
             .alert(L(.newGroup), isPresented: $showNewGroup) {
                 TextField(L(.groupNamePlaceholder), text: $newGroupName)
-                    .textInputAutocapitalization(.words)
+                    .platformWordsCapitalization()
                 Button(L(.add)) {
                     let groupName = newGroupName.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !groupName.isEmpty else { return }
@@ -565,14 +467,20 @@ struct PersonEditSheet: View {
     private var nameCard: some View {
         GlassCardView(cornerRadius: 16, contentPadding: 14) {
             HStack(spacing: 12) {
+                #if canImport(UIKit)
                 PhotosPicker(selection: $photoItem, matching: .images) {
                     avatarPreview
                 }
                 .buttonStyle(.plain)
+                #else
+                // Avatar photos are phone-only (PersonAvatarStore writes
+                // UIImage JPEGs); the Mac shows the initials circle.
+                avatarPreview
+                #endif
 
                 TextField(L(.personNamePlaceholder), text: $name)
                     .font(.subheadline)
-                    .textInputAutocapitalization(.words)
+                    .platformWordsCapitalization()
                     .onSubmit(commit)
 
                 if store.person(id: personID)?.avatarImageName != nil {
@@ -584,10 +492,12 @@ struct PersonEditSheet: View {
                 }
             }
         }
+        #if canImport(UIKit)
         .onChange(of: photoItem) { _, item in
             guard let item else { return }
             Task { await applyPickedPhoto(item) }
         }
+        #endif
     }
 
     /// 40pt avatar (uploaded photo or initials circle) with a small camera
@@ -596,8 +506,8 @@ struct PersonEditSheet: View {
         let current = store.person(id: personID)
         return ZStack(alignment: .bottomTrailing) {
             Group {
-                if let name = current?.avatarImageName, let image = PersonAvatarStore.image(named: name) {
-                    Image(uiImage: image).resizable().scaledToFill()
+                if let image = personAvatarImage(named: current?.avatarImageName) {
+                    image.resizable().scaledToFill()
                 } else {
                     Circle()
                         .fill(PersonColor.color(named: colorName, seed: name))
@@ -620,6 +530,7 @@ struct PersonEditSheet: View {
         }
     }
 
+    #if canImport(UIKit)
     @MainActor
     private func applyPickedPhoto(_ item: PhotosPickerItem) async {
         guard let data = try? await item.loadTransferable(type: Data.self),
@@ -633,6 +544,7 @@ struct PersonEditSheet: View {
         store.updatePerson(person)
         photoItem = nil
     }
+    #endif
 
     private func removeAvatar() {
         guard var person = store.person(id: personID) else { return }

@@ -588,6 +588,10 @@ func calendarResolveEditMappingState(
     return nil
 }
 
+// PendingEventCreation is defined in CalendarPageView.swift, which is not in
+// the DoneMac target; the Mac creation flow feeds
+// calendarResolveEditMappingState with its own (date, range) tuple directly.
+#if os(iOS)
 func calendarResolvedCreationEditMapping(
     creationPreviewByDay: [Int: Event.TimeRange],
     selectedDayOffset: Int,
@@ -609,6 +613,7 @@ func calendarResolvedCreationEditMapping(
 
     return (calendar.startOfDay(for: pendingCreate.date), pendingCreate.timeRange)
 }
+#endif
 
 func calendarResolveBoundaryExtensionMappingState(
     creation: (date: Date, range: Event.TimeRange)?,
@@ -638,10 +643,14 @@ func calendarResolvedDragAnchorDate(
     dragOffset: DragOffset,
     dragMode: EventDragMode,
     dayColumnStep: CGFloat = 0,
+    renderDayStart: Date? = nil,
     calendar: Calendar = .current
 ) -> Date? {
     guard let draggingOriginalRange else { return nil }
-    let sourceDay = calendar.startOfDay(for: draggingOriginalRange.start)
+    // The column the drag began in. An event that started the day before
+    // is dragged in today's column, and its band above is today's, not the
+    // day it starts on. (gh#279)
+    let sourceDay = calendar.startOfDay(for: renderDayStart ?? draggingOriginalRange.start)
 
     guard dragMode == .move, dayColumnStep > 0 else {
         return sourceDay
@@ -785,6 +794,7 @@ func calendarResolvedDragEditMapping(
     dragMode: EventDragMode,
     dayColumnStep: CGFloat,
     hourHeight: CGFloat,
+    renderDayStart: Date? = nil,
     calendar: Calendar = .current
 ) -> (source: TimelineEditMappingSource, date: Date, range: Event.TimeRange)? {
     guard draggingEventID != nil else { return nil }
@@ -830,13 +840,14 @@ func calendarResolvedDragEditMapping(
     // Y aligns with the vertical-only range (no day shift mismatch).
     let anchorDate: Date
     if source == .moveDrag, let originalRange = draggingOriginalRange {
-        anchorDate = calendar.startOfDay(for: originalRange.start)
+        anchorDate = calendar.startOfDay(for: renderDayStart ?? originalRange.start)
     } else {
         anchorDate = calendarResolvedDragAnchorDate(
             draggingOriginalRange: draggingOriginalRange,
             dragOffset: dragOffset,
             dragMode: dragMode,
             dayColumnStep: dayColumnStep,
+            renderDayStart: renderDayStart,
             calendar: calendar
         ) ?? effectiveRange.start
     }
@@ -858,4 +869,71 @@ private var calendarAxisMarkerFormatter: DateFormatter {
         formatter.pmSymbol = "pm"
     }
     return formatter
+}
+
+// MARK: - Shared Drag Primitives
+// Platform-neutral drag types/predicates live in this UIKit-free file so
+// every app target (iOS + DoneMac) can compile them.
+
+/// Drag offset containing both X and Y components.
+struct DragOffset: Equatable {
+    var x: CGFloat
+    var y: CGFloat
+
+    static let zero = DragOffset(x: 0, y: 0)
+}
+
+/// Type of drag operation on event block
+enum EventDragMode: Equatable {
+    case move       // Drag from middle - move entire event
+    case resizeTop  // Drag from top edge - adjust start time
+    case resizeBottom // Drag from bottom edge - adjust end time
+}
+
+// Extracted for regression tests: keep boundary dragging unsnapped when snapping would cross day.
+func calendarPreviewOffsetSeconds(
+    rawOffsetSeconds: TimeInterval,
+    range: Event.TimeRange,
+    snapIntervalSeconds: TimeInterval = 15 * 60,
+    calendar: Calendar = .current
+) -> TimeInterval {
+    guard snapIntervalSeconds > 0 else { return rawOffsetSeconds }
+    let snappedSeconds = (rawOffsetSeconds / snapIntervalSeconds).rounded() * snapIntervalSeconds
+
+    let originalStartDay = calendar.startOfDay(for: range.start)
+    let originalEndDay = calendar.startOfDay(for: range.end)
+    let unsnappedStartDay = calendar.startOfDay(for: range.start.addingTimeInterval(rawOffsetSeconds))
+    let unsnappedEndDay = calendar.startOfDay(for: range.end.addingTimeInterval(rawOffsetSeconds))
+    let snappedStartDay = calendar.startOfDay(for: range.start.addingTimeInterval(snappedSeconds))
+    let snappedEndDay = calendar.startOfDay(for: range.end.addingTimeInterval(snappedSeconds))
+
+    // If snapping would shift day boundary differently from finger position, keep unsnapped.
+    if unsnappedStartDay != snappedStartDay || unsnappedEndDay != snappedEndDay {
+        return rawOffsetSeconds
+    }
+
+    let snappedStartShift = calendar.dateComponents([.day], from: originalStartDay, to: snappedStartDay).day ?? 0
+    let unsnappedStartShift = calendar.dateComponents([.day], from: originalStartDay, to: unsnappedStartDay).day ?? 0
+    let snappedEndShift = calendar.dateComponents([.day], from: originalEndDay, to: snappedEndDay).day ?? 0
+    let unsnappedEndShift = calendar.dateComponents([.day], from: originalEndDay, to: unsnappedEndDay).day ?? 0
+    if snappedStartShift != unsnappedStartShift || snappedEndShift != unsnappedEndShift {
+        return rawOffsetSeconds
+    }
+
+    return snappedSeconds
+}
+
+// Extracted for regression tests: true only while there is an active move-drag.
+func calendarIsMoveDragActive(
+    draggingEventID: UUID?,
+    dragMode: EventDragMode
+) -> Bool {
+    draggingEventID != nil && dragMode == .move
+}
+
+/// How a drag ended: committed or abandoned. Platform-neutral — the UIKit
+/// gesture-state mapping stays beside the iOS gesture code in EventBlock.swift.
+enum EventDragTerminalState: Equatable {
+    case completed
+    case cancelled
 }

@@ -967,6 +967,10 @@ final class TelemetryUploader: ObservableObject {
         var quarantined: [(UUID, Int)] = []
         var stoppedBy: SyncWriteFailure?
         for (run, row) in zip(batch, rows) {
+            // Each row is its own request, after an await: an erase since the
+            // batch was read leaves the rows not yet sent as the erased
+            // owner's records, from files that are gone. None of them goes.
+            if LocalDataEraseEpoch.isStale(eraseToken) { break }
             let revision = run.revision ?? 0
             do {
                 try await gateway.upsertRows(table: TelemetryWire.table, rows: [row], onConflict: TelemetryWire.onConflict)

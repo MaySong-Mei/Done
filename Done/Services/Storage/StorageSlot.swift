@@ -11,7 +11,7 @@ import Foundation
 /// so migration needs no mapping table — the keys and the slots were always
 /// the same names, and keeping them literally identical is what makes the
 /// read-through migration funnel a two-line thing.
-enum StorageSlot: String, CaseIterable {
+nonisolated enum StorageSlot: String, CaseIterable {
     /// Todo events (the todo list, not the calendar).
     case events
     /// The calendar. 1.25 MB / 2690 rows on the dogfood device — the reason

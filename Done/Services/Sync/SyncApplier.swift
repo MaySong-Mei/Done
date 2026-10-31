@@ -75,10 +75,20 @@ protocol SyncSingletonAdapter: AnyObject {
     /// the erase that "switch to this account" runs), in the outbound
     /// projection; nil when the table has no such notion.
     func emptyRow() -> [String: Any]?
+    /// The baseline entry as this projection reads it, given the incoming
+    /// row (nil for a tombstone): an entry hashed under an earlier
+    /// projection of the table is re-hashed when the adapter can tell which
+    /// row it named. Unchanged by default.
+    func baseInProjection(_ base: SyncBaselineEntry?, incoming: [String: Any]?) -> SyncBaselineEntry?
+    /// Columns the incoming row carries that the projection ignores, for
+    /// the trail. None by default.
+    func ignoredColumns(_ incoming: [String: Any]) -> [String]
 }
 
 extension SyncSingletonAdapter {
     func emptyRow() -> [String: Any]? { nil }
+    func baseInProjection(_ base: SyncBaselineEntry?, incoming: [String: Any]?) -> SyncBaselineEntry? { base }
+    func ignoredColumns(_ incoming: [String: Any]) -> [String] { [] }
 }
 
 /// The slots one page persists, in the order it persists them. The
@@ -978,7 +988,8 @@ private final class PageApplication {
 
     private func decideSingleton(_ row: Row) throws {
         guard let adapter = context.singletons[row.table] else { return }
-        let base = baseline.entry(table: row.table, id: uid)
+        let base = adapter.baseInProjection(baseline.entry(table: row.table, id: uid),
+                                            incoming: row.tombstone ? nil : row.data)
         let localHash = SupabaseSyncService.rowHash(adapter.localRow())
         if row.tombstone {
             let result = SyncSingletonTombstone.applyRow(table: row.table, localHash: localHash,
@@ -994,6 +1005,10 @@ private final class PageApplication {
             outcome.undecodable.append(row.key)
             DiagnosticTrail.record("Sync", "sync.apply.undecodable table=\(row.table) id=\(row.id) seq=\(row.seq)")
             return
+        }
+        let ignored = adapter.ignoredColumns(row.data)
+        if !ignored.isEmpty {
+            DiagnosticTrail.record("Sync", "sync.apply.ignored_columns table=\(row.table) seq=\(row.seq) columns=\(ignored.joined(separator: ","))")
         }
         let incomingHash = SupabaseSyncService.rowHash(projected)
         if let pre = catchUpDecision(row, localHash: localHash, base: base, incomingHash: incomingHash), let base {
@@ -1130,8 +1145,11 @@ private final class PageApplication {
 
 // MARK: - Production singleton adapters
 
-/// agent_preferences: rules + decision history + the token-inference state,
-/// one row (`SupabaseSyncService.agentPreferencesRow`).
+/// agent_preferences: rules + decision history, one row
+/// (`SupabaseSyncService.agentPreferencesRow`). The row's token columns
+/// (`SupabaseSyncService.agentPreferencesTokenColumns`) are neither read nor
+/// hashed: older builds still push them, and a change to them alone is no
+/// change here.
 @MainActor
 final class AgentPreferencesSyncAdapter: SyncSingletonAdapter {
     let engine: SupabaseSyncService
@@ -1146,52 +1164,30 @@ final class AgentPreferencesSyncAdapter: SyncSingletonAdapter {
 
     func localRow() -> [String: Any] { engine.agentPreferencesToRow(store) }
 
-    /// The five slices of an incoming row. A column that is missing or null
-    /// is empty (the pusher sends null for an empty token slice); a column
-    /// that is present but does not decode (a newer build's field) makes the
-    /// whole row undecodable, so it is never adopted as empty arrays over
-    /// the local ones (restore keeps the local slice in that case too).
-    private struct Slices {
-        let rules: [AgentPreferenceRule]
-        let decisions: [AgentDecisionRecord]
-        let dynamic: [TokenDynamicHypothesisRecord]
-        let meta: [TokenMetaHypothesisRecord]
-        let projections: [TokenOccurrenceProjectionRecord]
-    }
-
-    private static func slice<T: Decodable>(_ value: Any?) -> [T]? {
-        guard let value, !(value is NSNull) else { return [] }
-        return SupabaseSyncService.decodeJSONArray(value)
-    }
-
-    private static func slices(_ incoming: [String: Any]) -> Slices? {
-        guard let rules: [AgentPreferenceRule] = slice(incoming["rules"]),
-              let decisions: [AgentDecisionRecord] = slice(incoming["decision_history"]),
-              let dynamic: [TokenDynamicHypothesisRecord] = slice(incoming["token_dynamic_hypotheses"]),
-              let meta: [TokenMetaHypothesisRecord] = slice(incoming["token_meta_hypotheses"]),
-              let projections: [TokenOccurrenceProjectionRecord] = slice(incoming["token_projections"])
-        else { return nil }
-        return Slices(rules: rules, decisions: decisions, dynamic: dynamic, meta: meta, projections: projections)
-    }
-
     func emptyRow() -> [String: Any]? {
-        engine.agentPreferencesRow(rules: [], decisionHistory: [], dynamic: [], meta: [], projections: [])
+        engine.agentPreferencesRow(rules: [], decisionHistory: [])
     }
 
+    /// Nil when the rules or the history do not decode
+    /// (`SupabaseSyncService.agentPreferencesSlices`).
     func projected(_ incoming: [String: Any]) -> [String: Any]? {
-        guard let s = Self.slices(incoming) else { return nil }
-        return engine.agentPreferencesRow(rules: s.rules, decisionHistory: s.decisions,
-                                          dynamic: s.dynamic, meta: s.meta, projections: s.projections)
+        guard let s = SupabaseSyncService.agentPreferencesSlices(incoming) else { return nil }
+        return engine.agentPreferencesRow(rules: s.rules, decisionHistory: s.decisionHistory)
     }
 
     func adopt(_ incoming: [String: Any]) -> Bool {
-        guard let s = Self.slices(incoming) else { return false }
-        let preferencesLanded = store.applyRestore(
-            rules: s.rules, decisionHistory: s.decisions, strategy: .cloudOverwritesLocal, resolution: .keepCloud)
-        let tokensLanded = TokenInferenceRepository.shared.applyRestore(
-            dynamicHypotheses: s.dynamic, metaHypotheses: s.meta, projections: s.projections,
-            strategy: .cloudOverwritesLocal, resolution: .keepCloud)
-        return preferencesLanded && tokensLanded
+        guard let s = SupabaseSyncService.agentPreferencesSlices(incoming) else { return false }
+        return store.applyRestore(rules: s.rules, decisionHistory: s.decisionHistory,
+                                  strategy: .cloudOverwritesLocal, resolution: .keepCloud)
+    }
+
+    func baseInProjection(_ base: SyncBaselineEntry?, incoming: [String: Any]?) -> SyncBaselineEntry? {
+        engine.preferencesBaseInTokenFreeProjection(base, rules: store.rules, decisionHistory: store.decisionHistory,
+                                                    incoming: incoming)
+    }
+
+    func ignoredColumns(_ incoming: [String: Any]) -> [String] {
+        SupabaseSyncService.agentPreferencesTokenColumnsPresent(incoming)
     }
 }
 

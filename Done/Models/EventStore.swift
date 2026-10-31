@@ -739,7 +739,7 @@ final class EventStore: ObservableObject {
     /// `scheduleLogRecordCommit`.
     private var logRecordCommitDebounceTask: Task<Void, Never>?
     private var logRecordCommitLastPersistAt: Date?
-    private var logRecordCommitPending = false
+    private(set) var logRecordCommitPending = false
 
     /// Fires once per slot whose commit actually reached disk, in commit
     /// order. Exists so the ordering invariant this store now owns — the
@@ -914,9 +914,9 @@ final class EventStore: ObservableObject {
         // on it.  All three land on the same idempotent flush; the payload hash
         // makes a redundant one a no-op.
         widgetSnapshotBackgroundCancellable = Publishers.MergeMany(
-            NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification),
-            NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification),
-            NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)
+            NotificationCenter.default.publisher(for: AppLifecycle.willResignActive),
+            NotificationCenter.default.publisher(for: AppLifecycle.didEnterBackground),
+            NotificationCenter.default.publisher(for: AppLifecycle.willTerminate)
         )
         .sink { [weak self] note in
             // Before the widget flush, but NOT for payload freshness: an
@@ -959,7 +959,7 @@ final class EventStore: ObservableObject {
             // observed failure is process death, which `write(2)` already
             // survives, and this app is under an open frame-drop
             // investigation.
-            if note.name == UIApplication.didEnterBackgroundNotification {
+            if note.name == AppLifecycle.didEnterBackground {
                 self?.storage.syncDirectoryToStableStorage()
             }
         }
@@ -1671,20 +1671,25 @@ final class EventStore: ObservableObject {
         colorDepthMirrorDebounceTask?.cancel()
         colorDepthMirrorDebounceTask = nil
         guard !pendingColorDepthMirror.isEmpty else { return }
-        let pending = pendingColorDepthMirror
-        pendingColorDepthMirror = [:]
-        var didChange = false
-        for (eventID, colorDepth) in pending {
-            // Resolved at FLUSH time, not at schedule time: the event may
-            // have been deleted, or another path may have moved its
-            // colorDepth, in the window.
-            guard let index = calendarEventIndex(id: eventID) else { continue }
-            guard abs(rawCalendarEvents[index].colorDepth - colorDepth) > 0.0001 else { continue }
-            rawCalendarEvents[index].colorDepth = colorDepth
-            didChange = true
+        // Follower probe (perf batch 2a): the mirror lands 250 ms after an
+        // effort commit; its span includes the calendar commit it makes and
+        // the synchronous half of the publish that commit causes.
+        FollowerTiming.measure(.colorDepthMirror) {
+            let pending = pendingColorDepthMirror
+            pendingColorDepthMirror = [:]
+            var didChange = false
+            for (eventID, colorDepth) in pending {
+                // Resolved at FLUSH time, not at schedule time: the event may
+                // have been deleted, or another path may have moved its
+                // colorDepth, in the window.
+                guard let index = calendarEventIndex(id: eventID) else { continue }
+                guard abs(rawCalendarEvents[index].colorDepth - colorDepth) > 0.0001 else { continue }
+                rawCalendarEvents[index].colorDepth = colorDepth
+                didChange = true
+            }
+            guard didChange else { return }
+            _ = saveCalendarEvents(refreshInterrupts: false)
         }
-        guard didChange else { return }
-        _ = saveCalendarEvents(refreshInterrupts: false)
     }
 
     // MARK: - Log-record commit debounce (gh#219 note typing)
@@ -1863,6 +1868,14 @@ final class EventStore: ObservableObject {
     /// group already holds, and keep the app running until the build lands
     /// and writes the stats.
     private func syncWidgetSnapshots(deferringStats: Bool = false) {
+        // Follower probe (perf batch 2a): the widget projection runs 250 ms
+        // after every calendar commit.
+        FollowerTiming.measure(.widgetSnapshot) {
+            syncWidgetSnapshotsMeasured(deferringStats: deferringStats)
+        }
+    }
+
+    private func syncWidgetSnapshotsMeasured(deferringStats: Bool) {
         // `Calendar.current`, NOT `CalendarOccurrenceKey.referenceCalendar`:
         // the widget mirrors what the CANVAS shows, and every canvas day
         // boundary (`CalendarLayout.occurrencesForDate`, and the widget's own
@@ -1978,8 +1991,10 @@ final class EventStore: ObservableObject {
     ) {
         guard generation == categoryStatsGeneration else { return }
         categoryStatsCache = CategoryStatsCacheEntry(inputs: inputs, payload: categoryStats)
-        writeWidgetPayload(snapshots: snapshots, sourceCount: sourceCount,
-                           categoryStats: categoryStats, statsMillis: statsMillis, now: now, calendar: calendar)
+        FollowerTiming.measure(.widgetSnapshot) {
+            writeWidgetPayload(snapshots: snapshots, sourceCount: sourceCount,
+                               categoryStats: categoryStats, statsMillis: statsMillis, now: now, calendar: calendar)
+        }
     }
 
     /// Lets a test wait for a deferred category-stats build and its write.
@@ -4443,14 +4458,17 @@ final class EventStore: ObservableObject {
     ///
     /// For `strategy == .merge` the `resolution` decides ID collisions
     /// uniformly across all tables. `perRowDecisions` overrides that on a
-    /// per-row basis (per-row review path). For `.cloudOverwritesLocal` both
-    /// `resolution` and `perRowDecisions` are ignored — the cloud snapshot
-    /// fully replaces local state.
+    /// per-row basis (per-row review path). A cloud row in `pendingDeletes`
+    /// — one this device deleted and has not sent the delete for — is not
+    /// added back. For `.cloudOverwritesLocal` `resolution`,
+    /// `perRowDecisions` and `pendingDeletes` are all ignored — the cloud
+    /// snapshot fully replaces local state.
     func applyRestore(
         _ snapshot: RestoreSnapshot,
         strategy: RestoreStrategy,
         resolution: ConflictResolution,
-        perRowDecisions: PerRowDecisions? = nil
+        perRowDecisions: PerRowDecisions? = nil,
+        pendingDeletes: RestorePendingDeletes = .none
     ) -> RestoreApplySummary {
         var summary = RestoreApplySummary()
 
@@ -4475,27 +4493,32 @@ final class EventStore: ObservableObject {
             summary.addedTodoEvents = mergeByID(
                 local: &events, cloud: snapshot.todoEvents,
                 id: \.id, resolution: resolution,
-                perRowDecisions: perRowDecisions?.todoEvents
+                perRowDecisions: perRowDecisions?.todoEvents,
+                pendingDeletes: pendingDeletes.todoEvents
             )
             summary.addedCalendarEvents = mergeByID(
                 local: &rawCalendarEvents, cloud: snapshot.calendarEvents,
                 id: \.id, resolution: resolution,
-                perRowDecisions: perRowDecisions?.calendarEvents
+                perRowDecisions: perRowDecisions?.calendarEvents,
+                pendingDeletes: pendingDeletes.calendarEvents
             )
             summary.addedLogs = mergeByID(
                 local: &calendarEventLogRecords, cloud: snapshot.logs,
                 id: \.id, resolution: resolution,
-                perRowDecisions: perRowDecisions?.logs
+                perRowDecisions: perRowDecisions?.logs,
+                pendingDeletes: pendingDeletes.logs
             )
             summary.addedFeedback = mergeByID(
                 local: &calendarEventFeedbackRecords, cloud: snapshot.feedback,
                 id: \.id, resolution: resolution,
-                perRowDecisions: perRowDecisions?.feedback
+                perRowDecisions: perRowDecisions?.feedback,
+                pendingDeletes: pendingDeletes.feedback
             )
             summary.addedLists = mergeByID(
                 local: &todoLists, cloud: snapshot.todoLists,
                 id: \.id, resolution: resolution,
-                perRowDecisions: perRowDecisions?.todoLists
+                perRowDecisions: perRowDecisions?.todoLists,
+                pendingDeletes: pendingDeletes.todoLists
             )
         }
 
@@ -4714,7 +4737,9 @@ final class EventStore: ObservableObject {
     }
 
     /// Mutates `local` to be the merged result. Cloud rows whose ID is new are
-    /// always appended (returned in `addedCount`). Collisions are resolved
+    /// appended (returned in `addedCount`) unless the ID is in
+    /// `pendingDeletes`: a row deleted here whose delete has not reached the
+    /// cloud stays deleted. Collisions are resolved
     /// first via `perRowDecisions[id]` if present, then via `resolution`.
     /// `.keepLocal` leaves the local row alone, `.keepCloud` replaces it in
     /// place. Order of existing local rows is preserved.
@@ -4723,7 +4748,8 @@ final class EventStore: ObservableObject {
         cloud: [T],
         id: KeyPath<T, ID>,
         resolution: ConflictResolution,
-        perRowDecisions: [ID: ConflictResolution]? = nil
+        perRowDecisions: [ID: ConflictResolution]? = nil,
+        pendingDeletes: Set<ID> = []
     ) -> Int {
         // `CalendarOccurrenceKey.==` for `.singleEvent` only compares the
         // eventID, so two log/feedback records pointing at the same single
@@ -4743,7 +4769,7 @@ final class EventStore: ObservableObject {
                 if effective == .keepCloud {
                     local[idx] = c
                 }
-            } else {
+            } else if !pendingDeletes.contains(cid) {
                 local.append(c)
                 added += 1
             }
@@ -4758,6 +4784,7 @@ final class EventStore: ObservableObject {
 /// It extends a running process and relaunches nothing.
 @MainActor
 private final class WidgetStatsBuildAssertion {
+    #if canImport(UIKit)
     private var identifier: UIBackgroundTaskIdentifier = .invalid
 
     init() {
@@ -4771,6 +4798,12 @@ private final class WidgetStatsBuildAssertion {
         UIApplication.shared.endBackgroundTask(identifier)
         identifier = .invalid
     }
+    #else
+    // macOS does not suspend a running app, so there is nothing to hold
+    // open: the handed-off build simply finishes.
+    init() {}
+    func end() {}
+    #endif
 }
 
 extension UserDefaults {

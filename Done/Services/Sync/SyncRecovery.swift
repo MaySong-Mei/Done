@@ -83,10 +83,19 @@ final class SyncRecovery {
     /// could recognise (sim QA round 2: agent_preferences listed as the raw
     /// user UUID, counted as a second lost change). Their lines stay on the
     /// shelf; they are never offered, counted, or written back from here.
+    ///
+    /// Those lines are passed over without being parsed
+    /// (`ConflictShelf.entries(skippingTables:)`): they are the large ones,
+    /// and every query here is read-only. `rewrite` still reads them all.
     private func mine(_ account: String? = nil) -> [ConflictShelfEntry] {
         let account = account ?? uid
-        return shelf.entries().filter { $0.uid == account && !SupabaseSyncService.isSingletonTable($0.table) }
+        let read = shelf.entries(skippingTables: SupabaseSyncService.singletonTables)
+        lastShelfRead = read.stats
+        return read.entries.filter { $0.uid == account && !SupabaseSyncService.isSingletonTable($0.table) }
     }
+
+    /// What the last of those reads cost.
+    private(set) var lastShelfRead: ConflictShelf.ReadStats?
 
     /// Offered lines without a decision: the badge and the sign-out / erase guard.
     var undecidedOffers: [ConflictShelfEntry] {
@@ -101,8 +110,16 @@ final class SyncRecovery {
         mine(owner).filter(\.isUndecidedOffer)
     }
 
-    func refreshBadge() {
-        engine.setPendingPromptCount(undecidedOffers.count)
+    /// `recordingShelfRead` leaves the read's cost on the trail; the
+    /// session start passes it.
+    func refreshBadge(recordingShelfRead: Bool = false) {
+        let started = DispatchTime.now().uptimeNanoseconds
+        let count = undecidedOffers.count
+        if recordingShelfRead, let read = lastShelfRead {
+            let ms = (DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
+            DiagnosticTrail.record("Sync", "sync.shelf.read lines=\(read.lines) skipped=\(read.skipped) parsed=\(read.parsed) bytes=\(read.bytes) ms=\(ms)")
+        }
+        engine.setPendingPromptCount(count)
     }
 
     // MARK: Computing the offer (rule 5)

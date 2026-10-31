@@ -20,7 +20,7 @@
 
 import Foundation
 
-enum EventStorageLocation: Equatable {
+nonisolated enum EventStorageLocation: Equatable {
     /// The real store. Redirected to a sibling directory (and cut off from
     /// legacy migration) when the process is running under XCTest.
     case production

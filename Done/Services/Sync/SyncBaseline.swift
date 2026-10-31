@@ -725,6 +725,27 @@ final class SyncCursorStore {
         write(Stored(cursor: next, gen: baseline.generationMap, epoch: current?.epoch, kmin: current?.kmin))
     }
 
+    /// A cloud restore replayed into the baseline a snapshot read at or
+    /// above `seq` (`RestoreFetchMark`): the cursor moves back to `seq` when
+    /// it is past it, and never forward. Nil on either side means no cursor
+    /// — the next pull starts from the beginning of the feed. Ordered like
+    /// `commit`: every table moves to a new generation and the baseline is
+    /// persisted FIRST, then the cursor is written expecting those
+    /// generations, so losing either write to a crash drops the cursor at
+    /// the next load (`validate`) instead of leaving a cursor past versions
+    /// newer than the replayed baseline. The epoch and kmin stay.
+    func rewind(to seq: Int64?, baseline: SyncBaselineStore) {
+        guard !userId.isEmpty else { return }
+        baseline.advanceGeneration(tables: SyncBaselineStore.allTables)
+        baseline.persist()
+        let current = stored
+        let next: Int64? = {
+            guard let seq, let old = current?.cursor else { return nil }
+            return min(old, seq)
+        }()
+        write(Stored(cursor: next, gen: baseline.generationMap, epoch: current?.epoch, kmin: current?.kmin))
+    }
+
     /// The reset at a chain boundary (design §6.6 设备追平): the cursor is
     /// dropped, every table moves to a new generation under the new epoch,
     /// every entry gains the stale marker, and the cursor key records the

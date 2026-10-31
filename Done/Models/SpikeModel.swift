@@ -212,7 +212,7 @@ enum SpikeRegistry {
 
 // MARK: - Run
 
-enum SpikeRunOutcome: String, Codable, Equatable {
+nonisolated enum SpikeRunOutcome: String, Codable, Equatable {
     case completed
     case aborted
     case interrupted
@@ -232,13 +232,13 @@ enum SpikeRunOutcome: String, Codable, Equatable {
 /// made the tag silently flip on any metric that happens to land on a
 /// whole number (an entirely plausible frame-time percentile). Counts and
 /// measurements are both just "a number" for this harness's purposes.
-enum SpikeMetricValue: Equatable {
+nonisolated enum SpikeMetricValue: Equatable {
     case number(Double)
     case string(String)
     case bool(Bool)
 }
 
-extension SpikeMetricValue: Codable {
+nonisolated extension SpikeMetricValue: Codable {
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         if let value = try? container.decode(Bool.self) {
@@ -265,7 +265,12 @@ extension SpikeMetricValue: Codable {
 /// written by a past process) interrupted and awaiting reconciliation.
 /// See `SpikeRunLog` for how two on-disk records (open, then close) for
 /// the same `id` collapse into one current `SpikeRun`.
-struct SpikeRun: Codable, Identifiable, Equatable {
+///
+/// `nonisolated`, with every type a line decodes into and the pure log
+/// algebra below: the resident's launch-seed verification reads and decodes
+/// a whole file off the main thread (`ResidentObservationCenter`), and a
+/// main-actor `Codable` conformance cannot be used there.
+nonisolated struct SpikeRun: Codable, Identifiable, Equatable {
     let id: UUID
     let spikeID: String
     let scenarioID: String
@@ -334,7 +339,58 @@ struct SpikeRun: Codable, Identifiable, Equatable {
     var revision: Int? = nil
     var kind: TelemetryRecordKind? = nil
 
+    /// The erase epoch this value was born in (`LocalDataEraseEpoch`), taken
+    /// when it is built or decoded and carried by every copy. A run armed
+    /// before "erase all local data" and closed after it is the erased
+    /// owner's, and `SpikeRunStore` refuses any record whose epoch is not the
+    /// current one (`LocalDataEraseEpoch.isStale`). Memory only: never
+    /// written, never compared.
+    var eraseEpoch: Int {
+        get { birthEpoch.value }
+        set { birthEpoch.value = newValue }
+    }
+
+    /// `eraseEpoch`'s storage; see `SpikeRunBirthEpoch`.
+    var birthEpoch = SpikeRunBirthEpoch()
+
     var isOpen: Bool { endedAt == nil }
+}
+
+/// `SpikeRun.eraseEpoch`'s storage. Equal to every other, so two copies of
+/// one run compare equal whichever epoch each was read in; and absent from
+/// the line: the two container overloads below are what the synthesized
+/// `Codable` of `SpikeRun` calls, so encoding writes nothing for it (a line
+/// names the fields it named before the field existed) and decoding stamps
+/// the epoch current at the read. Its own `Codable` conformance exists only
+/// for that synthesis to type-check.
+///
+/// A stored property of this type, not a property wrapper: `SpikeRun` is
+/// `nonisolated`, and a wrapped property in it draws "'nonisolated' cannot
+/// be applied to mutable stored properties", an error in Swift 6 mode.
+nonisolated struct SpikeRunBirthEpoch: Codable, Equatable {
+    var value: Int
+
+    init(value: Int = LocalDataEraseEpoch.capture()) {
+        self.value = value
+    }
+
+    init(from decoder: Decoder) throws {
+        value = LocalDataEraseEpoch.capture()
+    }
+
+    func encode(to encoder: Encoder) throws {}
+
+    static func == (lhs: SpikeRunBirthEpoch, rhs: SpikeRunBirthEpoch) -> Bool { true }
+}
+
+nonisolated extension KeyedDecodingContainer {
+    func decode(_ type: SpikeRunBirthEpoch.Type, forKey key: Key) throws -> SpikeRunBirthEpoch {
+        SpikeRunBirthEpoch()
+    }
+}
+
+nonisolated extension KeyedEncodingContainer {
+    mutating func encode(_ value: SpikeRunBirthEpoch, forKey key: Key) throws {}
 }
 
 // MARK: - Run log algebra (pure)
@@ -343,7 +399,7 @@ struct SpikeRun: Codable, Identifiable, Equatable {
 /// (oldest first, exactly the order `SpikeRunStore` reads them off disk
 /// in). Kept separate from any file I/O so every rule here is testable
 /// against a plain array fixture.
-enum SpikeRunLog {
+nonisolated enum SpikeRunLog {
     /// A run may appear as two on-disk records (write-ahead open, then a
     /// closing record) or be re-appended later (a note added after
     /// close). The LATEST record for a given id, in append order, is that
@@ -1619,5 +1675,85 @@ struct Spike201EpochStamp: Equatable {
             "epochSystemUptime": .number(systemUptime),
             "epochDateSinceReferenceDate": .number(dateSinceReferenceDate),
         ]
+    }
+}
+
+/// What one frame probe run produced: the distribution, the display it was
+/// taken on, and everything `SpikeFrameTickIngestor` collected alongside.
+struct SpikeFrameProbeResult: Equatable {
+    let stats: SpikeFrameStats?
+    let truncated: Bool
+    let maximumFramesPerSecond: Int
+    let drain: SpikeFrameTickDrain
+
+    /// The frame metrics every runner writes, so the two runners cannot
+    /// drift into naming the same quantity differently.
+    ///
+    /// gh#201 ROUND 3 RENAMED THE DISTRIBUTION KEYS. Round 2 changed what
+    /// they measure — it began ADMITTING active stalls that round 1
+    /// discarded, so round 1's max of 941.1 and round 2's of 1159.8 are
+    /// partly a reclassification, not a regression — while keeping the
+    /// keys `frameSampleCount` / `p50FrameMs` / `p95FrameMs` /
+    /// `p99FrameMs` / `maxFrameMs`. Round 2 applied its own
+    /// "meaning changed ⇒ key changed" rule to two keys and not to these
+    /// five. They are `...FrameDelta...` now, and the old spellings are
+    /// asserted never to reappear, so no round-1 line can be read against
+    /// a round-3 line by key.
+    var metrics: [String: SpikeMetricValue] {
+        var metrics: [String: SpikeMetricValue] = [
+            // Context only. The panel's advertised maximum; the cadence
+            // the link ACHIEVED is `frameAchievedFPS` below, and on the
+            // one device this has run on they differ by 2×.
+            "displayMaxFPS": .number(Double(maximumFramesPerSecond)),
+            "displayNominalFrameMs": .number(
+                SpikeFrameThreshold.nominalIntervalMs(maximumFramesPerSecond: maximumFramesPerSecond)
+            ),
+            // Recorded unconditionally, zero included. "Absence of markers
+            // means the distribution is complete" was false: absence is
+            // also the normal outcome of a real backgrounding, which
+            // re-baselines the timebase and therefore computes no delta at
+            // all. Round 1 could only assert "the app never backgrounded"
+            // in prose; these two are that assertion as a number.
+            "frameResignActiveCount": .number(Double(drain.resignActiveCount)),
+            "frameDidBecomeActiveCount": .number(Double(drain.didBecomeActiveCount)),
+            "frameSuspensionGapCount": .number(Double(drain.suspensionGapCount)),
+            "frameActiveStallCount": .number(Double(drain.activeStallsMs.count)),
+            "frameSamplesTruncated": .bool(truncated),
+            // The system's own definition of late: this tick's timestamp
+            // against the previous tick's targetTimestamp. Independent of
+            // any multiple, and the only one that survives the OS changing
+            // the refresh rate mid-run.
+            "frameOvershootSampleCount": .number(Double(drain.overshoot.sampleCount)),
+            "frameOvershootLateCount": .number(Double(drain.overshoot.lateCount)),
+            "frameOvershootMaxMs": .number(drain.overshoot.maxMs),
+            "frameOvershootToleranceMs": .number(SpikeFrameOvershootTally.toleranceMs),
+        ]
+        if let stats {
+            metrics["frameDeltaCount"] = .number(Double(stats.count))
+            metrics["p50FrameDeltaMs"] = .number(stats.p50Ms)
+            metrics["p95FrameDeltaMs"] = .number(stats.p95Ms)
+            metrics["p99FrameDeltaMs"] = .number(stats.p99Ms)
+            metrics["maxFrameDeltaMs"] = .number(stats.maxMs)
+            metrics["frameAchievedFPS"] = .number(stats.achievedFramesPerSecond)
+            metrics["frameLateThresholdObservedMs"] = .number(stats.overThresholdMs)
+            metrics["overObservedCadenceCount"] = .number(Double(stats.overThresholdCount))
+        }
+        // Durations, listed only when there is something to list — the
+        // counts above already distinguish "none happened" from "the rig
+        // never looked".
+        if !drain.largestDeltasMs.isEmpty {
+            metrics["frameLargestDeltasMs"] = .string(Self.list(drain.largestDeltasMs))
+        }
+        if !drain.suspensionGapsMs.isEmpty {
+            metrics["frameSuspensionGapsMs"] = .string(Self.list(drain.suspensionGapsMs))
+        }
+        if !drain.activeStallsMs.isEmpty {
+            metrics["frameActiveStallsMs"] = .string(Self.list(drain.activeStallsMs))
+        }
+        return metrics
+    }
+
+    private static func list(_ values: [Double]) -> String {
+        values.map { String(format: "%.1f", $0) }.joined(separator: " ")
     }
 }

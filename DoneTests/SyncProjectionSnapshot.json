@@ -53,9 +53,6 @@
     "decision_history",
     "rules",
     "synced_at",
-    "token_dynamic_hypotheses",
-    "token_meta_hypotheses",
-    "token_projections",
     "updated_at",
     "user_id"
   ],

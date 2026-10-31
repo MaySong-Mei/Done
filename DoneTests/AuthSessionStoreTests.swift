@@ -326,11 +326,11 @@ final class AuthSessionStoreTests: XCTestCase {
     /// `AuthService` — the single write point the issue requires to survive
     /// the move.
     func testTheResetFlowSignsOutThroughTheSingleWritePoint() {
-        let settings = source("Done/Views/Agent/AgentSettingsView.swift")
-        XCTAssertFalse(settings.isEmpty, "liveness: AgentSettingsView.swift must be readable")
+        let settings = source("Done/Services/LocalDataEraser.swift")
+        XCTAssertFalse(settings.isEmpty, "liveness: LocalDataEraser.swift must be readable")
         XCTAssertNil(settings.range(of: "authService.signOutXYZ()"), "control: the search can come up empty")
 
-        guard let reset = settings.range(of: "private func resetAllLocalData()") else {
+        guard let reset = settings.range(of: "func resetAllLocalData(keepingSession: Bool) {") else {
             return XCTFail("resetAllLocalData() was renamed; this guard must be revisited")
         }
         let body = String(settings[reset.upperBound...])
