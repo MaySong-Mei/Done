@@ -46,6 +46,14 @@ final class CalendarViewState: ObservableObject {
         let persisted = defaults.object(forKey: timelineHourHeightKey) as? Double
         let initialValue = CGFloat(persisted ?? Double(calendarTimelineHourHeightDefault))
         self.timelineHourHeight = Self.clampTimelineHourHeight(initialValue)
+        #if DEBUG
+        // `-dstQAHourHeight <points>`: start at that zoom (gh#285 QA).
+        let arguments = ProcessInfo.processInfo.arguments
+        if let index = arguments.firstIndex(of: "-dstQAHourHeight"), arguments.indices.contains(index + 1),
+           let wanted = Double(arguments[index + 1]) {
+            self.timelineHourHeight = Self.clampTimelineHourHeight(CGFloat(wanted))
+        }
+        #endif
 
         // Restore persisted range mode (only when the setting is enabled)
         if defaults.bool(forKey: AppSettingsKeys.calendarRememberViewMode),

@@ -139,11 +139,35 @@ final class WristBridge: NSObject {
         seedDebugParallelDayIfAsked(store: store)
         seedDebugRepeatingIfAsked(store: store)
         seedDebugNameLaterIfAsked(store: store, templates: templates)
+        seedDebugDSTIfAsked(store: store, templates: templates)
 #endif
         pushSnapshot()
     }
 
 #if DEBUG
+    /// `-dstQASeed`: three blocks on 2026-11-01 in America/New_York, once,
+    /// for the gh#285 anchors — A9 09:00–10:00 EST, B1 01:15–01:45 EDT and
+    /// C1 01:15–01:45 EST — plus D3 03:00–04:00 EDT on 2026-03-08. Given as
+    /// instants, so the fixture is the same whatever zone the simulator
+    /// runs in; the anchors are read with `SIMCTL_CHILD_TZ=America/New_York`.
+    private func seedDebugDSTIfAsked(store: EventStore, templates: EventTypeTemplateStore) {
+        guard ProcessInfo.processInfo.arguments.contains("-dstQASeed"),
+              !store.canvasRenderableCalendarEvents.contains(where: { $0.title == "A9" }) else { return }
+        let type = templates.templates.first?.title ?? "Work"
+        func add(_ title: String, _ start: TimeInterval, _ seconds: TimeInterval) {
+            let range = Event.TimeRange(
+                start: Date(timeIntervalSince1970: start),
+                end: Date(timeIntervalSince1970: start + seconds)
+            )
+            store.addCalendarEvent(Event(title: title, timeRanges: [range], type: type))
+        }
+        add("A9", 1_793_541_600, 3600)
+        add("B1", 1_793_510_100, 1800)
+        add("C1", 1_793_513_700, 1800)
+        add("D3", 1_772_953_200, 3600)
+        logger.notice("dstQA: seeded A9/B1/C1 on 2026-11-01 and D3 on 2026-03-08; tz=\(TimeZone.current.identifier, privacy: .public)")
+    }
+
     /// `-wristSeedTitles`: a fortnight of named blocks of the catalog's
     /// first type, so a paired-simulator check has names to be offered.
     /// Every day "Standup" 9:00–9:15, "Deep work" 9:30–12:00 and "Review"
