@@ -14,7 +14,7 @@ import Foundation
 /// and the day boundary is `end` — so this is the only day geometry the
 /// timeline needs, and every consumer reads it from here rather than
 /// adding a day's worth of seconds to its start.
-struct DayClock: Hashable {
+nonisolated struct DayClock: Hashable {
     /// The first instant of the day.
     let start: Date
     /// The first instant of the next day.
@@ -64,7 +64,11 @@ struct DayClock: Hashable {
     /// Which pass of a twice-visited wall clock time `instant` is on: 1 for
     /// the first, 2 for the second; nil when its wall clock time is unique.
     func repeatedPass(of instant: Date) -> Int? {
-        guard let transition, let repeatedRange, repeatedRange.contains(instant) else { return nil }
+        // Half-open on purpose: `DateInterval.contains` admits its end, and
+        // the instant at the end of the repeated stretch is the first unique
+        // one after it.
+        guard let transition, let repeatedRange,
+              instant >= repeatedRange.start, instant < repeatedRange.end else { return nil }
         return instant < transition ? 1 : 2
     }
 
@@ -105,7 +109,7 @@ struct DayClock: Hashable {
 /// so a zone change while the app runs reaches the next read the way it
 /// always did; handling the change in place is left for later and would
 /// land here.
-struct CalendarZoneClock: Equatable {
+nonisolated struct CalendarZoneClock: Equatable {
     let calendar: Calendar
     /// False draws every day the legacy way: the standard length from its
     /// start. This is the developer kill switch of the day-clock seam; see
@@ -120,8 +124,9 @@ struct CalendarZoneClock: Equatable {
     /// The zone the app is in right now, with the kill switch as set.
     static var current: CalendarZoneClock { CalendarZoneClock() }
 
-    /// What the kill switch defaults to when nothing has set it.
-    static let dayClockEnabledByDefault = false
+    /// What the kill switch defaults to when nothing has set it: the real
+    /// day length (S1); off only as a developer escape hatch.
+    static let dayClockEnabledByDefault = true
 
     /// The kill switch as set in `UserDefaults`.
     static var dayClockEnabled: Bool {
@@ -140,5 +145,59 @@ struct CalendarZoneClock: Equatable {
     func day(_ offset: Int, from clock: DayClock) -> DayClock {
         let target = calendar.date(byAdding: .day, value: offset, to: clock.start) ?? clock.start
         return day(containing: target)
+    }
+}
+
+/// Wall clock time to instant (gh#285). Foundation resolves a wall time the
+/// day visits twice to its first occurrence and a wall time the day skips
+/// forward to the next valid instant; rebuilding a date from its components
+/// therefore merged the second 01:15 into the first. This resolver keeps
+/// the offset the original instant had when the wall time is ambiguous, so
+/// an edit that re-derives a time leaves the instant where it was, and a
+/// brand-new time takes the first occurrence.
+nonisolated enum CalendarWallTime {
+    /// The instant at `hour:minute:second` on the civil day of `day`.
+    /// `original` is the instant the wall time was read off, if any: when the
+    /// wall time is ambiguous and `original` sits at the second pass's
+    /// offset, the second pass is returned. Nil only when the calendar
+    /// cannot make a date at all.
+    static func instant(
+        hour: Int,
+        minute: Int,
+        second: Int = 0,
+        on day: Date,
+        keepingOffsetOf original: Date?,
+        calendar: Calendar
+    ) -> Date? {
+        var components = calendar.dateComponents([.year, .month, .day], from: day)
+        components.hour = hour
+        components.minute = minute
+        components.second = second
+        guard let first = calendar.date(from: components) else { return nil }
+        let clock = DayClock.actual(containing: first, calendar: calendar)
+        guard clock.repeatedPass(of: first) == 1, let original else { return first }
+        let second = first.addingTimeInterval(-clock.offsetChange)
+        let zone = calendar.timeZone
+        return zone.secondsFromGMT(for: original) == zone.secondsFromGMT(for: second) ? second : first
+    }
+
+    /// `date` with its hour or minute replaced and its seconds dropped, the
+    /// way a wheel picker edits a time: the instant keeps its offset when
+    /// the new wall time is ambiguous.
+    static func replacing(hour: Int? = nil, minute: Int? = nil, of date: Date, calendar: Calendar) -> Date {
+        let components = calendar.dateComponents([.hour, .minute], from: date)
+        return instant(
+            hour: hour ?? components.hour ?? 0,
+            minute: minute ?? components.minute ?? 0,
+            on: date,
+            keepingOffsetOf: date,
+            calendar: calendar
+        ) ?? date
+    }
+
+    /// Whether `date`'s wall clock time occurs twice on its day, so a
+    /// display of that time needs the zone to be unambiguous.
+    static func isAmbiguous(_ date: Date, calendar: Calendar) -> Bool {
+        DayClock.actual(containing: date, calendar: calendar).repeatedPass(of: date) != nil
     }
 }

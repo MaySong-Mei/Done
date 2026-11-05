@@ -6208,12 +6208,14 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
-    func testNowLegendYDSTFallBackEveningCullsWithoutTrailingExtension() {
-        // The one live out-of-window path found while tracing gh#80:
-        // DST fall-back day (25h elapsed). America/Los_Angeles 2026-11-01
-        // 23:30 wall clock = 24.5h since startOfDay → pointer beyond the
-        // 24h window when no trailing band is open → culled (previously
-        // edge-pinned to the window bottom).
+    func testNowLegendYDSTFallBackEveningIsInWindowOnTheRealDayAndCulledOnTheLegacyOne() {
+        // The one live out-of-window path found while tracing gh#80, now the
+        // positive control for gh#285: DST fall-back day (25h elapsed).
+        // America/Los_Angeles 2026-11-01 23:30 wall clock = 24.5h since
+        // startOfDay. The real day's window is 25h, so the pointer is inside
+        // it and the legend shows at its elapsed position; the legacy 24h
+        // clock still culls it, which is the old (wrong) behaviour pinned
+        // as the control.
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!
         let fallBackEvening = calendar.date(
@@ -6225,8 +6227,33 @@ final class CalendarDragLogicTests: XCTestCase {
             24.5 * 3600,
             accuracy: 1
         )
-        // The legacy clock: a standard day's length from the start, which is
-        // what the axis drew before the day clock (gh#285 S0 keeps it).
+        let realClock = CalendarZoneClock(calendar: calendar, usesActualDayLength: true).day(containing: fallBackEvening)
+        XCTAssertEqual(realClock.length, 25 * 3600)
+        XCTAssertEqual(
+            calendarTimelineNowLegendY(
+                for: fallBackEvening,
+                clock: realClock,
+                headerHeight: 20,
+                hourHeight: 56,
+                labelHeight: 12
+            )!,
+            20 + 24.5 * 56 - 6,
+            accuracy: 0.001
+        )
+        // With the trailing band open the instant is in-window either way.
+        XCTAssertEqual(
+            calendarTimelineNowLegendY(
+                for: fallBackEvening,
+                clock: realClock,
+                headerHeight: 20,
+                hourHeight: 56,
+                trailingExtendedHours: 12,
+                labelHeight: 12
+            )!,
+            20 + 24.5 * 56 - 6,
+            accuracy: 0.001
+        )
+        // Control: the legacy clock (a standard day from the start) culls it.
         let legacyZone = CalendarZoneClock(calendar: calendar, usesActualDayLength: false)
         XCTAssertNil(
             calendarTimelineNowLegendY(
@@ -6237,21 +6264,8 @@ final class CalendarDragLogicTests: XCTestCase {
                 labelHeight: 12
             )
         )
-        // With the trailing band open the same instant is in-window again.
-        XCTAssertEqual(
-            calendarTimelineNowLegendY(
-                for: fallBackEvening,
-                clock: legacyZone.day(containing: fallBackEvening),
-                headerHeight: 20,
-                hourHeight: 56,
-                trailingExtendedHours: 12,
-                labelHeight: 12
-            )!,
-            20 + 24.5 * 56 - 6,
-            accuracy: 0.001
-        )
         // Positive control: the same wall-clock time one week later (a
-        // normal 24h day) is in-window with no extensions.
+        // normal 24h day) is in-window with no extensions on either clock.
         let normalEvening = calendar.date(
             from: DateComponents(year: 2026, month: 11, day: 8, hour: 23, minute: 30)
         )!
@@ -6259,6 +6273,15 @@ final class CalendarDragLogicTests: XCTestCase {
             calendarTimelineNowLegendY(
                 for: normalEvening,
                 clock: legacyZone.day(containing: normalEvening),
+                headerHeight: 20,
+                hourHeight: 56,
+                labelHeight: 12
+            )
+        )
+        XCTAssertNotNil(
+            calendarTimelineNowLegendY(
+                for: normalEvening,
+                clock: CalendarZoneClock(calendar: calendar, usesActualDayLength: true).day(containing: normalEvening),
                 headerHeight: 20,
                 hourHeight: 56,
                 labelHeight: 12

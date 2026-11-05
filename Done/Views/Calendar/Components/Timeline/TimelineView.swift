@@ -637,9 +637,10 @@ func calendarPinchFitHourHeight(
     viewportHeight: CGFloat,
     contentTopInset: CGFloat,
     contentBottomInset: CGFloat,
-    allDayHeight: CGFloat
+    allDayHeight: CGFloat,
+    dayHours: CGFloat = 24
 ) -> CGFloat {
-    guard viewportHeight > 0 else { return 0 }
+    guard viewportHeight > 0, dayHours > 0 else { return 0 }
     let timelineChromeBudget: CGFloat = 22
     let availableForHours = viewportHeight - contentTopInset - contentBottomInset - allDayHeight - timelineChromeBudget
     guard availableForHours > 0 else { return 0 }
@@ -647,7 +648,9 @@ func calendarPinchFitHourHeight(
     // taller than the viewport at max pinch.  This guarantees a
     // minimum scrollable range, allowing autoscroll to work when
     // dragging events to the edge for boundary extension.
-    return (availableForHours / 24) * 1.02
+    // `dayHours` is the canvas the whole-day fit has to hold: the longest
+    // day in reach, so a 25h day's last hour is not below the fold (gh#285).
+    return (availableForHours / dayHours) * 1.02
 }
 
 // Extracted for regression tests: the minimum hourHeight allowed during
@@ -666,13 +669,15 @@ func calendarPinchEffectiveMinHourHeight(
     contentTopInset: CGFloat,
     contentBottomInset: CGFloat,
     allDayHeight: CGFloat,
-    safetyFloor: CGFloat = calendarTimelineHourHeightMin
+    safetyFloor: CGFloat = calendarTimelineHourHeightMin,
+    dayHours: CGFloat = 24
 ) -> CGFloat {
     let fit = calendarPinchFitHourHeight(
         viewportHeight: viewportHeight,
         contentTopInset: contentTopInset,
         contentBottomInset: contentBottomInset,
-        allDayHeight: allDayHeight
+        allDayHeight: allDayHeight,
+        dayHours: dayHours
     )
     return max(safetyFloor, fit)
 }
@@ -1287,6 +1292,10 @@ struct TimelinePagerView: View {
     /// (gh#285). Built where the pager is, so a zone change reaches the next
     /// body the way `Calendar.current` always did.
     var zoneClock: CalendarZoneClock = .current
+    /// The length the scroll content is sized for, kept by the page: the
+    /// longest day of the window and its neighbours, held until the cut
+    /// tail is off screen (gh#285). Nil sizes to the selected day.
+    var canvasLength: TimeInterval? = nil
     let daysCount: Int
     let mode: PageMode
     let showEventText: Bool
@@ -1380,10 +1389,20 @@ struct TimelinePagerView: View {
     private var selectedDayClock: DayClock {
         zoneClock.day(containing: dayDate(forOffset: selectedDayOffset, calendar: zoneClock.calendar))
     }
-    /// The day the scroll content is sized for. The selected day for now;
-    /// the longest day of the window and its neighbours once days differ
-    /// in length (S1), so a column never has less room than it needs.
-    private var canvasClock: DayClock { selectedDayClock }
+    /// The day the scroll content is sized for: the selected day's start,
+    /// stretched to `canvasLength` when the page holds a longer one, so a
+    /// column never has less room than it needs and a shorter day's tail
+    /// is drawn as not this day.
+    private var canvasClock: DayClock {
+        let selected = selectedDayClock
+        guard let canvasLength, canvasLength > selected.length else { return selected }
+        return DayClock(
+            start: selected.start,
+            end: selected.start.addingTimeInterval(canvasLength),
+            transition: nil,
+            offsetChange: 0
+        )
+    }
 
     /// Dynamic min hourHeight for the live pinch gesture: the value at which
     /// 24 hours exactly fits between the top overlay and the tab bar.
@@ -1399,7 +1418,8 @@ struct TimelinePagerView: View {
             // viewport space, so the pinch floor must keep reserving it or the
             // early-morning hours render behind the pinned pills at max pinch.
             allDayHeight: allDayHeight,
-            safetyFloor: calendarTimelineHourHeightMin
+            safetyFloor: calendarTimelineHourHeightMin,
+            dayHours: CGFloat(canvasClock.length / 3600)
         )
     }
     // `editMappingState` / `editMappingPresentation` moved into
@@ -2935,6 +2955,7 @@ struct TimelinePagerView: View {
         CalendarDayLayerView(
             date: date,
             dayClock: dayClock,
+            canvasLength: canvasClock.length,
             occurrenceSource: dayOccurrenceSource,
             contentWidth: dayWidth,
             headerHeight: headerHeight,
@@ -3411,7 +3432,10 @@ struct TimeAxisLabels: View {
             // both fixed for this 1Hz body pass), so read/compute them ONCE
             // here instead of per slot.
             let is24 = AppTimeFormat.current.is24
-            let nowTotalMinutes = totalMinutesSinceMidnight(for: now)
+            // The same elapsed measure the slots are laid out in, against
+            // the day the legend was positioned on.
+            let nowTotalMinutes = calendarTimelineElapsedMinutes(of: now, clock: nowClock)
+            let showsZones = hourHeight >= TimeAxisLayerView.zoneSublabelMinimumHourHeight
             ZStack(alignment: .topTrailing) {
                 VStack(spacing: 0) {
                     Color.clear.frame(height: headerHeight)
@@ -3419,23 +3443,29 @@ struct TimeAxisLabels: View {
                         Rectangle()
                             .fill(Color.clear)
                             .frame(height: 1)
-                            .overlay(alignment: .trailing) {
+                            .overlay(alignment: .topTrailing) {
                                 // Hour label always renders its text; the
                                 // collision-yield to the now-legend is an
                                 // OPACITY (not an empty string) so a page
                                 // switch can cross-fade the label back in
                                 // sync with the legend fading out.
-                                Text(label(forSlot: index, is24: is24))
-                                    .font(.system(size: 9, weight: .semibold))
-                                    .foregroundColor(.secondary.opacity(0.6))
-                                    .lineLimit(1)
-                                    .fixedSize(horizontal: true, vertical: false)
-                                    .padding(.trailing, 2)
-                                    .offset(y: -2)
-                                    .opacity(hourLabelOpacity(
-                                        forSlot: index, nowTotalMinutes: nowTotalMinutes,
-                                        legendIsVisible: legendY != nil
-                                    ))
+                                VStack(alignment: .trailing, spacing: -1) {
+                                    Text(label(forSlot: index, is24: is24))
+                                        .font(.system(size: 9, weight: .semibold))
+                                    if showsZones, let zone = zoneLabel(forSlot: index, is24: is24) {
+                                        Text(zone)
+                                            .font(.system(size: 7, weight: .semibold))
+                                    }
+                                }
+                                .foregroundColor(.secondary.opacity(0.6))
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: true)
+                                .padding(.trailing, 2)
+                                .offset(y: -2)
+                                .opacity(hourLabelOpacity(
+                                    forSlot: index, nowTotalMinutes: nowTotalMinutes,
+                                    legendIsVisible: legendY != nil
+                                ))
                             }
                             .frame(height: slotHeight, alignment: .top)
                     }
@@ -3591,6 +3621,17 @@ struct TimeAxisLabels: View {
     // gh#219 slice E: internal so the hoist test can pin that the is24 arm is
     // honored (behavior-preserving vs the old inline AppTimeFormat read).
     func label(forSlot index: Int, is24: Bool) -> String {
+        hourLabel(forSlot: index, is24: is24)?.text ?? ""
+    }
+
+    /// The zone abbreviation under a twice-visited hour's label (gh#285).
+    func zoneLabel(forSlot index: Int, is24: Bool) -> String? {
+        hourLabel(forSlot: index, is24: is24)?.zoneAbbreviation
+    }
+
+    /// The slot's label from its real instant (gh#285), through the shared
+    /// `calendarTimelineAxisHourLabel` the CALayer axis reads too.
+    private func hourLabel(forSlot index: Int, is24: Bool) -> CalendarAxisHourLabel? {
         let totalMinutes = -leadingExtendedHours * 60 + index * slotMinutes
         // Spec 07: empty (no label) outside the REAL day window so band regions
         // stay empty when closed; positions unchanged. Identity when drawable
@@ -3599,14 +3640,14 @@ struct TimeAxisLabels: View {
         let dT = drawableTrailingHours >= 0 ? drawableTrailingHours : trailingExtendedHours
         if totalMinutes < -dL * 60
             || totalMinutes > calendarTimelineVisibleMinutes(clock: clock, trailingExtendedHours: dT) {
-            return ""
+            return nil
         }
-        let normalizedTotalMinutes = ((totalMinutes % (24 * 60)) + (24 * 60)) % (24 * 60)
-        let hour24 = normalizedTotalMinutes / 60
-        let minute = normalizedTotalMinutes % 60
-
-        guard minute == 0 else { return "" }
-        return calendarHourAxisLabel(hour24: hour24, is24: is24)
+        return calendarTimelineAxisHourLabel(
+            slotMinute: totalMinutes,
+            clock: clock,
+            zoneClock: zoneClock,
+            is24: is24
+        )
     }
 
     /// Hour-label opacity: 1 unless the slot collides with the now-legend
@@ -3623,9 +3664,7 @@ struct TimeAxisLabels: View {
     private func hourLabelOpacity(forSlot index: Int, nowTotalMinutes: CGFloat, legendIsVisible: Bool) -> Double {
         guard legendIsVisible else { return 1 }
         let totalMinutes = -leadingExtendedHours * 60 + index * slotMinutes
-        let normalizedTotalMinutes = ((totalMinutes % (24 * 60)) + (24 * 60)) % (24 * 60)
-        let minute = normalizedTotalMinutes % 60
-        guard minute == 0 else { return 1 }
+        guard totalMinutes % 60 == 0 else { return 1 }
         return calendarShouldHideLegendHourLabel(
             legendTotalMinutes: totalMinutes,
             nowTotalMinutes: nowTotalMinutes,
@@ -3670,12 +3709,6 @@ struct TimeAxisLabels: View {
 
     private func currentTimeText(for now: Date) -> String {
         Self.currentTimeFormatter.string(from: now).lowercased()
-    }
-
-    private func totalMinutesSinceMidnight(for date: Date) -> CGFloat {
-        let components = Calendar.current.dateComponents([.hour, .minute, .second], from: date)
-        return CGFloat((components.hour ?? 0) * 60 + (components.minute ?? 0))
-            + CGFloat(components.second ?? 0) / 60
     }
 }
 

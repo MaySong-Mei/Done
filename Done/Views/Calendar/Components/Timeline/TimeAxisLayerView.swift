@@ -104,6 +104,11 @@ final class TimeAxisLayerView: UIView {
     // Index into `hourLabels` — captures the slot index each pool entry
     // currently represents. Aligned 1:1 with `hourLabels`.
     private var hourLabelSlotIndices: [Int] = []
+    // The zone abbreviation under a twice-visited hour's label (gh#285),
+    // aligned 1:1 with `hourLabels`; nil for every other slot.
+    private var hourLabelZones: [String?] = []
+    // Zone sublabel pool, one per non-nil entry of `hourLabelZones`.
+    private var zoneLabels: [UILabel] = []
 
     // Hour labels live in this container so the band-fade mask (#55
     // follow-on) applies ONLY to them — markers + now-legend stay fully
@@ -339,17 +344,21 @@ final class TimeAxisLayerView: UIView {
         // but the param is now required so it shares this single read.
         let is24 = AppTimeFormat.current.is24
         var wantedSlots: [Int] = []
+        var wantedLabels: [CalendarAxisHourLabel] = []
         wantedSlots.reserveCapacity(slotCount)
         for index in 0..<slotCount {
             let slotMin = -inputs.leadingExtendedHours * 60 + index * inputs.slotMinutes
             if slotMin < drawTopMin || slotMin > drawBottomMin { continue }
-            if Self.labelText(
+            if let label = Self.labelText(
                 forSlot: index,
                 slotMinutes: inputs.slotMinutes,
                 leadingExtendedHours: inputs.leadingExtendedHours,
+                clock: inputs.clock,
+                zoneClock: inputs.zoneClock,
                 is24: is24
-            ) != nil {
+            ) {
                 wantedSlots.append(index)
+                wantedLabels.append(label)
             }
         }
         // Grow / shrink the pool.
@@ -368,17 +377,34 @@ final class TimeAxisLayerView: UIView {
         }
         hourLabelSlotIndices = wantedSlots
         // Assign text. Re-evaluated on every rebuild because slotMinutes
-        // / extension hours can shift which slot maps to which hour-of-day.
-        for (poolIndex, slotIndex) in wantedSlots.enumerated() {
-            let text = Self.labelText(
-                forSlot: slotIndex,
-                slotMinutes: inputs.slotMinutes,
-                leadingExtendedHours: inputs.leadingExtendedHours,
-                is24: is24
-            ) ?? ""
-            hourLabels[poolIndex].text = text
+        // / extension hours / the day can shift which slot maps to which
+        // hour-of-day.
+        for (poolIndex, label) in wantedLabels.enumerated() {
+            hourLabels[poolIndex].text = label.text
+        }
+        hourLabelZones = wantedLabels.map(\.zoneAbbreviation)
+        let wantedZones = hourLabelZones.compactMap { $0 }
+        while zoneLabels.count < wantedZones.count {
+            let label = UILabel()
+            label.font = .systemFont(ofSize: 7, weight: .semibold)
+            label.textColor = UIColor.secondaryLabel.withAlphaComponent(0.6)
+            label.textAlignment = .right
+            label.numberOfLines = 1
+            label.backgroundColor = .clear
+            hourLabelContainer.addSubview(label)
+            zoneLabels.append(label)
+        }
+        while zoneLabels.count > wantedZones.count {
+            zoneLabels.removeLast().removeFromSuperview()
+        }
+        for (zoneIndex, zone) in wantedZones.enumerated() {
+            zoneLabels[zoneIndex].text = zone
         }
     }
+
+    /// The zone sublabel needs its own line under the hour; below this
+    /// hour height the lines would collide with the next hour's label.
+    static let zoneSublabelMinimumHourHeight: CGFloat = 28
 
     private func layoutHourLabels(inputs: Inputs) {
         guard !hourLabelSlotIndices.isEmpty else { return }
@@ -393,6 +419,8 @@ final class TimeAxisLayerView: UIView {
         // SwiftUI tree: each slot row is `frame(height: slotHeight, alignment: .top)`,
         // its overlay Text has `.offset(y: -2)`. Net: label top Y is
         // `headerHeight + slotIndex * slotHeight - 2`.
+        var zoneIndex = 0
+        let showsZones = inputs.hourHeight >= Self.zoneSublabelMinimumHourHeight
         for (poolIndex, slotIndex) in hourLabelSlotIndices.enumerated() {
             let label = hourLabels[poolIndex]
             let fitSize = label.sizeThatFits(
@@ -405,6 +433,20 @@ final class TimeAxisLayerView: UIView {
                 width: fitSize.width,
                 height: fitSize.height
             )
+            if poolIndex < hourLabelZones.count, hourLabelZones[poolIndex] != nil, zoneIndex < zoneLabels.count {
+                let zoneLabel = zoneLabels[zoneIndex]
+                zoneIndex += 1
+                zoneLabel.isHidden = !showsZones
+                let zoneSize = zoneLabel.sizeThatFits(
+                    CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+                )
+                zoneLabel.frame = CGRect(
+                    x: rightEdge - zoneSize.width,
+                    y: topY + fitSize.height - 1,
+                    width: zoneSize.width,
+                    height: zoneSize.height
+                )
+            }
         }
     }
 
@@ -479,7 +521,10 @@ final class TimeAxisLayerView: UIView {
     /// 1-Hz tick + a crossfade animation so the page-switch transition
     /// blends back in step. Mirrors `TimeAxisLabels.hourLabelOpacity`.
     private func updateHourLabelOpacities(inputs: Inputs, now: Date, legendVisible: Bool) {
-        let nowTotalMinutes = Self.totalMinutesSinceMidnight(for: now)
+        // The same elapsed measure the slots are laid out in, against the
+        // day the legend was positioned on.
+        let nowClock = inputs.clock.contains(now) ? inputs.clock : inputs.zoneClock.day(containing: now)
+        let nowTotalMinutes = calendarTimelineElapsedMinutes(of: now, clock: nowClock)
         for (poolIndex, slotIndex) in hourLabelSlotIndices.enumerated() {
             let label = hourLabels[poolIndex]
             let totalMinutes = -inputs.leadingExtendedHours * 60
@@ -690,26 +735,24 @@ final class TimeAxisLayerView: UIView {
 
     /// Mirrors `TimeAxisLabels.label(forSlot:)`. Returns nil for empty
     /// slots (half-hour ticks etc.) so the rebuild path skips them
-    /// entirely; non-nil slots produce labels in the pool.
+    /// entirely; non-nil slots produce labels in the pool. The text is the
+    /// hour of the slot's real instant (gh#285), through the shared
+    /// `calendarTimelineAxisHourLabel`.
     // gh#219 slice E: internal so the hoist test can pin the is24 arm.
     static func labelText(
         forSlot index: Int,
         slotMinutes: Int,
         leadingExtendedHours: Int,
+        clock: DayClock,
+        zoneClock: CalendarZoneClock,
         is24: Bool
-    ) -> String? {
-        let totalMinutes = -leadingExtendedHours * 60 + index * slotMinutes
-        let normalizedTotalMinutes = ((totalMinutes % (24 * 60)) + (24 * 60)) % (24 * 60)
-        let hour24 = normalizedTotalMinutes / 60
-        let minute = normalizedTotalMinutes % 60
-        guard minute == 0 else { return nil }
-        if is24 {
-            return String(format: "%d:00", hour24)
-        } else {
-            let meridiem = hour24 < 12 ? "am" : "pm"
-            let hour12 = (hour24 % 12 == 0) ? 12 : (hour24 % 12)
-            return "\(hour12) \(meridiem)"
-        }
+    ) -> CalendarAxisHourLabel? {
+        calendarTimelineAxisHourLabel(
+            slotMinute: -leadingExtendedHours * 60 + index * slotMinutes,
+            clock: clock,
+            zoneClock: zoneClock,
+            is24: is24
+        )
     }
 
     /// Mirrors `TimeAxisLabels.currentTimeText(for:)` + the static
@@ -734,13 +777,6 @@ final class TimeAxisLayerView: UIView {
     static func currentTimeText(for now: Date) -> String {
         let formatter = AppTimeFormat.current.is24 ? currentTimeFormatter24 : currentTimeFormatter12
         return formatter.string(from: now).lowercased()
-    }
-
-    /// Mirrors `TimeAxisLabels.totalMinutesSinceMidnight(for:)`.
-    private static func totalMinutesSinceMidnight(for date: Date) -> CGFloat {
-        let components = Calendar.current.dateComponents([.hour, .minute, .second], from: date)
-        return CGFloat((components.hour ?? 0) * 60 + (components.minute ?? 0))
-            + CGFloat(components.second ?? 0) / 60
     }
 
     /// UIColor equivalent of TimelineView's private `calendarCurrentTimeIndicatorColor()`.

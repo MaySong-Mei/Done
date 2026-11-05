@@ -42,6 +42,10 @@ struct CalendarDayLayerView: UIViewRepresentable {
     /// window, grid line and block position in the column is measured by
     /// (gh#285). Computed once by the pager and read, never re-derived.
     let dayClock: DayClock
+    /// The length the page's content is sized for. Where it exceeds this
+    /// day's, the column's tail is drawn as not this day and takes no
+    /// touch (gh#285).
+    let canvasLength: TimeInterval
     /// Layout-ready occurrences for this day offset (already filtered /
     /// recurring-expanded / absorbed-removed upstream by the host cache and
     /// `CalendarLayout.timelineVisibleOccurrences`), in DEFERRED form: a
@@ -207,6 +211,7 @@ struct CalendarDayLayerView: UIViewRepresentable {
         DayLayerHostView.Model(
             date: date,
             dayClock: dayClock,
+            canvasLength: canvasLength,
             occurrences: occurrences,
             contentWidth: contentWidth,
             headerHeight: headerHeight,
@@ -269,6 +274,10 @@ final class DayLayerHostView: UIView {
         /// `repaintVertical`, `cullViewport`) and the chrome all read the
         /// window from this one field.
         var dayClock: DayClock
+        /// The length the page's content is sized for; the tail past this
+        /// day's own length is drawn as not this day. Defaults to the day
+        /// itself, so a model built without a page has no tail.
+        var canvasLength: TimeInterval = DayClock.standardLength
         var occurrences: [CalendarLayout.EventOccurrence]
         var contentWidth: CGFloat
         var headerHeight: CGFloat
@@ -1510,6 +1519,9 @@ final class DayLayerHostView: UIView {
         /// this column's visible window. Compound path → one layer, N lines.
         /// Sits above events but below the now-line.
         let deadlineLines = CAShapeLayer()          // zPosition 99
+        /// The stretch below this day's window that a longer day in reach
+        /// gives the content: not this day (gh#285). Behind the grid.
+        let notThisDay = CALayer()                  // zPosition -3
         /// Now-line line + dot (today only). Above events.
         let nowLine = CALayer()                     // zPosition 100
         let nowDot = CAShapeLayer()                 // child of nowLine
@@ -1517,6 +1529,7 @@ final class DayLayerHostView: UIView {
 
         init() {
             futureTint.zPosition = -3
+            notThisDay.zPosition = -3
             hourGrid.zPosition = -2
             halfHourGrid.zPosition = -2
             horizonLine.zPosition = -1
@@ -1532,7 +1545,7 @@ final class DayLayerHostView: UIView {
             nowLine.addSublayer(nowDot)
             nowDot.fillColor = UIColor.clear.cgColor
 
-            for l in [futureTint, hourGrid, halfHourGrid, horizonLine, deadlineLines, nowLine] {
+            for l in [futureTint, hourGrid, halfHourGrid, horizonLine, deadlineLines, nowLine, notThisDay] {
                 l.isHidden = true
             }
             // Render thin grid lines / now-line / dot at screen scale so they
@@ -1550,6 +1563,7 @@ final class DayLayerHostView: UIView {
         // Add directly to the root layer; z-positions handle interleaving with
         // the per-event containers (also direct root children).
         layer.addSublayer(c.futureTint)
+        layer.addSublayer(c.notThisDay)
         layer.addSublayer(c.hourGrid)
         layer.addSublayer(c.halfHourGrid)
         layer.addSublayer(c.horizonLine)
@@ -4419,6 +4433,31 @@ final class DayLayerHostView: UIView {
         return pending.mode
     }
 
+    /// Whether a touch at `y` is on this column's own time (gh#285): on a
+    /// day shorter than the page's content, the tail below the day's window
+    /// is not this day and takes no touch. A column no shorter than the
+    /// content keeps accepting its whole height, as it always did.
+    func acceptsTouch(atY y: CGFloat) -> Bool {
+        guard let model = currentModel else { return false }
+        guard model.canvasLength > model.dayClock.length + 1 else { return true }
+        let instant = calendarTimelineDateFromYPosition(
+            y,
+            clock: model.dayClock,
+            headerHeight: model.headerHeight,
+            hourHeight: model.hourHeight,
+            leadingExtendedHours: model.leadingExtendedHours,
+            trailingExtendedHours: model.trailingExtendedHours,
+            snapMinutes: 1,
+            clampToExtension: false
+        )
+        return calendarTimelineColumnAccepts(
+            instant: instant,
+            clock: model.dayClock,
+            leadingExtendedHours: model.leadingExtendedHours,
+            trailingExtendedHours: model.trailingExtendedHours
+        )
+    }
+
     /// Map a Y position in this view's coordinate space to a snapped date,
     /// reusing the shared mapping (creation gesture parity).
     func dateFromY(_ y: CGFloat, snapMinutes: Int) -> Date {
@@ -4702,6 +4741,26 @@ final class DayLayerHostView: UIView {
         } else {
             chrome.halfHourGrid.isHidden = true
             chrome.halfHourGrid.path = nil
+        }
+
+        // ── Not this day (gh#285) ─────────────────────────────────────────
+        // A longer day in reach makes the content taller than this day's
+        // window; the stretch below the window is drawn as not this day.
+        let columnBottom = model.headerHeight + calendarTimelineContentHeight(
+            clock: model.dayClock,
+            hourHeight: model.hourHeight,
+            leadingExtendedHours: model.leadingExtendedHours,
+            trailingExtendedHours: model.trailingExtendedHours
+        )
+        let tailHeight = CGFloat(max(0, model.canvasLength - model.dayClock.length) / 3600) * model.hourHeight
+        if tailHeight > 0.5 {
+            chrome.notThisDay.isHidden = false
+            chrome.notThisDay.frame = CGRect(
+                x: lineInsetX, y: columnBottom, width: eventAreaWidth, height: tailHeight
+            )
+            chrome.notThisDay.backgroundColor = UIColor.secondaryLabel.withAlphaComponent(0.06).cgColor
+        } else {
+            chrome.notThisDay.isHidden = true
         }
 
         // ── Future-zone tint + horizon line (TimelineView.swift:3506-3540) ─
@@ -7641,6 +7700,9 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
 
         switch gesture.state {
         case .began:
+            // The tail a shorter day leaves under a taller canvas is not
+            // this day: no draft starts there (gh#285).
+            guard host.acceptsTouch(atY: y) else { return }
             verticalScrollView = findScrollTargets(startingAt: view).vertical
             isLongPressingCreation = true
             isCreating = false

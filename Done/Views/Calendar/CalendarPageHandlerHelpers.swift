@@ -31,6 +31,59 @@ import CoreGraphics
 /// concept).
 internal let crossDayFollowSettleWindow: TimeInterval = 0.6
 
+// MARK: - Follow-day mirror (gh#285)
+
+/// What the follow-event-across-midnight swap mirrors, and how far the
+/// vertical offset moves so the same instant keeps its screen position.
+struct CalendarFollowDayMirror: Equatable {
+    /// The whole old day as a band of the new day: below it when the view
+    /// went back a day, above it when it went forward.
+    let mirroredExtension: TimelineBoundaryExtensionState
+    /// Added to the offset at the swap: how far the window's start moved.
+    let scrollDelta: CGFloat
+    /// Where the offset settles afterwards: the new day's start at the top.
+    let settleOffset: CGFloat
+}
+
+/// `oldDayClock` is the day the view was on, `newDayClock` the day it
+/// follows the event to, `dayDelta` their signed distance in days, and
+/// `currentLeadingHours` the band open above the old day at the swap.
+/// The mirrored band is as long as the OLD day, and the offset moves by
+/// how far the window's start moved: going back, from (old day − band
+/// above) to the new day's start; going forward, the new window starts a
+/// whole old day before the new day — the old day's start — so the swap
+/// is a pure rename.
+func calendarFollowDayMirror(
+    oldDayClock: DayClock,
+    newDayClock: DayClock,
+    dayDelta: Int,
+    currentLeadingHours: Int,
+    hourHeight: CGFloat,
+    newHostDayOffset: Int
+) -> CalendarFollowDayMirror {
+    let mirroredHours = Int((oldDayClock.length / 3600).rounded())
+    let mirroredExtension = dayDelta < 0
+        ? TimelineBoundaryExtensionState(
+            leadingHours: 0, trailingHours: mirroredHours, source: nil, anchorDayOffset: newHostDayOffset
+        )
+        : TimelineBoundaryExtensionState(
+            leadingHours: mirroredHours, trailingHours: 0, source: nil, anchorDayOffset: newHostDayOffset
+        )
+    let oldWindowStart = calendarTimelineVisibleStart(
+        clock: oldDayClock, leadingExtendedHours: currentLeadingHours
+    )
+    let newWindowStart = calendarTimelineVisibleStart(
+        clock: newDayClock, leadingExtendedHours: mirroredExtension.leadingHours
+    )
+    let scrollDelta = CGFloat(oldWindowStart.timeIntervalSince(newWindowStart) / 3600) * hourHeight
+    let settleOffset = dayDelta < 0 ? 0 : CGFloat(mirroredExtension.leadingHours) * hourHeight
+    return CalendarFollowDayMirror(
+        mirroredExtension: mirroredExtension,
+        scrollDelta: scrollDelta,
+        settleOffset: settleOffset
+    )
+}
+
 // MARK: - §4b. Midnight-shift gate predicate
 
 /// Whether a pending midnight offset shift may be applied now.

@@ -265,6 +265,22 @@ func calendarDateForSelectedDayOffset(
     return calendar.date(byAdding: .day, value: selectedDayOffset, to: today) ?? today
 }
 
+#if DEBUG
+/// `-dstQADay yyyy-MM-dd` as a day offset from today, for the gh#285 QA
+/// launch; nil when the argument is absent or unreadable.
+func calendarDSTQALaunchDayOffset(calendar: Calendar = .current) -> Int? {
+    let arguments = ProcessInfo.processInfo.arguments
+    guard let index = arguments.firstIndex(of: "-dstQADay"), arguments.indices.contains(index + 1) else { return nil }
+    let formatter = DateFormatter()
+    formatter.calendar = calendar
+    formatter.timeZone = calendar.timeZone
+    formatter.dateFormat = "yyyy-MM-dd"
+    guard let day = formatter.date(from: arguments[index + 1]) else { return nil }
+    let today = calendar.startOfDay(for: Date())
+    return calendar.dateComponents([.day], from: today, to: calendar.startOfDay(for: day)).day
+}
+#endif
+
 func calendarMonthStartDate(
     containing date: Date,
     calendar: Calendar = .current
@@ -1266,6 +1282,9 @@ struct CalendarPageView: View {
     @AppStorage(AppSettingsKeys.meAvatarHue) private var shareAvatarHue: Double = -1
     @AppStorage(AppSettingsKeys.calendarShareStyle) private var shareStyleRaw: String = CalendarDailyShareStyle.calendar.rawValue
     @State private var timelineVerticalScrollY: CGFloat = 0
+    /// The length the timeline content is sized for (gh#285); see
+    /// `reconcileTimelineCanvasLength`.
+    @State private var timelineCanvasLength: TimeInterval = DayClock.standardLength
     @State private var headerCapsulesVisible: Bool = true
     @State private var legendCenteredOffsetContinuous: CGFloat = 0
     @State private var legendIsInteracting: Bool = false
@@ -1664,6 +1683,18 @@ struct CalendarPageView: View {
             if !hasAppearedOnce {
                 hasAppearedOnce = true
                 calendarState.selectedDayOffset = 0
+                #if DEBUG
+                // `-dstQADay 2026-11-01`: open on that day (gh#285 QA), the
+                // way a search hit jumps: once the pager is up, widen the
+                // range to hold the day and then select it.
+                if let offset = calendarDSTQALaunchDayOffset() {
+                    DispatchQueue.main.async {
+                        expandDayRangeToInclude(offset)
+                        calendarState.selectedDayOffset = offset
+                    }
+                }
+                #endif
+                timelineCanvasLength = wantedTimelineCanvasLength
                 timelineVerticalScrollY = 0
                 legendCenteredOffsetContinuous = CGFloat(calendarState.selectedDayOffset)
             } else if autoReturnToToday && calendarState.selectedDayOffset != 0 {
@@ -1742,6 +1773,7 @@ struct CalendarPageView: View {
             coordinator: dayLayerCoordinator
         ))
         .onChange(of: calendarState.selectedDayOffset) { oldValue, newValue in
+            reconcileTimelineCanvasLength()
             if !legendIsInteracting && timelineDragState.draggingEventID == nil {
                 let isJump = abs(newValue - oldValue) > 1
                 if accessibilityReduceMotion || isJump {
@@ -2077,12 +2109,70 @@ private extension CalendarPageView {
         return hypot(point.x - origin.x, point.y - origin.y) >= Self.todoStackAutoScrollArmDistance
     }
 
-    /// The selected day's clock, as the pager draws it (gh#285). The pager
-    /// sizes its content by this day for now; see `TimelinePagerView.canvasClock`.
+    /// The selected day's clock, as the pager draws it (gh#285).
     var selectedDayClock: DayClock {
         CalendarZoneClock.current.day(
             containing: calendarDateForSelectedDayOffset(calendarState.selectedDayOffset)
         )
+    }
+
+    /// The length the content should be sized for: the longest day of the
+    /// visible window and one page of neighbours on each side (gh#285).
+    var wantedTimelineCanvasLength: TimeInterval {
+        let zone = CalendarZoneClock.current
+        let daysCount = timelineDaysCount(for: calendarState.rangeMode)
+        let reach = daysCount / 2 + daysCount
+        let selected = selectedDayClock
+        var longest = selected.length
+        for offset in -reach...reach where offset != 0 {
+            longest = max(longest, zone.day(offset, from: selected).length)
+        }
+        return longest
+    }
+
+    /// The day the content is sized for: the selected day's start stretched
+    /// to the held canvas length. Never shorter than the selected day.
+    var timelineCanvasClock: DayClock {
+        let selected = selectedDayClock
+        let length = max(selected.length, timelineCanvasLength)
+        guard length > selected.length else { return selected }
+        return DayClock(
+            start: selected.start,
+            end: selected.start.addingTimeInterval(length),
+            transition: nil,
+            offsetChange: 0
+        )
+    }
+
+    /// Grows the held canvas length at once when a longer day comes into
+    /// reach; shrinks it only once the scroll is at rest, nothing is being
+    /// dragged, and the tail that would be cut is below the screen — so the
+    /// offset never moves because a day changed length (gh#285).
+    func reconcileTimelineCanvasLength() {
+        let wanted = wantedTimelineCanvasLength
+        if wanted > timelineCanvasLength {
+            timelineCanvasLength = wanted
+            calendarDebugLog("canvas.length.grow", fields: ["hours": String(format: "%.2f", wanted / 3600)])
+            return
+        }
+        guard wanted < timelineCanvasLength else { return }
+        guard !isVerticallyScrolling, timelineDragState.draggingEventID == nil else { return }
+        let selected = selectedDayClock
+        let keptClock = DayClock(
+            start: selected.start,
+            end: selected.start.addingTimeInterval(max(selected.length, wanted)),
+            transition: nil,
+            offsetChange: 0
+        )
+        let tailTop = lastTimelineTopOverlayInset + timelineAllDayHeight + timelineHeaderHeight
+            + calendarTimelineContentHeight(
+                clock: keptClock,
+                hourHeight: calendarState.timelineHourHeight,
+                leadingExtendedHours: timelineBoundaryExtensionState.leadingHours
+            )
+        guard timelineVerticalScrollY + timelineScrollViewportHeight <= tailTop else { return }
+        timelineCanvasLength = wanted
+        calendarDebugLog("canvas.length.shrink", fields: ["hours": String(format: "%.2f", wanted / 3600)])
     }
 
     /// Scrollable content height, from the same formula the UIKit host uses
@@ -2092,7 +2182,7 @@ private extension CalendarPageView {
         let hourHeight = calendarState.timelineHourHeight
         guard hourHeight > 0 else { return 0 }
         return calendarTimelineHostContentHeight(
-            clock: selectedDayClock,
+            clock: timelineCanvasClock,
             headerHeight: calendarTimelineTopInset(hourHeight: hourHeight),
             allDayHeight: timelineAllDayHeight,
             hourHeight: hourHeight,
@@ -3965,7 +4055,8 @@ private extension CalendarPageView {
             viewportHeight: timelineScrollViewportHeight,
             contentTopInset: topOverlayInset,
             contentBottomInset: bottomInset,
-            allDayHeight: 0  // safe lower bound; using 0 means we under-correct rather than over-correct
+            allDayHeight: 0,  // safe lower bound; using 0 means we under-correct rather than over-correct
+            dayHours: CGFloat(timelineCanvasClock.length / 3600)
         )
         if calendarState.timelineHourHeight < dynamicMin {
             calendarState.setTimelineHourHeight(dynamicMin)
@@ -4087,6 +4178,9 @@ private extension CalendarPageView {
                     topOverlayInset: topOverlayInset,
                     closeUnreachable: true
                 )
+                // A shorter canvas waits for the scroll to rest and the cut
+                // tail to be off screen (gh#285).
+                reconcileTimelineCanvasLength()
             }
         }
         // FINGER-DRIVEN dissolve: re-run on every drag-offset change so an
@@ -4139,7 +4233,7 @@ private extension CalendarPageView {
             ? calendarTimelineMaximumBoundaryExtensionHours
             : timelineBoundaryExtensionState.trailingHours
         let contentH = calendarTimelineHostContentHeight(
-            clock: selectedDayClock,
+            clock: timelineCanvasClock,
             headerHeight: calendarTimelineTopInset(hourHeight: hourHeight),
             allDayHeight: imperative ? 0 : timelineAllDayHeight,
             hourHeight: hourHeight,
@@ -4491,6 +4585,7 @@ private extension CalendarPageView {
             leadingFadeProgress: timelineLeadingFadeProgress,
             trailingFadeProgress: timelineTrailingFadeProgress,
             isDayOffsetFrozen: calendarState.isDayOffsetFrozen,
+            canvasLength: timelineCanvasClock.length,
             daysCount: timelineDaysCount(for: calendarState.rangeMode),
             mode: .preview,
             showEventText: timelineShowEventText(for: calendarState.rangeMode),
@@ -5661,46 +5756,18 @@ private extension CalendarPageView {
         // solid; only the old day (the mirrored band) fades out.
         // The mirrored band holds the WHOLE old day, so it is as long as that
         // day: the old day's length, not a day's worth of hours (gh#285).
+        // Band side and offset maths in `calendarFollowDayMirror`.
         let zoneClock = CalendarZoneClock.current
-        let oldDayClock = zoneClock.day(containing: calendarDateForSelectedDayOffset(originalDayOffset))
-        let newDayClock = zoneClock.day(containing: calendarDateForSelectedDayOffset(newHostDayOffset))
-        let mirroredHours = Int((oldDayClock.length / 3600).rounded())
-        let mirroredExtension: TimelineBoundaryExtensionState
-        if dayDelta < 0 {
-            // Was on today + leading 12h (yesterday's late hours above).
-            // After the jump, anchor=yesterday and ALL of today mirrors to
-            // the trailing band.
-            mirroredExtension = TimelineBoundaryExtensionState(
-                leadingHours: 0,
-                trailingHours: mirroredHours,
-                source: nil,
-                anchorDayOffset: newHostDayOffset
-            )
-        } else {
-            // Was on today + trailing 12h (tomorrow's first hours below);
-            // after jumping to tomorrow, ALL of today mirrors to the leading
-            // band.
-            mirroredExtension = TimelineBoundaryExtensionState(
-                leadingHours: mirroredHours,
-                trailingHours: 0,
-                source: nil,
-                anchorDayOffset: newHostDayOffset
-            )
-        }
-        // The same instant must sit at the same screen Y after the swap, so
-        // the offset moves by how far the window's start moved: backward,
-        // from (today − leading band) to yesterday's start; forward, the new
-        // window starts a whole old day before tomorrow — today's start — so
-        // the swap is a pure rename.
-        let oldWindowStart = calendarTimelineVisibleStart(
-            clock: oldDayClock,
-            leadingExtendedHours: timelineBoundaryExtensionState.leadingHours
+        let mirror = calendarFollowDayMirror(
+            oldDayClock: zoneClock.day(containing: calendarDateForSelectedDayOffset(originalDayOffset)),
+            newDayClock: zoneClock.day(containing: calendarDateForSelectedDayOffset(newHostDayOffset)),
+            dayDelta: dayDelta,
+            currentLeadingHours: timelineBoundaryExtensionState.leadingHours,
+            hourHeight: hourHeight,
+            newHostDayOffset: newHostDayOffset
         )
-        let newWindowStart = calendarTimelineVisibleStart(
-            clock: newDayClock,
-            leadingExtendedHours: mirroredExtension.leadingHours
-        )
-        let scrollDelta = CGFloat(oldWindowStart.timeIntervalSince(newWindowStart) / 3600) * hourHeight
+        let mirroredExtension = mirror.mirroredExtension
+        let scrollDelta = mirror.scrollDelta
         let targetScrollY = max(0, timelineVerticalScrollY + scrollDelta)
         calendarDebugLog(
             "calendar.followEventAcrossMidnight",
@@ -5737,7 +5804,7 @@ private extension CalendarPageView {
         // (#55 follow-event-across-midnight)
         let preStart = timelineVerticalScrollY
         let swapPost: CGFloat = preStart + scrollDelta
-        let settlePost: CGFloat = dayDelta < 0 ? 0 : CGFloat(mirroredHours) * hourHeight
+        let settlePost: CGFloat = mirror.settleOffset
         crossDayFollowEventAt = Date()
         let prepareHaptic = UINotificationFeedbackGenerator()
         prepareHaptic.prepare()

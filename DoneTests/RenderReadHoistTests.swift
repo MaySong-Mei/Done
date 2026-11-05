@@ -130,18 +130,18 @@ final class RenderReadHoistTests: XCTestCase {
     /// nil-ness (which slot is on the hour) is is24-independent.
     func testTimeAxisLayerLabelTextHonorsHoistedIs24() {
         XCTAssertEqual(
-            TimeAxisLayerView.labelText(forSlot: 13, slotMinutes: 60, leadingExtendedHours: 0, is24: true),
+            TimeAxisLayerView.labelText(forSlot: 13, slotMinutes: 60, leadingExtendedHours: 0, clock: CalendarZoneClock.current.day(containing: Date()), zoneClock: .current, is24: true)?.text,
             "13:00")
         XCTAssertEqual(
-            TimeAxisLayerView.labelText(forSlot: 13, slotMinutes: 60, leadingExtendedHours: 0, is24: false),
+            TimeAxisLayerView.labelText(forSlot: 13, slotMinutes: 60, leadingExtendedHours: 0, clock: CalendarZoneClock.current.day(containing: Date()), zoneClock: .current, is24: false)?.text,
             "1 pm")
         XCTAssertEqual(
-            TimeAxisLayerView.labelText(forSlot: 9, slotMinutes: 60, leadingExtendedHours: 0, is24: false),
+            TimeAxisLayerView.labelText(forSlot: 9, slotMinutes: 60, leadingExtendedHours: 0, clock: CalendarZoneClock.current.day(containing: Date()), zoneClock: .current, is24: false)?.text,
             "9 am")
         XCTAssertNil(
-            TimeAxisLayerView.labelText(forSlot: 1, slotMinutes: 30, leadingExtendedHours: 0, is24: true))
+            TimeAxisLayerView.labelText(forSlot: 1, slotMinutes: 30, leadingExtendedHours: 0, clock: CalendarZoneClock.current.day(containing: Date()), zoneClock: .current, is24: true)?.text)
         XCTAssertNil(
-            TimeAxisLayerView.labelText(forSlot: 1, slotMinutes: 30, leadingExtendedHours: 0, is24: false))
+            TimeAxisLayerView.labelText(forSlot: 1, slotMinutes: 30, leadingExtendedHours: 0, clock: CalendarZoneClock.current.day(containing: Date()), zoneClock: .current, is24: false)?.text)
     }
 
 }

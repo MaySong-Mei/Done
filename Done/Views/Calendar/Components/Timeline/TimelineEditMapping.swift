@@ -254,6 +254,88 @@ func calendarTimelineYPosition(
     return clamp(y, minY, maxY)
 }
 
+/// Whether a touch mapped to `instant` lands on this column's own time: the
+/// day itself or an open band. Below the day's end with no band open there
+/// is the tail a shorter day leaves under a taller canvas — not this day, so
+/// nothing is created or dropped there (gh#285).
+func calendarTimelineColumnAccepts(
+    instant: Date,
+    clock: DayClock,
+    leadingExtendedHours: Int = 0,
+    trailingExtendedHours: Int = 0
+) -> Bool {
+    instant >= calendarTimelineVisibleStart(clock: clock, leadingExtendedHours: leadingExtendedHours)
+        && instant < calendarTimelineVisibleEnd(clock: clock, trailingExtendedHours: trailingExtendedHours)
+}
+
+/// Minutes of `instant` elapsed since the window's start, the same measure
+/// the hour slots are laid out in, so a legend and a label compare in one
+/// space. The wall clock is not that space: on a fall-back day it runs an
+/// hour behind the elapsed time after the repeated hour.
+func calendarTimelineElapsedMinutes(
+    of instant: Date,
+    clock: DayClock,
+    leadingExtendedHours: Int = 0
+) -> CGFloat {
+    let visibleStart = calendarTimelineVisibleStart(clock: clock, leadingExtendedHours: leadingExtendedHours)
+    return CGFloat(instant.timeIntervalSince(visibleStart) / 60)
+}
+
+/// The hour label of one axis slot (gh#285): the wall clock hour of the
+/// instant the slot stands for, read off the calendar, so a day whose clock
+/// skips or revisits an hour labels what is really there. A twice-visited
+/// hour is marked ① on the first pass and ② on the second, and only those
+/// labels carry the zone's abbreviation.
+struct CalendarAxisHourLabel: Equatable {
+    let text: String
+    let zoneAbbreviation: String?
+}
+
+/// `slotMinute` counts from the column's day start: negative in the band
+/// above, past the day's length in the band below. Nil for a slot that is
+/// not on a whole hour of the window (the half-hour ticks).
+func calendarTimelineAxisHourLabel(
+    slotMinute: Int,
+    clock: DayClock,
+    zoneClock: CalendarZoneClock,
+    is24: Bool
+) -> CalendarAxisHourLabel? {
+    guard slotMinute % 60 == 0 else { return nil }
+    let instant = clock.start.addingTimeInterval(TimeInterval(slotMinute * 60))
+    let hour = zoneClock.calendar.component(.hour, from: instant)
+    var text = calendarHourAxisLabel(hour24: hour, is24: is24)
+    // A band slot belongs to a neighbouring day, whose own clock knows
+    // whether that hour is a repeated one.
+    let dayOfInstant = clock.contains(instant) ? clock : zoneClock.day(containing: instant)
+    guard let pass = dayOfInstant.repeatedPass(of: instant) else {
+        return CalendarAxisHourLabel(text: text, zoneAbbreviation: nil)
+    }
+    text += pass == 1 ? "①" : "②"
+    return CalendarAxisHourLabel(
+        text: text,
+        zoneAbbreviation: calendarZoneAbbreviation(for: instant, calendar: zoneClock.calendar)
+    )
+}
+
+/// The zone's abbreviation at `instant` ("EDT"), through a formatter rather
+/// than `TimeZone.abbreviation(for:)`, which is unreliable for past dates.
+func calendarZoneAbbreviation(for instant: Date, calendar: Calendar) -> String {
+    let zoneID = calendar.timeZone.identifier
+    let formatter: DateFormatter
+    if let cached = calendarZoneAbbreviationFormatters[zoneID] {
+        formatter = cached
+    } else {
+        formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "zzz"
+        calendarZoneAbbreviationFormatters[zoneID] = formatter
+    }
+    return formatter.string(from: instant)
+}
+
+private var calendarZoneAbbreviationFormatters: [String: DateFormatter] = [:]
+
 /// Single-source Y for the axis now-time legend label (gh#80). BOTH render
 /// paths — SwiftUI `TimeAxisLabels` and CALayer
 /// `TimeAxisLayerView.updateNowLegend` — must position the legend through
