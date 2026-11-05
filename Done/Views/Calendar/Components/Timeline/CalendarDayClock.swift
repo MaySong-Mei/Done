@@ -149,12 +149,13 @@ nonisolated struct CalendarZoneClock: Equatable {
 }
 
 /// Wall clock time to instant (gh#285). Foundation resolves a wall time the
-/// day visits twice to its first occurrence and a wall time the day skips
-/// forward to the next valid instant; rebuilding a date from its components
-/// therefore merged the second 01:15 into the first. This resolver keeps
+/// day visits twice to its first occurrence, so rebuilding a date from its
+/// components merged the second 01:15 into the first. This resolver keeps
 /// the offset the original instant had when the wall time is ambiguous, so
 /// an edit that re-derives a time leaves the instant where it was, and a
-/// brand-new time takes the first occurrence.
+/// brand-new time takes the first occurrence. A wall time the day skips
+/// resolves to the first instant after the jump (gh#223's policy), not to
+/// the components carried past the gap.
 nonisolated enum CalendarWallTime {
     /// The instant at `hour:minute:second` on the civil day of `day`.
     /// `original` is the instant the wall time was read off, if any: when the
@@ -174,7 +175,15 @@ nonisolated enum CalendarWallTime {
         components.minute = minute
         components.second = second
         guard let first = calendar.date(from: components) else { return nil }
-        let clock = DayClock.actual(containing: first, calendar: calendar)
+        let clock = DayClock.actual(containing: day, calendar: calendar)
+        let landed = calendar.dateComponents([.hour, .minute], from: first)
+        if landed.hour != hour || landed.minute != minute {
+            // The day has no such wall time; Foundation carried the
+            // components past the gap. The first instant after the jump
+            // is the honest resolution.
+            if let transition = clock.transition, clock.offsetChange > 0 { return transition }
+            return first
+        }
         guard clock.repeatedPass(of: first) == 1, let original else { return first }
         let second = first.addingTimeInterval(-clock.offsetChange)
         let zone = calendar.timeZone

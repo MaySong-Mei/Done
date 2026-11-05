@@ -420,11 +420,26 @@ final class CalendarDSTTimelineTests: XCTestCase {
             CalendarWallTime.instant(hour: 9, minute: 0, on: noon, keepingOffsetOf: secondOneFifteen, calendar: ny)?.timeIntervalSince1970,
             1_793_541_600
         )
-        // A wall time the day skips moves forward to the next valid instant.
+        // A wall time the day skips resolves to the first instant after the
+        // jump (gh#223's policy), not to the components carried past it.
         let springNoon = ny.date(from: DateComponents(year: 2026, month: 3, day: 8, hour: 12))!
         XCTAssertEqual(
             CalendarWallTime.instant(hour: 2, minute: 30, on: springNoon, keepingOffsetOf: nil, calendar: ny)?.timeIntervalSince1970,
-            1_772_955_000, "03:30 EDT"
+            1_772_953_200, "03:00 EDT, not 03:30"
+        )
+        XCTAssertEqual(
+            CalendarWallTime.replacing(hour: 2, of: Date(timeIntervalSince1970: 1_772_953_200 - 3600 + 15 * 60), calendar: ny)
+                .timeIntervalSince1970,
+            1_772_953_200, "01:15 EST with its hour set to 02 lands on 03:00 EDT"
+        )
+        // A day that starts on its jump (Santiago): a wall time before the
+        // start resolves to the start.
+        var scl = Calendar(identifier: .gregorian)
+        scl.timeZone = TimeZone(identifier: "America/Santiago")!
+        let sclNoon = scl.date(from: DateComponents(year: 2026, month: 9, day: 6, hour: 12))!
+        XCTAssertEqual(
+            CalendarWallTime.instant(hour: 0, minute: 30, on: sclNoon, keepingOffsetOf: nil, calendar: scl)?.timeIntervalSince1970,
+            1_788_667_200, "the day's first instant, 01:00"
         )
         XCTAssertTrue(CalendarWallTime.isAmbiguous(secondOneFifteen, calendar: ny))
         XCTAssertTrue(CalendarWallTime.isAmbiguous(firstOneFifteen, calendar: ny))
