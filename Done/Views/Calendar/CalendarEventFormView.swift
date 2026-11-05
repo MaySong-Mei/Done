@@ -646,7 +646,12 @@ private extension CalendarEventFormView {
                                 expandedDateField = isTimeExpanded ? nil : .time(label)
                             }
                         } label: {
-                            Text(timeFormatter.string(from: date.wrappedValue))
+                            // A wall time the day visits twice carries its
+                            // zone, so the two 01:15s read apart (gh#285).
+                            Text(timeFormatter.string(from: date.wrappedValue)
+                                 + (CalendarWallTime.isAmbiguous(date.wrappedValue, calendar: .current)
+                                    ? " " + calendarZoneAbbreviation(for: date.wrappedValue, calendar: .current)
+                                    : ""))
                                 .font(.subheadline)
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 6)
@@ -1216,9 +1221,9 @@ private struct CompactTimePicker: View {
             Picker("", selection: Binding(
                 get: { hour },
                 set: { newHour in
-                    var comps = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: date)
-                    comps.hour = newHour
-                    if let d = Calendar.current.date(from: comps) { date = d }
+                    // Keeps the instant's offset when the new wall time is
+                    // ambiguous (gh#285).
+                    date = CalendarWallTime.replacing(hour: newHour, of: date, calendar: .current)
                 }
             )) {
                 ForEach(0..<24, id: \.self) { h in
@@ -1235,9 +1240,7 @@ private struct CompactTimePicker: View {
             Picker("", selection: Binding(
                 get: { minute },
                 set: { newMinute in
-                    var comps = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: date)
-                    comps.minute = newMinute
-                    if let d = Calendar.current.date(from: comps) { date = d }
+                    date = CalendarWallTime.replacing(minute: newMinute, of: date, calendar: .current)
                 }
             )) {
                 ForEach(0..<60, id: \.self) { m in

@@ -2293,7 +2293,17 @@ struct Event: Identifiable, Codable, Hashable {
             return day
         }
         let time = calendar.dateComponents([.hour, .minute, .second], from: timeFrom)
-        let combined = calendar.date(
+        // Through the wall-time resolver (gh#285): a wall time the day
+        // visits twice keeps the offset `timeFrom` had, so a series or an
+        // edit anchored at the second 01:15 does not slide into the first.
+        let combined = CalendarWallTime.instant(
+            hour: time.hour ?? 0,
+            minute: time.minute ?? 0,
+            second: time.second ?? 0,
+            on: day,
+            keepingOffsetOf: timeFrom,
+            calendar: calendar
+        ) ?? calendar.date(
             bySettingHour: time.hour ?? 0,
             minute: time.minute ?? 0,
             second: time.second ?? 0,
