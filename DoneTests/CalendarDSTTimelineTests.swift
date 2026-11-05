@@ -204,15 +204,19 @@ final class CalendarDSTTimelineTests: XCTestCase {
         scroll.contentSize = host.bounds.size
         scroll.addSubview(host)
 
-        func expectBlocks(hourHeight hh: CGFloat, path: String) {
+        func expectBlocks(hourHeight hh: CGFloat, path: String, onScreen: [CalendarLayout.EventOccurrence]) {
             // Elapsed hours since 00:00 EDT: A9 ten, B1 one and a quarter, C1
             // two and a quarter — C1 is one hour below B1 although both read
-            // 01:15 on the wall.
+            // 01:15 on the wall. Every block has a hit frame on every path;
+            // only the blocks the viewport shows have layers (the cull builds
+            // subtrees for the visible set alone), so the layer check is
+            // asked of those.
             let expected: [(CalendarLayout.EventOccurrence, CGFloat)] = [(a9, 10), (b1, 1.25), (c1, 2.25)]
             for (occ, hours) in expected {
                 let hit = host.debugHitFrame(of: occ.id)
                 XCTAssertNotNil(hit, "\(path): \(occ.event.title) has a frame")
                 XCTAssertEqual(hit?.minY ?? -1, header + hours * hh + 1.5, accuracy: 0.01, "\(path): \(occ.event.title)")
+                guard onScreen.contains(where: { $0.id == occ.id }) else { continue }
                 let container = host.debugPieceContainers(of: occ.id)[occ.id]
                 XCTAssertNotNil(container, "\(path): \(occ.event.title) is drawn")
                 XCTAssertEqual(container?.frame.minY ?? -1, header + hours * hh + 1.5, accuracy: 0.01, "\(path): \(occ.event.title) layer")
@@ -227,14 +231,14 @@ final class CalendarDSTTimelineTests: XCTestCase {
         host.apply(model(all, clock: fallBack, hourHeight: 56))
         host.layoutIfNeeded()
         XCTAssertEqual(host.debugPaintCounts.render, 1, "fixture: the full render drew it")
-        expectBlocks(hourHeight: 56, path: "render")
+        expectBlocks(hourHeight: 56, path: "render", onScreen: [b1, c1])
 
         // Cheap vertical repaint (a pinch frame).
         host.apply(model(all, clock: fallBack, hourHeight: 80))
         host.layoutIfNeeded()
         XCTAssertEqual(host.debugPaintCounts.render, 1, "fixture: no full render")
         XCTAssertEqual(host.debugPaintCounts.repaintVertical, 1, "fixture: the cheap path drew it")
-        expectBlocks(hourHeight: 80, path: "repaintVertical")
+        expectBlocks(hourHeight: 80, path: "repaintVertical", onScreen: [b1, c1])
 
         // Viewport cull after a scroll.
         scroll.contentOffset = CGPoint(x: 0, y: header + 9 * 80)
@@ -242,7 +246,7 @@ final class CalendarDSTTimelineTests: XCTestCase {
         XCTAssertTrue(host.debugRunCullPass())
         XCTAssertEqual(host.debugPaintCounts.cull, culls + 1, "fixture: the cull ran")
         XCTAssertEqual(host.debugPaintCounts.render, 1, "fixture: no full render")
-        expectBlocks(hourHeight: 80, path: "cullViewport")
+        expectBlocks(hourHeight: 80, path: "cullViewport", onScreen: [a9])
     }
 
     // MARK: The follow-day shift across a DST day
@@ -317,8 +321,10 @@ final class CalendarDSTTimelineTests: XCTestCase {
         // the skipped 02:00–03:00 EST is not on screen at all.
         let header: CGFloat = 16, hh: CGFloat = 56
         let missing = springForward.missingRange!
+        // The column's own pixels: its exact bottom edge is the next day's
+        // first instant, so the loop stops short of it.
         var y = header
-        while y <= header + 23 * hh {
+        while y < header + 23 * hh {
             let instant = calendarTimelineDateFromYPosition(
                 y, clock: springForward, headerHeight: header, hourHeight: hh, snapMinutes: 1
             )
