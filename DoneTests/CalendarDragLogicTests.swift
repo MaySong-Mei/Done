@@ -2888,23 +2888,21 @@ final class CalendarDragLogicTests: XCTestCase {
 
         let originalStart = calendarTimelineDateFromYPosition(
             originalStartY,
-            containing: anchor,
+            clock: CalendarZoneClock(calendar: calendar).day(containing: anchor),
             headerHeight: headerHeight,
             hourHeight: hourHeight,
             leadingExtendedHours: 0,
             trailingExtendedHours: 0,
             snapMinutes: 15,
-            calendar: calendar
         )
         let originalCurrent = calendarTimelineDateFromYPosition(
             originalCurrentY,
-            containing: anchor,
+            clock: CalendarZoneClock(calendar: calendar).day(containing: anchor),
             headerHeight: headerHeight,
             hourHeight: hourHeight,
             leadingExtendedHours: 0,
             trailingExtendedHours: 0,
             snapMinutes: 15,
-            calendar: calendar
         )
 
         let adjustedStartY = calendarAdjustedCreationDragYForLeadingBoundaryExtensionChange(
@@ -2922,23 +2920,21 @@ final class CalendarDragLogicTests: XCTestCase {
 
         let adjustedStart = calendarTimelineDateFromYPosition(
             adjustedStartY,
-            containing: anchor,
+            clock: CalendarZoneClock(calendar: calendar).day(containing: anchor),
             headerHeight: headerHeight,
             hourHeight: hourHeight,
             leadingExtendedHours: 12,
             trailingExtendedHours: 0,
             snapMinutes: 15,
-            calendar: calendar
         )
         let adjustedCurrent = calendarTimelineDateFromYPosition(
             adjustedCurrentY,
-            containing: anchor,
+            clock: CalendarZoneClock(calendar: calendar).day(containing: anchor),
             headerHeight: headerHeight,
             hourHeight: hourHeight,
             leadingExtendedHours: 12,
             trailingExtendedHours: 0,
             snapMinutes: 15,
-            calendar: calendar
         )
 
         XCTAssertEqual(adjustedStart, originalStart)
@@ -4253,16 +4249,18 @@ final class CalendarDragLogicTests: XCTestCase {
     }
 
     func testTimelineTotalVisibleHoursUse24HourBaseWindow() {
+        let clock = DayClock.legacy24h(start: Date(timeIntervalSinceReferenceDate: 0))
         XCTAssertEqual(
-            calendarTimelineTotalVisibleHours(),
-            24
+            calendarTimelineVisibleMinutes(clock: clock),
+            24 * 60
         )
         XCTAssertEqual(
-            calendarTimelineTotalVisibleHours(
+            calendarTimelineVisibleMinutes(
+                clock: clock,
                 leadingExtendedHours: 2,
                 trailingExtendedHours: 3
             ),
-            29
+            29 * 60
         )
     }
 
@@ -4281,8 +4279,8 @@ final class CalendarDragLogicTests: XCTestCase {
 
         let extensionHours = calendarTimelineBoundaryExtensionHours(
             mappingState: mappingState,
-            maxExtensionHours: 6,
-            calendar: calendar
+            zoneClock: CalendarZoneClock(calendar: calendar),
+            maxExtensionHours: 6
         )
 
         XCTAssertEqual(extensionHours.leading, 6)
@@ -4303,7 +4301,7 @@ final class CalendarDragLogicTests: XCTestCase {
                 anchorDate: anchor,
                 range: range
             ),
-            calendar: calendar
+            zoneClock: CalendarZoneClock(calendar: calendar)
         )
 
         XCTAssertEqual(extensionHours.leading, 12)
@@ -4324,7 +4322,7 @@ final class CalendarDragLogicTests: XCTestCase {
                 anchorDate: anchor,
                 range: range
             ),
-            calendar: calendar
+            zoneClock: CalendarZoneClock(calendar: calendar)
         )
 
         XCTAssertEqual(extensionHours.leading, 12)
@@ -4364,7 +4362,7 @@ final class CalendarDragLogicTests: XCTestCase {
                         range: $0.range
                     )
                 },
-                calendar: calendar
+                zoneClock: CalendarZoneClock(calendar: calendar)
             ).leading,
             12
         )
@@ -4487,7 +4485,7 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(
             calendarTimelineBoundaryExtensionHours(
                 mappingState: mappingState,
-                calendar: calendar
+                zoneClock: CalendarZoneClock(calendar: calendar)
             ).leading,
             0
         )
@@ -4543,7 +4541,7 @@ final class CalendarDragLogicTests: XCTestCase {
             )!
             return calendarTimelineBoundaryExtensionHours(
                 mappingState: TimelineEditMappingState(source: mapping.source, anchorDate: mapping.date, range: mapping.range),
-                calendar: calendar
+                zoneClock: CalendarZoneClock(calendar: calendar)
             )
         }
         let inToday = bands(renderDay: today)
@@ -4763,6 +4761,7 @@ final class CalendarDragLogicTests: XCTestCase {
 
     func testBoundaryExtensionVisibilityDetectsWhenBothExtendedRegionsAreOffscreen() {
         let visibility = calendarTimelineBoundaryExtensionVisibility(
+            clock: DayClock.legacy24h(start: Date(timeIntervalSinceReferenceDate: 0)),
             currentOffsetY: 900,
             viewportHeight: 300,
             contentTopInset: 80,
@@ -4994,13 +4993,14 @@ final class CalendarDragLogicTests: XCTestCase {
         let calendar = Calendar(identifier: .gregorian)
         let anchorDate = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27, hour: 9))!
 
+        let zone = CalendarZoneClock(calendar: calendar)
         let placements = calendarTimelineBoundaryDayHintPlacements(
-            anchorDate: anchorDate,
+            clock: zone.day(containing: anchorDate),
+            zoneClock: zone,
             headerHeight: 20,
             hourHeight: 60,
             leadingExtendedHours: 12,
-            trailingExtendedHours: 12,
-            calendar: calendar
+            trailingExtendedHours: 12
         )
 
         XCTAssertEqual(
@@ -5017,14 +5017,15 @@ final class CalendarDragLogicTests: XCTestCase {
         let calendar = Calendar(identifier: .gregorian)
         let anchorDate = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27, hour: 9))!
 
+        let zone = CalendarZoneClock(calendar: calendar)
         let placements = calendarTimelineBoundaryDayHintPlacements(
-            anchorDate: anchorDate,
+            clock: zone.day(containing: anchorDate),
+            zoneClock: zone,
             headerHeight: 20,
             hourHeight: 60,
             leadingExtendedHours: 12,
             trailingExtendedHours: 12,
-            hintInset: 8,
-            calendar: calendar
+            hintInset: 8
         )
 
         XCTAssertEqual(placements.leading?.originY ?? 0, 28, accuracy: 0.001)
@@ -5038,14 +5039,13 @@ final class CalendarDragLogicTests: XCTestCase {
 
         let resolved = calendarTimelineDateFromYPosition(
             CGFloat(14 - 56),
-            containing: anchor,
+            clock: CalendarZoneClock(calendar: calendar).day(containing: anchor),
             headerHeight: 14,
             hourHeight: 56,
             leadingExtendedHours: 0,
             trailingExtendedHours: 0,
             snapMinutes: 15,
             maxBoundaryExtensionHours: 6,
-            calendar: calendar
         )
 
         XCTAssertEqual(
@@ -5060,14 +5060,13 @@ final class CalendarDragLogicTests: XCTestCase {
 
         let resolved = calendarTimelineDateFromYPosition(
             CGFloat(14 + 26 * 56),
-            containing: anchor,
+            clock: CalendarZoneClock(calendar: calendar).day(containing: anchor),
             headerHeight: 14,
             hourHeight: 56,
             leadingExtendedHours: 0,
             trailingExtendedHours: 0,
             snapMinutes: 15,
             maxBoundaryExtensionHours: 6,
-            calendar: calendar
         )
 
         XCTAssertEqual(
@@ -6072,8 +6071,7 @@ final class CalendarDragLogicTests: XCTestCase {
             calendarTimelineNowLegendY(
                 pointerY: 20 + 10 * 56,
                 headerHeight: 20,
-                totalVisibleHours: 24,
-                hourHeight: 56,
+                windowHeight: 24 * 56,
                 labelHeight: 12
             )!,
             20 + 10 * 56 - 6,
@@ -6088,8 +6086,7 @@ final class CalendarDragLogicTests: XCTestCase {
             calendarTimelineNowLegendY(
                 pointerY: 22,
                 headerHeight: 20,
-                totalVisibleHours: 24,
-                hourHeight: 56,
+                windowHeight: 24 * 56,
                 labelHeight: 12
             )!,
             20,
@@ -6102,8 +6099,7 @@ final class CalendarDragLogicTests: XCTestCase {
             calendarTimelineNowLegendY(
                 pointerY: windowBottom - 2,
                 headerHeight: 20,
-                totalVisibleHours: 24,
-                hourHeight: 56,
+                windowHeight: 24 * 56,
                 labelHeight: 12
             )!,
             windowBottom - 12,
@@ -6117,8 +6113,7 @@ final class CalendarDragLogicTests: XCTestCase {
             calendarTimelineNowLegendY(
                 pointerY: 20 - 0.5,
                 headerHeight: 20,
-                totalVisibleHours: 24,
-                hourHeight: 56,
+                windowHeight: 24 * 56,
                 labelHeight: 12
             )
         )
@@ -6126,8 +6121,7 @@ final class CalendarDragLogicTests: XCTestCase {
             calendarTimelineNowLegendY(
                 pointerY: 20 + 24 * 56 + 0.5,
                 headerHeight: 20,
-                totalVisibleHours: 24,
-                hourHeight: 56,
+                windowHeight: 24 * 56,
                 labelHeight: 12
             )
         )
@@ -6136,8 +6130,7 @@ final class CalendarDragLogicTests: XCTestCase {
             calendarTimelineNowLegendY(
                 pointerY: 20 + 30 * 56,
                 headerHeight: 20,
-                totalVisibleHours: 24,
-                hourHeight: 56,
+                windowHeight: 24 * 56,
                 labelHeight: 12
             )
         )
@@ -6154,8 +6147,7 @@ final class CalendarDragLogicTests: XCTestCase {
         let topEdge = calendarTimelineNowLegendY(
             pointerY: 20,
             headerHeight: 20,
-            totalVisibleHours: 24,
-            hourHeight: 56,
+            windowHeight: 24 * 56,
             labelHeight: 12
         )
         XCTAssertNotNil(
@@ -6169,8 +6161,7 @@ final class CalendarDragLogicTests: XCTestCase {
         let bottomEdge = calendarTimelineNowLegendY(
             pointerY: windowBottom,
             headerHeight: 20,
-            totalVisibleHours: 24,
-            hourHeight: 56,
+            windowHeight: 24 * 56,
             labelHeight: 12
         )
         XCTAssertNotNil(
@@ -6188,14 +6179,15 @@ final class CalendarDragLogicTests: XCTestCase {
         let now = calendar.date(
             from: DateComponents(year: 2026, month: 8, day: 20, hour: 10, minute: 30)
         )!
+        let clock = CalendarZoneClock(calendar: calendar).day(containing: now)
         // No extensions: pointer = header + 10.5h.
         XCTAssertEqual(
             calendarTimelineNowLegendY(
                 for: now,
+                clock: clock,
                 headerHeight: 20,
                 hourHeight: 56,
-                labelHeight: 12,
-                calendar: calendar
+                labelHeight: 12
             )!,
             20 + 10.5 * 56 - 6,
             accuracy: 0.001
@@ -6205,11 +6197,11 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(
             calendarTimelineNowLegendY(
                 for: now,
+                clock: clock,
                 headerHeight: 20,
                 hourHeight: 56,
                 leadingExtendedHours: 12,
-                labelHeight: 12,
-                calendar: calendar
+                labelHeight: 12
             )!,
             20 + (10.5 + 12) * 56 - 6,
             accuracy: 0.001
@@ -6233,24 +6225,27 @@ final class CalendarDragLogicTests: XCTestCase {
             24.5 * 3600,
             accuracy: 1
         )
+        // The legacy clock: a standard day's length from the start, which is
+        // what the axis drew before the day clock (gh#285 S0 keeps it).
+        let legacyZone = CalendarZoneClock(calendar: calendar, usesActualDayLength: false)
         XCTAssertNil(
             calendarTimelineNowLegendY(
                 for: fallBackEvening,
+                clock: legacyZone.day(containing: fallBackEvening),
                 headerHeight: 20,
                 hourHeight: 56,
-                labelHeight: 12,
-                calendar: calendar
+                labelHeight: 12
             )
         )
         // With the trailing band open the same instant is in-window again.
         XCTAssertEqual(
             calendarTimelineNowLegendY(
                 for: fallBackEvening,
+                clock: legacyZone.day(containing: fallBackEvening),
                 headerHeight: 20,
                 hourHeight: 56,
                 trailingExtendedHours: 12,
-                labelHeight: 12,
-                calendar: calendar
+                labelHeight: 12
             )!,
             20 + 24.5 * 56 - 6,
             accuracy: 0.001
@@ -6263,10 +6258,10 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertNotNil(
             calendarTimelineNowLegendY(
                 for: normalEvening,
+                clock: legacyZone.day(containing: normalEvening),
                 headerHeight: 20,
                 hourHeight: 56,
-                labelHeight: 12,
-                calendar: calendar
+                labelHeight: 12
             )
         )
     }
@@ -7188,10 +7183,10 @@ final class CalendarDragLogicTests: XCTestCase {
 
         let presentation = calendarResolveAxisMarkerPresentation(
             mappingState: state,
+            zoneClock: CalendarZoneClock(calendar: calendar),
             headerHeight: 14,
             hourHeight: 56,
-            collapseThreshold: 20,
-            calendar: calendar
+            collapseThreshold: 20
         )
 
         XCTAssertNotNil(presentation)
@@ -15143,6 +15138,7 @@ final class BoundaryBandCloseTests: XCTestCase {
     private func visibility(offsetY: CGFloat, leading: Int = 12, trailing: Int = 0)
         -> (leadingVisible: Bool, trailingVisible: Bool) {
         calendarTimelineBoundaryExtensionVisibility(
+            clock: DayClock.legacy24h(start: Date(timeIntervalSinceReferenceDate: 0)),
             currentOffsetY: offsetY,
             viewportHeight: viewport,
             contentTopInset: topInset,
@@ -15255,6 +15251,7 @@ final class BoundaryBandCloseTests: XCTestCase {
         func canLeave(hourHeight hh: CGFloat, bottomPad: CGFloat = 60) -> (leading: Bool, trailing: Bool) {
             let contentHeight = topInset + header + 48 * hh + bottomPad
             return calendarTimelineBoundaryExtensionCanLeaveView(
+                clock: DayClock.legacy24h(start: Date(timeIntervalSinceReferenceDate: 0)),
                 contentHeight: contentHeight, viewportHeight: viewport,
                 contentTopInset: topInset, allDayHeight: 0, headerHeight: header,
                 hourHeight: hh, state: state
@@ -15269,6 +15266,7 @@ final class BoundaryBandCloseTests: XCTestCase {
         // Today's 24:00 above the screen's bottom at offset 0: the band below
         // can never cross the bottom edge.
         let below = calendarTimelineBoundaryExtensionCanLeaveView(
+            clock: DayClock.legacy24h(start: Date(timeIntervalSinceReferenceDate: 0)),
             contentHeight: topInset + header + 36 * 12 + 60, viewportHeight: viewport,
             contentTopInset: topInset, allDayHeight: 0, headerHeight: header, hourHeight: 12,
             state: TimelineBoundaryExtensionState(leadingHours: 0, trailingHours: 12, source: nil)
@@ -15566,6 +15564,7 @@ final class BoundaryBandPieceTests: XCTestCase {
     ) -> DayLayerHostView.Model {
         var model = DayLayerHostView.Model(
             date: day,
+            dayClock: CalendarZoneClock.current.day(containing: day),
             occurrences: occurrences,
             contentWidth: 360,
             headerHeight: 16,

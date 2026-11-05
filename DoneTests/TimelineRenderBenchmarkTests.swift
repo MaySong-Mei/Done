@@ -272,6 +272,7 @@ final class TimelineRenderBenchmarkTests: XCTestCase {
     ) -> DayLayerHostView.Model {
         DayLayerHostView.Model(
             date: day,
+            dayClock: CalendarZoneClock.current.day(containing: day),
             occurrences: occurrences,
             contentWidth: 360,
             headerHeight: max(14, (hourHeight * 0.28).rounded()),
@@ -350,7 +351,7 @@ final class TimelineRenderBenchmarkTests: XCTestCase {
             var m = model(for: occurrences, day: day, hourHeight: hourHeight,
                           isPinchActive: true, frozenSlotMinutes: 60)
             m = DayLayerHostView.Model(
-                date: m.date, occurrences: m.occurrences,
+                date: m.date, dayClock: m.dayClock, occurrences: m.occurrences,
                 contentWidth: 360 + widthNudge, headerHeight: m.headerHeight,
                 hourHeight: m.hourHeight, eventHorizontalInset: m.eventHorizontalInset,
                 leadingExtendedHours: m.leadingExtendedHours,

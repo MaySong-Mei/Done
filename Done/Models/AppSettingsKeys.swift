@@ -106,6 +106,11 @@ enum AppSettingsKeys {
     /// the SwiftUI path remains the default until A/B verification settles.
     /// See `TimeAxisLayerView.swift` (issue #60).
     static let calendarUseCALayerAxisMarkers = "calendarUseCALayerAxisMarkers"
+    /// Developer kill switch for the day-clock seam (gh#285): when false,
+    /// every timeline column is drawn the legacy way, a standard day's length
+    /// from its start, whatever the zone does on that day. Read through
+    /// `CalendarZoneClock.dayClockEnabled`, which also holds the default.
+    static let calendarDayClockEnabled = "calendarDayClockEnabled"
     /// Experimental: when true, the event-detail mini-day timeline
     /// (`miniDayTimelineVisual` in `CalendarEventDetailView`) is rendered
     /// through a CALayer-backed UIView instead of the SwiftUI tree. Same
@@ -419,6 +424,7 @@ enum AppSettingsKeys {
         holidaysShowSolarTerms,
         holidaysShowGregorianHolidays,
         calendarUseCALayerAxisMarkers,
+        calendarDayClockEnabled,
         tokenInferenceLLMEnabled,
         calendarShareStyle,
         // Declared in `AppSettingsLocale`, not here, which is the only

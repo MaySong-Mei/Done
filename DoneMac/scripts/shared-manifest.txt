@@ -16,6 +16,7 @@ Done/Services/SupabaseImageStorageService.swift
 Done/Services/SyncStatusReporter.swift
 Done/Views/Calendar/CalendarLayout.swift
 Done/Views/Calendar/Components/Timeline/TimelineEditMapping.swift
+Done/Views/Calendar/Components/Timeline/CalendarDayClock.swift
 #
 # exclusions (inside listed prefixes, iOS-only)
 # ORDER MATTERS: the merge-hook matcher processes lines top-to-bottom, so

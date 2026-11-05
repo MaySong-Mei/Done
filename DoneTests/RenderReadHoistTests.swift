@@ -108,7 +108,8 @@ final class RenderReadHoistTests: XCTestCase {
     /// rendering proves the param drives the output, i.e. the read moved out.
     func testTimeAxisLabelsLabelHonorsHoistedIs24() {
         let labels = TimeAxisLabels(
-            anchorDate: Date(), headerHeight: 44, hourHeight: 60,
+            clock: CalendarZoneClock.current.day(containing: Date()), zoneClock: .current,
+            headerHeight: 44, hourHeight: 60,
             slotMinutes: 60, leadingExtendedHours: 0, trailingExtendedHours: 0,
             mode: .preview)
         XCTAssertEqual(labels.label(forSlot: 13, is24: true), "13:00")
@@ -117,7 +118,8 @@ final class RenderReadHoistTests: XCTestCase {
 
         // Off-the-hour slot -> empty, independent of is24.
         let half = TimeAxisLabels(
-            anchorDate: Date(), headerHeight: 44, hourHeight: 60,
+            clock: CalendarZoneClock.current.day(containing: Date()), zoneClock: .current,
+            headerHeight: 44, hourHeight: 60,
             slotMinutes: 30, leadingExtendedHours: 0, trailingExtendedHours: 0,
             mode: .preview)
         XCTAssertEqual(half.label(forSlot: 1, is24: true), "")

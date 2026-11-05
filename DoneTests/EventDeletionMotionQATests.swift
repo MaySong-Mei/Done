@@ -94,6 +94,7 @@ class EventDeletionMotionQABase: XCTestCase {
     func model(_ occurrences: [CalendarLayout.EventOccurrence], date: Date? = nil) -> DayLayerHostView.Model {
         DayLayerHostView.Model(
             date: date ?? today,
+            dayClock: CalendarZoneClock.current.day(containing: date ?? today),
             occurrences: occurrences,
             contentWidth: 360,
             headerHeight: 16,

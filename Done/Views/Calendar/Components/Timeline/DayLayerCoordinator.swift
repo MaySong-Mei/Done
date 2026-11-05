@@ -248,6 +248,7 @@ final class DayLayerCoordinator: NSObject {
         // the imperative single-day substrate per spec §2A.
         let initial = DayLayerHostView.Model(
             date: date,
+            dayClock: CalendarZoneClock.current.day(containing: date),
             occurrences: occurrencesByDayOffset[dayOffset] ?? [],
             contentWidth: contentWidthByDayOffset[dayOffset] ?? frame.width,
             headerHeight: headerHeight,

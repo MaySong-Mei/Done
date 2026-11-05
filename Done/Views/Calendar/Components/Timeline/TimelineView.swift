@@ -1283,6 +1283,10 @@ struct TimelinePagerView: View {
     var leadingFadeProgress: CGFloat = 0
     var trailingFadeProgress: CGFloat = 0
     var isDayOffsetFrozen: Bool = false
+    /// The zone every column, band and the axis measure their day by
+    /// (gh#285). Built where the pager is, so a zone change reaches the next
+    /// body the way `Calendar.current` always did.
+    var zoneClock: CalendarZoneClock = .current
     let daysCount: Int
     let mode: PageMode
     let showEventText: Bool
@@ -1372,6 +1376,14 @@ struct TimelinePagerView: View {
     /// threshold.  Outside pinch, returns the live value.
     private var effectiveSlotMinutes: Int { rangePinchFrozenSlotMinutes ?? slotMinutes }
     private var slotHeight: CGFloat { hourHeight * CGFloat(effectiveSlotMinutes) / 60 }
+    /// The selected day's clock: what the fixed axis is drawn for.
+    private var selectedDayClock: DayClock {
+        zoneClock.day(containing: dayDate(forOffset: selectedDayOffset, calendar: zoneClock.calendar))
+    }
+    /// The day the scroll content is sized for. The selected day for now;
+    /// the longest day of the window and its neighbours once days differ
+    /// in length (S1), so a column never has less room than it needs.
+    private var canvasClock: DayClock { selectedDayClock }
 
     /// Dynamic min hourHeight for the live pinch gesture: the value at which
     /// 24 hours exactly fits between the top overlay and the tab bar.
@@ -1417,7 +1429,7 @@ struct TimelinePagerView: View {
     private func computeRawBoundaryExtensionHours(
         mappingState: TimelineEditMappingState?
     ) -> (leading: Int, trailing: Int) {
-        var result = calendarTimelineBoundaryExtensionHours(mappingState: mappingState)
+        var result = calendarTimelineBoundaryExtensionHours(mappingState: mappingState, zoneClock: zoneClock)
 
         // Cross-day event fix: when the scroll has hit the top boundary
         // (can't go further up) and the user is actively dragging upward,
@@ -1591,14 +1603,11 @@ struct TimelinePagerView: View {
     private var slotCount: Int {
         max(
             1,
-            Int(
-                CGFloat(
-                    calendarTimelineTotalVisibleHours(
-                        leadingExtendedHours: renderBoundaryExtensionHours.leading,
-                        trailingExtendedHours: renderBoundaryExtensionHours.trailing
-                    ) * 60
-                ) / CGFloat(effectiveSlotMinutes)
-            ) + 1
+            calendarTimelineVisibleMinutes(
+                clock: canvasClock,
+                leadingExtendedHours: renderBoundaryExtensionHours.leading,
+                trailingExtendedHours: renderBoundaryExtensionHours.trailing
+            ) / max(1, effectiveSlotMinutes) + 1
         )
     }
     private var timelineHeight: CGFloat { headerHeight + CGFloat(slotCount) * slotHeight + timelineBottomInset }
@@ -1944,7 +1953,8 @@ struct TimelinePagerView: View {
             useCALayerAxisMarkers: useCALayerAxisMarkers,
             allDayHeight: effectiveAllDayHeight,
             timelineHeight: timelineHeight,
-            anchorDate: dayDate(forOffset: selectedDayOffset),
+            clock: selectedDayClock,
+            zoneClock: zoneClock,
             headerHeight: headerHeight,
             hourHeight: hourHeight,
             effectiveSlotMinutes: effectiveSlotMinutes,
@@ -2910,9 +2920,10 @@ struct TimelinePagerView: View {
         // day layer discarded ≥99% of the time. What is built here now is
         // only the key: 1–3 dictionary lookups off the occurrence cache,
         // whose array buffers the key then compares by identity.
+        let dayClock = zoneClock.day(containing: date)
         let dayOccurrenceSource = CalendarLayout.timelineVisibleOccurrenceSource(
             forDayOffset: offset,
-            anchorDate: date,
+            clock: dayClock,
             leadingExtendedHours: occurrenceExtensionHoursForDrag.leading,
             trailingExtendedHours: occurrenceExtensionHoursForDrag.trailing,
             occurrencesForOffset: occurrencesForOffset
@@ -2923,6 +2934,7 @@ struct TimelinePagerView: View {
         // scroll / boundary-paging / absorption / tap / focus).
         CalendarDayLayerView(
             date: date,
+            dayClock: dayClock,
             occurrenceSource: dayOccurrenceSource,
             contentWidth: dayWidth,
             headerHeight: headerHeight,
@@ -2980,7 +2992,7 @@ struct TimelinePagerView: View {
             ) ? onVisibleTimelineFrameChange : nil
         )
         .frame(width: dayWidth, height: timelineHeight, alignment: .top)
-        .mask { extensionFadeMask() }
+        .mask { extensionFadeMask(clock: dayClock) }
     }
 
     /// Alpha mask for the follow-event band fade: header + base 24h fully
@@ -2990,7 +3002,7 @@ struct TimelinePagerView: View {
     /// segment overhangs `calendarBandFadeSeamOverhang` into each band side
     /// to keep the midnight line fully opaque while the band fades.
     @ViewBuilder
-    private func extensionFadeMask() -> some View {
+    private func extensionFadeMask(clock: DayClock) -> some View {
         // Spec 07: in the 48h-constant model the band content is ALWAYS present
         // (geometry uses `renderBoundaryExtensionHours` = 12/12), so the mask
         // must carve the fade region over it — otherwise there is no band frame
@@ -3009,7 +3021,7 @@ struct TimelinePagerView: View {
                     .opacity(1 - leadingFadeProgress)
             }
             Color.white.frame(
-                height: CGFloat(calendarTimelineBaseVisibleHours) * hourHeight
+                height: calendarTimelineContentHeight(clock: clock, hourHeight: hourHeight)
                     + leadingBuf + trailingBuf
             )
             if trailing > 0 {
@@ -3180,7 +3192,9 @@ private struct TimelineAxisDragOverlay: View {
     let useCALayerAxisMarkers: Bool
     let allDayHeight: CGFloat
     let timelineHeight: CGFloat
-    let anchorDate: Date
+    /// The day the axis is drawn for, and the zone it is in.
+    let clock: DayClock
+    let zoneClock: CalendarZoneClock
     let headerHeight: CGFloat
     let hourHeight: CGFloat
     let effectiveSlotMinutes: Int
@@ -3241,6 +3255,7 @@ private struct TimelineAxisDragOverlay: View {
         }
         guard var presentation = calendarResolveAxisMarkerPresentation(
             mappingState: editMappingState,
+            zoneClock: zoneClock,
             headerHeight: headerHeight,
             hourHeight: hourHeight,
             leadingExtendedHours: leadingExtendedHours,
@@ -3267,7 +3282,8 @@ private struct TimelineAxisDragOverlay: View {
                 }
                 if useCALayerAxisMarkers {
                     TimeAxisLayerHost(
-                        anchorDate: anchorDate,
+                        clock: clock,
+                        zoneClock: zoneClock,
                         headerHeight: headerHeight,
                         hourHeight: hourHeight,
                         slotMinutes: effectiveSlotMinutes,
@@ -3286,7 +3302,8 @@ private struct TimelineAxisDragOverlay: View {
                     .frame(height: timelineHeight, alignment: .top)
                 } else {
                     TimeAxisLabels(
-                        anchorDate: anchorDate,
+                        clock: clock,
+                        zoneClock: zoneClock,
                         headerHeight: headerHeight,
                         hourHeight: hourHeight,
                         slotMinutes: effectiveSlotMinutes,
@@ -3314,7 +3331,9 @@ private struct TimelineAxisDragOverlay: View {
 // gh#219 slice B: internal (was file-private) so the formatter-equivalence
 // test can select `currentTimeFormatter` directly; members stay as they were.
 struct TimeAxisLabels: View {
-    let anchorDate: Date
+    /// The day the axis is drawn for, and the zone it is in.
+    let clock: DayClock
+    let zoneClock: CalendarZoneClock
     let headerHeight: CGFloat
     let hourHeight: CGFloat
     let slotMinutes: Int
@@ -3332,7 +3351,7 @@ struct TimeAxisLabels: View {
     var leadingFadeProgress: CGFloat = 0
     var trailingFadeProgress: CGFloat = 0
     /// Single-day-only: gates the current-time legend Text + the hour-label
-    /// collision-hide. In single-day view, `anchorDate` is the displayed day;
+    /// collision-hide. In single-day view, `clock` is the displayed day;
     /// on non-today pages the now-line itself is already suppressed in the
     /// day column (CALayer `showsNow` check), but the axis kept showing the
     /// now-legend AND hiding the colliding hour label — leaving the user
@@ -3349,14 +3368,11 @@ struct TimeAxisLabels: View {
     private var slotCount: Int {
         max(
             1,
-            Int(
-                CGFloat(
-                    calendarTimelineTotalVisibleHours(
-                        leadingExtendedHours: leadingExtendedHours,
-                        trailingExtendedHours: trailingExtendedHours
-                    ) * 60
-                ) / CGFloat(slotMinutes)
-            ) + 1
+            calendarTimelineVisibleMinutes(
+                clock: clock,
+                leadingExtendedHours: leadingExtendedHours,
+                trailingExtendedHours: trailingExtendedHours
+            ) / max(1, slotMinutes) + 1
         )
     }
 
@@ -3370,16 +3386,20 @@ struct TimeAxisLabels: View {
             // column range. Re-evaluated each tick so a midnight crossover
             // flips the gate naturally.
             let showsCurrentTime = !isSingleDay
-                || Calendar.current.isDate(anchorDate, inSameDayAs: now)
+                || clock.contains(now)
             // Single-source legend position (gh#80): nil = culled, either
             // because the page gate above is off OR because the now-pointer
             // falls outside the visible hour window. Every consumer below
             // (legend Text, hour-label collision yield, crossfade trigger)
             // derives visibility from this one optional — no second
             // hand-derived condition.
+            // The legend sits at now's elapsed time in now's own day: the
+            // axis day when now is in it, else (multi-day) the day now is in.
+            let nowClock = clock.contains(now) ? clock : zoneClock.day(containing: now)
             let legendY: CGFloat? = showsCurrentTime
                 ? calendarTimelineNowLegendY(
                     for: now,
+                    clock: nowClock,
                     headerHeight: headerHeight,
                     hourHeight: hourHeight,
                     leadingExtendedHours: leadingExtendedHours,
@@ -3492,7 +3512,7 @@ struct TimeAxisLabels: View {
                     .opacity(1 - leadingFadeProgress)
             }
             Color.white.frame(
-                height: CGFloat(calendarTimelineBaseVisibleHours) * hourHeight
+                height: calendarTimelineContentHeight(clock: clock, hourHeight: hourHeight)
                     + leadingBuf + trailingBuf
             )
             if trailingExtendedHours > 0 {
@@ -3542,13 +3562,12 @@ struct TimeAxisLabels: View {
         let clampedY = clamp(
             y,
             headerHeight,
-            headerHeight
-                + CGFloat(
-                    calendarTimelineTotalVisibleHours(
-                        leadingExtendedHours: leadingExtendedHours,
-                        trailingExtendedHours: trailingExtendedHours
-                    )
-                ) * hourHeight
+            headerHeight + calendarTimelineContentHeight(
+                clock: clock,
+                hourHeight: hourHeight,
+                leadingExtendedHours: leadingExtendedHours,
+                trailingExtendedHours: trailingExtendedHours
+            )
         )
         let markerHeight: CGFloat = 16
 
@@ -3578,7 +3597,8 @@ struct TimeAxisLabels: View {
         // == coordinate hours (the -1 sentinel falls back to coordinate).
         let dL = drawableLeadingHours >= 0 ? drawableLeadingHours : leadingExtendedHours
         let dT = drawableTrailingHours >= 0 ? drawableTrailingHours : trailingExtendedHours
-        if totalMinutes < -dL * 60 || totalMinutes > (calendarTimelineBaseVisibleHours + dT) * 60 {
+        if totalMinutes < -dL * 60
+            || totalMinutes > calendarTimelineVisibleMinutes(clock: clock, trailingExtendedHours: dT) {
             return ""
         }
         let normalizedTotalMinutes = ((totalMinutes % (24 * 60)) + (24 * 60)) % (24 * 60)
@@ -3666,13 +3686,13 @@ struct TimelineBoundaryDayHintPlacement: Equatable {
 }
 
 func calendarTimelineBoundaryDayHintPlacements(
-    anchorDate: Date,
+    clock: DayClock,
+    zoneClock: CalendarZoneClock,
     headerHeight: CGFloat,
     hourHeight: CGFloat,
     leadingExtendedHours: Int,
     trailingExtendedHours: Int,
-    hintInset: CGFloat = 8,
-    calendar: Calendar = .current
+    hintInset: CGFloat = 8
 ) -> (
     leading: TimelineBoundaryDayHintPlacement?,
     trailing: TimelineBoundaryDayHintPlacement?
@@ -3683,9 +3703,8 @@ func calendarTimelineBoundaryDayHintPlacements(
 
     let leadingPlacement: TimelineBoundaryDayHintPlacement? = {
         guard leadingExtendedHours > 0 else { return nil }
-        let date = calendar.date(byAdding: .day, value: -1, to: anchorDate) ?? anchorDate
         return TimelineBoundaryDayHintPlacement(
-            date: calendar.startOfDay(for: date),
+            date: zoneClock.day(-1, from: clock).start,
             originY: headerHeight + hintInset,
             isTrailingEdge: false
         )
@@ -3693,11 +3712,14 @@ func calendarTimelineBoundaryDayHintPlacements(
 
     let trailingPlacement: TimelineBoundaryDayHintPlacement? = {
         guard trailingExtendedHours > 0 else { return nil }
-        let date = calendar.date(byAdding: .day, value: 1, to: anchorDate) ?? anchorDate
         return TimelineBoundaryDayHintPlacement(
-            date: calendar.startOfDay(for: date),
+            date: zoneClock.day(1, from: clock).start,
             originY: headerHeight
-                + CGFloat(max(0, leadingExtendedHours + calendarTimelineBaseVisibleHours)) * hourHeight
+                + calendarTimelineContentHeight(
+                    clock: clock,
+                    hourHeight: hourHeight,
+                    leadingExtendedHours: leadingExtendedHours
+                )
                 + hintInset,
             isTrailingEdge: true
         )

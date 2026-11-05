@@ -505,7 +505,8 @@ func calendarResolvedHeaderDisplayDate(
     dragTouchPointGlobal: CGPoint? = nil,
     timelineFrameGlobal: CGRect = .zero,
     referenceDate: Date = Date(),
-    calendar: Calendar = .current
+    calendar: Calendar = .current,
+    zoneClock: CalendarZoneClock? = nil
 ) -> Date {
     if let dragDisplayDate = calendarResolvedTouchDrivenHeaderDisplayDate(
         draggingEventID: draggingEventID,
@@ -518,7 +519,8 @@ func calendarResolvedHeaderDisplayDate(
         hourHeight: hourHeight,
         boundaryExtensionState: boundaryExtensionState,
         referenceDate: referenceDate,
-        calendar: calendar
+        calendar: calendar,
+        zoneClock: zoneClock
     ) {
         return dragDisplayDate
     }
@@ -533,22 +535,22 @@ func calendarResolvedHeaderDisplayDate(
     let normalizedScrollY = currentScrollY.isFinite ? max(0, currentScrollY) : 0
     guard hourHeight.isFinite, hourHeight > 0 else { return selectedDate }
 
-    let totalVisibleMinutes = calendarTimelineTotalVisibleHours(
+    let clock = (zoneClock ?? CalendarZoneClock(calendar: calendar)).day(containing: selectedDate)
+    let totalVisibleMinutes = calendarTimelineVisibleMinutes(
+        clock: clock,
         leadingExtendedHours: boundaryExtensionState.leadingHours,
         trailingExtendedHours: boundaryExtensionState.trailingHours
     )
-        * 60
     let maxLocalY = headerHeight + CGFloat(max(0, totalVisibleMinutes - 1)) / 60 * hourHeight
     let localY = min(max(headerHeight, normalizedScrollY + headerHeight), maxLocalY)
     let resolvedDate = calendarTimelineDateFromYPosition(
         localY,
-        containing: selectedDate,
+        clock: clock,
         headerHeight: headerHeight,
         hourHeight: hourHeight,
         leadingExtendedHours: boundaryExtensionState.leadingHours,
         trailingExtendedHours: boundaryExtensionState.trailingHours,
-        snapMinutes: 1,
-        calendar: calendar
+        snapMinutes: 1
     )
     return calendar.startOfDay(for: resolvedDate)
 }
@@ -565,7 +567,8 @@ func calendarResolvedTouchDrivenHeaderDisplayDate(
     boundaryExtensionState: TimelineBoundaryExtensionState,
     clampToExtension: Bool = true,
     referenceDate: Date = Date(),
-    calendar: Calendar = .current
+    calendar: Calendar = .current,
+    zoneClock: CalendarZoneClock? = nil
 ) -> Date? {
     guard rangeMode == .day else { return nil }
     guard calendarIsMoveDragActive(
@@ -590,10 +593,12 @@ func calendarResolvedTouchDrivenHeaderDisplayDate(
         referenceDate: referenceDate,
         calendar: calendar
     )
-    let totalVisibleMinutes = calendarTimelineTotalVisibleHours(
+    let clock = (zoneClock ?? CalendarZoneClock(calendar: calendar)).day(containing: selectedDate)
+    let totalVisibleMinutes = calendarTimelineVisibleMinutes(
+        clock: clock,
         leadingExtendedHours: boundaryExtensionState.leadingHours,
         trailingExtendedHours: boundaryExtensionState.trailingHours
-    ) * 60
+    )
     let maxLocalY = headerHeight + CGFloat(max(0, totalVisibleMinutes - 1)) / 60 * hourHeight
     let localY = dragTouchPointGlobal.y - timelineFrameGlobal.minY
     // Spec 07 Phase 1: when imperative path requests no-clamp, finger Y is
@@ -602,14 +607,13 @@ func calendarResolvedTouchDrivenHeaderDisplayDate(
     let mappingY = clampToExtension ? min(max(headerHeight, localY), maxLocalY) : localY
     let resolvedDate = calendarTimelineDateFromYPosition(
         mappingY,
-        containing: selectedDate,
+        clock: clock,
         headerHeight: headerHeight,
         hourHeight: hourHeight,
         leadingExtendedHours: boundaryExtensionState.leadingHours,
         trailingExtendedHours: boundaryExtensionState.trailingHours,
         snapMinutes: 1,
-        clampToExtension: clampToExtension,
-        calendar: calendar
+        clampToExtension: clampToExtension
     )
     return calendar.startOfDay(for: resolvedDate)
 }
@@ -805,6 +809,7 @@ func calendarShouldRetainTimelineBoundaryExtensionOnSelectedDayOffsetChange(
 }
 
 func calendarTimelineBoundaryExtensionVisibility(
+    clock: DayClock,
     currentOffsetY: CGFloat,
     viewportHeight: CGFloat,
     contentTopInset: CGFloat,
@@ -840,7 +845,9 @@ func calendarTimelineBoundaryExtensionVisibility(
     let trailingVisible: Bool = {
         guard state.trailingHours > 0 else { return false }
         let regionTop = extensionOriginY
-            + CGFloat(state.leadingHours + calendarTimelineBaseVisibleHours) * hourHeight
+            + calendarTimelineContentHeight(
+                clock: clock, hourHeight: hourHeight, leadingExtendedHours: state.leadingHours
+            )
         let regionBottom = regionTop + CGFloat(state.trailingHours) * hourHeight
         let overlap = min(regionBottom, visibleBottom) - max(regionTop, visibleTop)
         return overlap >= minVisibleOverlap
@@ -854,6 +861,7 @@ func calendarTimelineBoundaryExtensionVisibility(
 /// band that no scroll can hide, so the out-of-view close would never come.
 /// (gh#279)
 func calendarTimelineBoundaryExtensionCanLeaveView(
+    clock: DayClock,
     contentHeight: CGFloat,
     viewportHeight: CGFloat,
     contentTopInset: CGFloat,
@@ -866,7 +874,9 @@ func calendarTimelineBoundaryExtensionCanLeaveView(
     let maxOffsetY = max(0, contentHeight - viewportHeight)
     let leadingBottom = extensionOriginY + CGFloat(state.leadingHours) * hourHeight
     let trailingTop = extensionOriginY
-        + CGFloat(state.leadingHours + calendarTimelineBaseVisibleHours) * hourHeight
+        + calendarTimelineContentHeight(
+            clock: clock, hourHeight: hourHeight, leadingExtendedHours: state.leadingHours
+        )
     return (
         leading: state.leadingHours == 0 || maxOffsetY >= leadingBottom - 0.5,
         trailing: state.trailingHours == 0 || trailingTop >= viewportHeight - 0.5
@@ -2067,6 +2077,14 @@ private extension CalendarPageView {
         return hypot(point.x - origin.x, point.y - origin.y) >= Self.todoStackAutoScrollArmDistance
     }
 
+    /// The selected day's clock, as the pager draws it (gh#285). The pager
+    /// sizes its content by this day for now; see `TimelinePagerView.canvasClock`.
+    var selectedDayClock: DayClock {
+        CalendarZoneClock.current.day(
+            containing: calendarDateForSelectedDayOffset(calendarState.selectedDayOffset)
+        )
+    }
+
     /// Scrollable content height, from the same formula the UIKit host uses
     /// for `contentHeight` — so the pump stops where the scroll view stops
     /// instead of grinding against a clamp.
@@ -2074,6 +2092,7 @@ private extension CalendarPageView {
         let hourHeight = calendarState.timelineHourHeight
         guard hourHeight > 0 else { return 0 }
         return calendarTimelineHostContentHeight(
+            clock: selectedDayClock,
             headerHeight: calendarTimelineTopInset(hourHeight: hourHeight),
             allDayHeight: timelineAllDayHeight,
             hourHeight: hourHeight,
@@ -2139,10 +2158,12 @@ private extension CalendarPageView {
 
         let headerHeight = timelineHeaderHeight
         let localY = globalPoint.y - frame.minY
-        let totalVisibleMinutes = calendarTimelineTotalVisibleHours(
+        let clock = selectedDayClock
+        let totalVisibleMinutes = calendarTimelineVisibleMinutes(
+            clock: clock,
             leadingExtendedHours: timelineBoundaryExtensionState.leadingHours,
             trailingExtendedHours: timelineBoundaryExtensionState.trailingHours
-        ) * 60
+        )
         // `- 1` matches every other finger→time mapping in this file
         // (`calendarResolvedHeaderDisplayDate`,
         // `calendarResolvedTouchDrivenHeaderDisplayDate`): without it the very
@@ -2151,10 +2172,9 @@ private extension CalendarPageView {
         let maxLocalY = headerHeight + CGFloat(max(0, totalVisibleMinutes - 1)) / 60 * hourHeight
         guard localY >= headerHeight, localY <= maxLocalY else { return nil }
 
-        let selectedDate = calendarDateForSelectedDayOffset(calendarState.selectedDayOffset)
         let start = calendarTimelineDateFromYPosition(
             localY,
-            containing: selectedDate,
+            clock: clock,
             headerHeight: headerHeight,
             hourHeight: hourHeight,
             leadingExtendedHours: timelineBoundaryExtensionState.leadingHours,
@@ -3385,7 +3405,7 @@ private extension CalendarPageView {
             extensionOriginY: topOverlayInset + timelineAllDayHeight + timelineHeaderHeight,
             scrollY: timelineVerticalScrollY,
             viewportHeight: timelineScrollViewportHeight,
-            baseVisibleHours: calendarTimelineBaseVisibleHours
+            dayClock: CalendarZoneClock.current.day(containing: original.start)
         )
         let curves = computeAbandonedFadeCurves(input)
 
@@ -3579,7 +3599,7 @@ private extension CalendarPageView {
         // dispatch delay + a margin. (#55 follow-event-across-midnight)
         if newState.source == nil, retainedState.hasAnyExtension, !followGuardActive {
             let hourHeight = calendarState.timelineHourHeight
-            let baseContentHeight = CGFloat(calendarTimelineBaseVisibleHours) * hourHeight
+            let baseContentHeight = calendarTimelineContentHeight(clock: selectedDayClock, hourHeight: hourHeight)
             let scrollableRange = baseContentHeight - timelineScrollViewportHeight
             if scrollableRange < hourHeight * 2 {
                 let leading = timelineBoundaryExtensionState.leadingHours
@@ -3845,6 +3865,7 @@ private extension CalendarPageView {
         guard !isVerticallyScrolling else { return }
 
         let visibility = calendarTimelineBoundaryExtensionVisibility(
+            clock: selectedDayClock,
             currentOffsetY: timelineVerticalScrollY,
             viewportHeight: timelineScrollViewportHeight,
             contentTopInset: topOverlayInset,
@@ -3855,6 +3876,7 @@ private extension CalendarPageView {
         )
         let reachable = closeUnreachable
             ? calendarTimelineBoundaryExtensionCanLeaveView(
+                clock: selectedDayClock,
                 contentHeight: todoStackTimelineContentHeight(),
                 viewportHeight: timelineScrollViewportHeight,
                 contentTopInset: topOverlayInset,
@@ -4117,6 +4139,7 @@ private extension CalendarPageView {
             ? calendarTimelineMaximumBoundaryExtensionHours
             : timelineBoundaryExtensionState.trailingHours
         let contentH = calendarTimelineHostContentHeight(
+            clock: selectedDayClock,
             headerHeight: calendarTimelineTopInset(hourHeight: hourHeight),
             allDayHeight: imperative ? 0 : timelineAllDayHeight,
             hourHeight: hourHeight,
@@ -5593,7 +5616,10 @@ private extension CalendarPageView {
             // rather than jumping to its new in-day slot. (Co-commit-free: only
             // contentOffset moves, contentSize is constant.)
             let hourHeight = calendarState.timelineHourHeight
-            let dayShift = CGFloat(dayDelta) * CGFloat(calendarTimelineBaseVisibleHours) * hourHeight
+            let oldDayClock = CalendarZoneClock.current.day(
+                containing: calendarDateForSelectedDayOffset(originalDayOffset)
+            )
+            let dayShift = CGFloat(dayDelta) * CGFloat(oldDayClock.length / 3600) * hourHeight
             let targetOffsetY = max(0, timelineScrollProxy.currentOffsetY - dayShift)
             // NOTE: transient-compensation + post-swap spring (Task 1) were
             // tried here and broke the swap visually — reverted to the approved
@@ -5633,34 +5659,48 @@ private extension CalendarPageView {
         // the pre canvas (36h) is a strict subset of the post canvas (48h):
         // nothing is discarded at any zoom. The destination day scrolls in
         // solid; only the old day (the mirrored band) fades out.
-        let mirroredHours = calendarTimelineBaseVisibleHours
+        // The mirrored band holds the WHOLE old day, so it is as long as that
+        // day: the old day's length, not a day's worth of hours (gh#285).
+        let zoneClock = CalendarZoneClock.current
+        let oldDayClock = zoneClock.day(containing: calendarDateForSelectedDayOffset(originalDayOffset))
+        let newDayClock = zoneClock.day(containing: calendarDateForSelectedDayOffset(newHostDayOffset))
+        let mirroredHours = Int((oldDayClock.length / 3600).rounded())
         let mirroredExtension: TimelineBoundaryExtensionState
-        let scrollDelta: CGFloat
         if dayDelta < 0 {
             // Was on today + leading 12h (yesterday's late hours above).
             // After the jump, anchor=yesterday and ALL of today mirrors to
-            // trailing=24. Canvas start moves from (today − leading) to
-            // yesterday 00:00 → same instant sits `leading*hh` lower.
+            // the trailing band.
             mirroredExtension = TimelineBoundaryExtensionState(
                 leadingHours: 0,
                 trailingHours: mirroredHours,
                 source: nil,
                 anchorDayOffset: newHostDayOffset
             )
-            scrollDelta = CGFloat(timelineBoundaryExtensionState.leadingHours) * hourHeight
         } else {
             // Was on today + trailing 12h (tomorrow's first hours below);
-            // after jumping to tomorrow, ALL of today mirrors to leading=24.
-            // Canvas start is today 00:00 in BOTH coordinate systems →
-            // the swap is a pure rename, zero scroll delta.
+            // after jumping to tomorrow, ALL of today mirrors to the leading
+            // band.
             mirroredExtension = TimelineBoundaryExtensionState(
                 leadingHours: mirroredHours,
                 trailingHours: 0,
                 source: nil,
                 anchorDayOffset: newHostDayOffset
             )
-            scrollDelta = 0
         }
+        // The same instant must sit at the same screen Y after the swap, so
+        // the offset moves by how far the window's start moved: backward,
+        // from (today − leading band) to yesterday's start; forward, the new
+        // window starts a whole old day before tomorrow — today's start — so
+        // the swap is a pure rename.
+        let oldWindowStart = calendarTimelineVisibleStart(
+            clock: oldDayClock,
+            leadingExtendedHours: timelineBoundaryExtensionState.leadingHours
+        )
+        let newWindowStart = calendarTimelineVisibleStart(
+            clock: newDayClock,
+            leadingExtendedHours: mirroredExtension.leadingHours
+        )
+        let scrollDelta = CGFloat(oldWindowStart.timeIntervalSince(newWindowStart) / 3600) * hourHeight
         let targetScrollY = max(0, timelineVerticalScrollY + scrollDelta)
         calendarDebugLog(
             "calendar.followEventAcrossMidnight",

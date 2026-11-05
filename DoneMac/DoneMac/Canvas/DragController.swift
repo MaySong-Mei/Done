@@ -319,8 +319,11 @@ final class DragController {
         let dayStart = key.startOfDay(calendar: calendar) ?? calendar.startOfDay(for: range.start)
         return Overlay(
             dayKey: key,
-            yFraction: calendarTimelineYFraction(for: range.start, containing: dayStart, calendar: calendar),
-            heightFraction: calendarTimelineDurationFraction(seconds: range.end.timeIntervalSince(range.start)),
+            yFraction: calendarTimelineYFraction(for: range.start, clock: DayClock.legacy24h(start: dayStart)),
+            heightFraction: calendarTimelineDurationFraction(
+                seconds: range.end.timeIntervalSince(range.start),
+                clock: DayClock.legacy24h(start: dayStart)
+            ),
             title: title,
             isCreate: isCreate,
             range: range

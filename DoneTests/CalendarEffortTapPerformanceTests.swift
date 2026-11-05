@@ -534,7 +534,7 @@ final class CalendarDayOccurrenceSourceTests: XCTestCase {
         ]
         func source() -> CalendarLayout.DayOccurrenceSource {
             CalendarLayout.timelineVisibleOccurrenceSource(
-                forDayOffset: 0, anchorDate: day, occurrencesForOffset: { cache[$0] ?? [] }
+                forDayOffset: 0, clock: CalendarZoneClock.current.day(containing: day), occurrencesForOffset: { cache[$0] ?? [] }
             )
         }
 
@@ -549,24 +549,24 @@ final class CalendarDayOccurrenceSourceTests: XCTestCase {
             0: [makeOccurrence(id: "a", title: "A", day: day, startHour: 9)]
         ]
         let before = CalendarLayout.timelineVisibleOccurrenceSource(
-            forDayOffset: 0, anchorDate: day, occurrencesForOffset: { cache[$0] ?? [] }
+            forDayOffset: 0, clock: CalendarZoneClock.current.day(containing: day), occurrencesForOffset: { cache[$0] ?? [] }
         ).key
 
         cache[0]?.append(makeOccurrence(id: "b", title: "B", day: day, startHour: 11))
         let afterAdd = CalendarLayout.timelineVisibleOccurrenceSource(
-            forDayOffset: 0, anchorDate: day, occurrencesForOffset: { cache[$0] ?? [] }
+            forDayOffset: 0, clock: CalendarZoneClock.current.day(containing: day), occurrencesForOffset: { cache[$0] ?? [] }
         ).key
         XCTAssertNotEqual(before, afterAdd, "an added occurrence must move the key")
 
         cache[0] = [makeOccurrence(id: "a", title: "RENAMED", day: day, startHour: 9)]
         let afterRename = CalendarLayout.timelineVisibleOccurrenceSource(
-            forDayOffset: 0, anchorDate: day, occurrencesForOffset: { cache[$0] ?? [] }
+            forDayOffset: 0, clock: CalendarZoneClock.current.day(containing: day), occurrencesForOffset: { cache[$0] ?? [] }
         ).key
         XCTAssertNotEqual(before, afterRename, "an edited event inside the same occurrence must move the key")
 
         cache[0] = [makeOccurrence(id: "a", title: "A", day: day, startHour: 14)]
         let afterMove = CalendarLayout.timelineVisibleOccurrenceSource(
-            forDayOffset: 0, anchorDate: day, occurrencesForOffset: { cache[$0] ?? [] }
+            forDayOffset: 0, clock: CalendarZoneClock.current.day(containing: day), occurrencesForOffset: { cache[$0] ?? [] }
         ).key
         XCTAssertNotEqual(before, afterMove, "a moved occurrence must move the key")
     }
@@ -580,11 +580,11 @@ final class CalendarDayOccurrenceSourceTests: XCTestCase {
             0: [makeOccurrence(id: "a", title: "A", day: day, startHour: 9)]
         ]
         let a = CalendarLayout.timelineVisibleOccurrenceSource(
-            forDayOffset: 0, anchorDate: day, occurrencesForOffset: { cache[$0] ?? [] }
+            forDayOffset: 0, clock: CalendarZoneClock.current.day(containing: day), occurrencesForOffset: { cache[$0] ?? [] }
         ).key
         let b = CalendarLayout.timelineVisibleOccurrenceSource(
             forDayOffset: 0,
-            anchorDate: Calendar.current.date(byAdding: .day, value: 1, to: day)!,
+            clock: CalendarZoneClock.current.day(containing: Calendar.current.date(byAdding: .day, value: 1, to: day)!),
             occurrencesForOffset: { cache[$0] ?? [] }
         ).key
 
@@ -601,7 +601,7 @@ final class CalendarDayOccurrenceSourceTests: XCTestCase {
         func key(leading: Int, trailing: Int) -> CalendarLayout.DayOccurrenceSource.Key {
             CalendarLayout.timelineVisibleOccurrenceSource(
                 forDayOffset: 0,
-                anchorDate: day,
+                clock: CalendarZoneClock.current.day(containing: day),
                 leadingExtendedHours: leading,
                 trailingExtendedHours: trailing,
                 occurrencesForOffset: { cache[$0] ?? [] }
@@ -625,7 +625,7 @@ final class CalendarDayOccurrenceSourceTests: XCTestCase {
         func key(leading: Int) -> CalendarLayout.DayOccurrenceSource.Key {
             CalendarLayout.timelineVisibleOccurrenceSource(
                 forDayOffset: 0,
-                anchorDate: day,
+                clock: CalendarZoneClock.current.day(containing: day),
                 leadingExtendedHours: leading,
                 occurrencesForOffset: { cache[$0] ?? [] }
             ).key
@@ -656,7 +656,7 @@ final class CalendarDayOccurrenceSourceTests: XCTestCase {
         for (leading, trailing) in [(0, 0), (12, 0), (0, 12), (12, 12)] {
             let deferred = CalendarLayout.timelineVisibleOccurrenceSource(
                 forDayOffset: 0,
-                anchorDate: day,
+                clock: CalendarZoneClock.current.day(containing: day),
                 leadingExtendedHours: leading,
                 trailingExtendedHours: trailing,
                 occurrencesForOffset: { cache[$0] ?? [] }
@@ -665,7 +665,7 @@ final class CalendarDayOccurrenceSourceTests: XCTestCase {
                 forDayOffset: 0,
                 leadingExtendedHours: leading,
                 trailingExtendedHours: trailing,
-                anchorDate: day,
+                clock: CalendarZoneClock.current.day(containing: day),
                 occurrencesForOffset: { cache[$0] ?? [] }
             )
             XCTAssertEqual(deferred, eager, "leading=\(leading) trailing=\(trailing)")
@@ -695,6 +695,7 @@ final class CalendarDayLayerApplyKeyTests: XCTestCase {
     ) -> DayLayerHostView.Model {
         DayLayerHostView.Model(
             date: day,
+            dayClock: CalendarZoneClock.current.day(containing: day),
             occurrences: occurrences,
             contentWidth: 360,
             headerHeight: 16,
@@ -721,7 +722,7 @@ final class CalendarDayLayerApplyKeyTests: XCTestCase {
         _ occurrences: [CalendarLayout.EventOccurrence]
     ) -> CalendarLayout.DayOccurrenceSource.Key {
         CalendarLayout.timelineVisibleOccurrenceSource(
-            forDayOffset: 0, anchorDate: day, occurrencesForOffset: { _ in occurrences }
+            forDayOffset: 0, clock: CalendarZoneClock.current.day(containing: day), occurrencesForOffset: { _ in occurrences }
         ).key
     }
 

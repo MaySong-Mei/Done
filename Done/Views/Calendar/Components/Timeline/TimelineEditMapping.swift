@@ -7,7 +7,9 @@
 
 import SwiftUI
 
-let calendarTimelineBaseVisibleHours = 24
+// The length of a day is no constant: every window below takes the day's
+// `DayClock` (gh#285), and the bands are measured in real hours from its
+// `start` and `end`.
 let calendarTimelineMaximumBoundaryExtensionHours = 12
 
 // Reference-type holder for the live hourHeight value.  Threaded down to
@@ -102,68 +104,78 @@ struct TimelineBoundaryExtensionState: Equatable {
     )
 }
 
-func calendarTimelineTotalVisibleHours(
+/// The visible window of a column: the day plus the open bands, in seconds.
+func calendarTimelineVisibleLength(
+    clock: DayClock,
+    leadingExtendedHours: Int = 0,
+    trailingExtendedHours: Int = 0
+) -> TimeInterval {
+    clock.length + TimeInterval((max(0, leadingExtendedHours) + max(0, trailingExtendedHours)) * 3600)
+}
+
+/// The visible window in whole minutes, for slot counts. A day of whole
+/// hours plus bands of whole hours is exact here; a half-hour zone (Lord
+/// Howe) is rounded, which is the deferred case.
+func calendarTimelineVisibleMinutes(
+    clock: DayClock,
     leadingExtendedHours: Int = 0,
     trailingExtendedHours: Int = 0
 ) -> Int {
-    calendarTimelineBaseVisibleHours + max(0, leadingExtendedHours) + max(0, trailingExtendedHours)
+    Int((calendarTimelineVisibleLength(
+        clock: clock,
+        leadingExtendedHours: leadingExtendedHours,
+        trailingExtendedHours: trailingExtendedHours
+    ) / 60).rounded())
 }
 
 func calendarTimelineVisibleStart(
-    containing date: Date,
-    leadingExtendedHours: Int = 0,
-    calendar: Calendar = .current
+    clock: DayClock,
+    leadingExtendedHours: Int = 0
 ) -> Date {
-    let dayStart = calendar.startOfDay(for: date)
-    return dayStart.addingTimeInterval(TimeInterval(-max(0, leadingExtendedHours) * 3600))
+    clock.start.addingTimeInterval(TimeInterval(-max(0, leadingExtendedHours) * 3600))
 }
 
 func calendarTimelineVisibleEnd(
-    containing date: Date,
-    trailingExtendedHours: Int = 0,
-    calendar: Calendar = .current
+    clock: DayClock,
+    trailingExtendedHours: Int = 0
 ) -> Date {
-    let dayStart = calendar.startOfDay(for: date)
-    return dayStart.addingTimeInterval(
-        TimeInterval((calendarTimelineBaseVisibleHours + max(0, trailingExtendedHours)) * 3600)
-    )
+    clock.end.addingTimeInterval(TimeInterval(max(0, trailingExtendedHours) * 3600))
 }
 
-// Height of the event area (excluding header / bottom inset) = total visible
-// hours × hourHeight.  Surfaces the "container height" concept so callers can
+// Height of the event area (excluding header / bottom inset) = visible
+// window × hourHeight.  Surfaces the "container height" concept so callers can
 // express event positions as fractions of this height (set up for percent-of-
 // parent layout that decouples per-event re-evaluation from hourHeight writes).
 func calendarTimelineContentHeight(
+    clock: DayClock,
     hourHeight: CGFloat,
     leadingExtendedHours: Int = 0,
     trailingExtendedHours: Int = 0
 ) -> CGFloat {
-    let totalVisibleHours = calendarTimelineTotalVisibleHours(
+    CGFloat(calendarTimelineVisibleLength(
+        clock: clock,
         leadingExtendedHours: leadingExtendedHours,
         trailingExtendedHours: trailingExtendedHours
-    )
-    return CGFloat(totalVisibleHours) * hourHeight
+    ) / 3600) * hourHeight
 }
 
 // Fraction of the visible content window where `date` sits, clamped to [0, 1].
-// Equivalent to `(date − visibleStart) / totalVisibleSeconds`.
+// Equivalent to `(date − visibleStart) / visibleLength`.
 func calendarTimelineYFraction(
     for date: Date,
-    containing anchorDate: Date,
+    clock: DayClock,
     leadingExtendedHours: Int = 0,
-    trailingExtendedHours: Int = 0,
-    calendar: Calendar = .current
+    trailingExtendedHours: Int = 0
 ) -> CGFloat {
     let visibleStart = calendarTimelineVisibleStart(
-        containing: anchorDate,
-        leadingExtendedHours: leadingExtendedHours,
-        calendar: calendar
+        clock: clock,
+        leadingExtendedHours: leadingExtendedHours
     )
-    let totalVisibleHours = calendarTimelineTotalVisibleHours(
+    let totalSeconds = calendarTimelineVisibleLength(
+        clock: clock,
         leadingExtendedHours: leadingExtendedHours,
         trailingExtendedHours: trailingExtendedHours
     )
-    let totalSeconds = TimeInterval(totalVisibleHours * 3600)
     guard totalSeconds > 0 else { return 0 }
     let raw = CGFloat(date.timeIntervalSince(visibleStart) / totalSeconds)
     return min(max(0, raw), 1)
@@ -174,26 +186,28 @@ func calendarTimelineYFraction(
 // window during a drag, and the caller decides what to do with the overshoot.
 func calendarTimelineDurationFraction(
     seconds: TimeInterval,
+    clock: DayClock,
     leadingExtendedHours: Int = 0,
     trailingExtendedHours: Int = 0
 ) -> CGFloat {
-    let totalVisibleHours = calendarTimelineTotalVisibleHours(
+    let totalSeconds = calendarTimelineVisibleLength(
+        clock: clock,
         leadingExtendedHours: leadingExtendedHours,
         trailingExtendedHours: trailingExtendedHours
     )
-    let totalSeconds = TimeInterval(totalVisibleHours * 3600)
     guard totalSeconds > 0 else { return 0 }
     return CGFloat(max(0, seconds) / totalSeconds)
 }
 
 func calendarTimelineBoundaryExtensionHours(
     mappingState: TimelineEditMappingState?,
-    maxExtensionHours: Int = calendarTimelineMaximumBoundaryExtensionHours,
-    calendar: Calendar = .current
+    zoneClock: CalendarZoneClock,
+    maxExtensionHours: Int = calendarTimelineMaximumBoundaryExtensionHours
 ) -> (leading: Int, trailing: Int) {
     guard let mappingState else { return (0, 0) }
-    let dayStart = calendar.startOfDay(for: mappingState.anchorDate)
-    let baseVisibleEnd = dayStart.addingTimeInterval(TimeInterval(calendarTimelineBaseVisibleHours * 3600))
+    let clock = zoneClock.day(containing: mappingState.anchorDate)
+    let dayStart = clock.start
+    let baseVisibleEnd = clock.end
     let clampedMaxHours = max(0, maxExtensionHours)
 
     // During an active drag/resize, trigger the extension 2 hours
@@ -219,24 +233,23 @@ func calendarTimelineBoundaryExtensionHours(
 
 func calendarTimelineYPosition(
     for date: Date,
-    containing anchorDate: Date,
+    clock: DayClock,
     headerHeight: CGFloat,
     hourHeight: CGFloat,
     leadingExtendedHours: Int = 0,
-    trailingExtendedHours: Int = 0,
-    calendar: Calendar = .current
+    trailingExtendedHours: Int = 0
 ) -> CGFloat {
     let visibleStart = calendarTimelineVisibleStart(
-        containing: anchorDate,
-        leadingExtendedHours: leadingExtendedHours,
-        calendar: calendar
+        clock: clock,
+        leadingExtendedHours: leadingExtendedHours
     )
-    let totalVisibleHours = calendarTimelineTotalVisibleHours(
+    let minY = headerHeight
+    let maxY = headerHeight + calendarTimelineContentHeight(
+        clock: clock,
+        hourHeight: hourHeight,
         leadingExtendedHours: leadingExtendedHours,
         trailingExtendedHours: trailingExtendedHours
     )
-    let minY = headerHeight
-    let maxY = headerHeight + CGFloat(totalVisibleHours) * hourHeight
     let y = headerHeight + CGFloat(date.timeIntervalSince(visibleStart) / 3600) * hourHeight
     return clamp(y, minY, maxY)
 }
@@ -255,18 +268,17 @@ func calendarTimelineYPosition(
 ///   unrelated chrome.
 ///
 /// Boundary invariant — INCLUSIVE at both window edges: a pointer exactly
-/// at `headerHeight` or exactly at `headerHeight + totalVisibleHours *
-/// hourHeight` is in-window. The lower bound must be inclusive or the
-/// legend would blink off at exactly 0:00:00; the upper bound mirrors it.
+/// at `headerHeight` or exactly at `headerHeight + windowHeight` is
+/// in-window. The lower bound must be inclusive or the legend would blink
+/// off at exactly 0:00:00; the upper bound mirrors it.
 func calendarTimelineNowLegendY(
     pointerY: CGFloat,
     headerHeight: CGFloat,
-    totalVisibleHours: Int,
-    hourHeight: CGFloat,
+    windowHeight: CGFloat,
     labelHeight: CGFloat
 ) -> CGFloat? {
     let windowTop = headerHeight
-    let windowBottom = headerHeight + CGFloat(totalVisibleHours) * hourHeight
+    let windowBottom = headerHeight + windowHeight
     guard pointerY >= windowTop, pointerY <= windowBottom else { return nil }
     return min(max(windowTop, pointerY - labelHeight / 2), windowBottom - labelHeight)
 }
@@ -276,78 +288,74 @@ func calendarTimelineNowLegendY(
 let calendarTimelineNowLegendLabelHeight: CGFloat = 12
 
 /// Date-flavored entry the two render paths call. Computes the RAW
-/// (unclamped) pointer Y for `now` anchored to now's own day — it must not
-/// go through `calendarTimelineYPosition`, whose internal clamp would make
-/// the out-of-window case unobservable (the pointer would arrive already
-/// pinned inside the window and the cull could never fire).
+/// (unclamped) pointer Y for `now` against `clock`, the day the axis is
+/// drawn for — it must not go through `calendarTimelineYPosition`, whose
+/// internal clamp would make the out-of-window case unobservable (the
+/// pointer would arrive already pinned inside the window and the cull could
+/// never fire). A `now` outside `clock`'s window is culled, which is how a
+/// page that is not today keeps no legend.
 func calendarTimelineNowLegendY(
     for now: Date,
+    clock: DayClock,
     headerHeight: CGFloat,
     hourHeight: CGFloat,
     leadingExtendedHours: Int = 0,
     trailingExtendedHours: Int = 0,
-    labelHeight: CGFloat = calendarTimelineNowLegendLabelHeight,
-    calendar: Calendar = .current
+    labelHeight: CGFloat = calendarTimelineNowLegendLabelHeight
 ) -> CGFloat? {
     let visibleStart = calendarTimelineVisibleStart(
-        containing: now,
-        leadingExtendedHours: leadingExtendedHours,
-        calendar: calendar
+        clock: clock,
+        leadingExtendedHours: leadingExtendedHours
     )
     let pointerY = headerHeight
         + CGFloat(now.timeIntervalSince(visibleStart) / 3600) * hourHeight
     return calendarTimelineNowLegendY(
         pointerY: pointerY,
         headerHeight: headerHeight,
-        totalVisibleHours: calendarTimelineTotalVisibleHours(
+        windowHeight: calendarTimelineContentHeight(
+            clock: clock,
+            hourHeight: hourHeight,
             leadingExtendedHours: leadingExtendedHours,
             trailingExtendedHours: trailingExtendedHours
         ),
-        hourHeight: hourHeight,
         labelHeight: labelHeight
     )
 }
 
 func calendarTimelineDateFromYPosition(
     _ y: CGFloat,
-    containing anchorDate: Date,
+    clock: DayClock,
     headerHeight: CGFloat,
     hourHeight: CGFloat,
     leadingExtendedHours: Int = 0,
     trailingExtendedHours: Int = 0,
     snapMinutes: Int = 15,
     maxBoundaryExtensionHours: Int = calendarTimelineMaximumBoundaryExtensionHours,
-    clampToExtension: Bool = true,
-    calendar: Calendar = .current
+    clampToExtension: Bool = true
 ) -> Date {
     guard hourHeight > 0 else {
         return calendarTimelineVisibleStart(
-            containing: anchorDate,
-            leadingExtendedHours: leadingExtendedHours,
-            calendar: calendar
+            clock: clock,
+            leadingExtendedHours: leadingExtendedHours
         )
     }
 
     let effectiveSnapMinutes = max(1, snapMinutes)
     let visibleStart = calendarTimelineVisibleStart(
-        containing: anchorDate,
-        leadingExtendedHours: leadingExtendedHours,
-        calendar: calendar
+        clock: clock,
+        leadingExtendedHours: leadingExtendedHours
     )
     let visibleEnd = calendarTimelineVisibleEnd(
-        containing: anchorDate,
-        trailingExtendedHours: trailingExtendedHours,
-        calendar: calendar
+        clock: clock,
+        trailingExtendedHours: trailingExtendedHours
     )
     let minimumBoundaryStart = calendarTimelineVisibleStart(
-        containing: anchorDate,
-        leadingExtendedHours: maxBoundaryExtensionHours,
-        calendar: calendar
+        clock: clock,
+        leadingExtendedHours: maxBoundaryExtensionHours
     )
     let maximumBoundaryEnd = calendarTimelineVisibleEnd(
-        containing: anchorDate,
-        trailingExtendedHours: maxBoundaryExtensionHours,
-        calendar: calendar
+        clock: clock,
+        trailingExtendedHours: maxBoundaryExtensionHours
     )
     let allowedStart = min(visibleStart, minimumBoundaryStart)
     let allowedEnd = max(visibleEnd, maximumBoundaryEnd)
@@ -673,33 +681,32 @@ func calendarShouldCollapseAxisMarkers(
 
 func calendarResolveAxisMarkerPresentation(
     mappingState: TimelineEditMappingState?,
+    zoneClock: CalendarZoneClock,
     headerHeight: CGFloat,
     hourHeight: CGFloat,
     leadingExtendedHours: Int = 0,
     trailingExtendedHours: Int = 0,
-    collapseThreshold: CGFloat = 10,
-    calendar: Calendar = .current
+    collapseThreshold: CGFloat = 10
 ) -> TimelineAxisMarkerPresentation? {
     guard let mappingState else { return nil }
     guard hourHeight > 0 else { return nil }
+    let anchorClock = zoneClock.day(containing: mappingState.anchorDate)
 
     let startY = calendarTimelineYPosition(
         for: mappingState.range.start,
-        containing: mappingState.anchorDate,
+        clock: anchorClock,
         headerHeight: headerHeight,
         hourHeight: hourHeight,
         leadingExtendedHours: leadingExtendedHours,
-        trailingExtendedHours: trailingExtendedHours,
-        calendar: calendar
+        trailingExtendedHours: trailingExtendedHours
     )
     let endY = calendarTimelineYPosition(
         for: mappingState.range.end,
-        containing: mappingState.anchorDate,
+        clock: anchorClock,
         headerHeight: headerHeight,
         hourHeight: hourHeight,
         leadingExtendedHours: leadingExtendedHours,
-        trailingExtendedHours: trailingExtendedHours,
-        calendar: calendar
+        trailingExtendedHours: trailingExtendedHours
     )
 
     let startText = calendarAxisMarkerTimeText(for: mappingState.range.start)
@@ -726,45 +733,41 @@ func calendarResolveAxisMarkerPresentation(
     // extensions, so this widening only changes behavior for the
     // single-day extended case. (#55 follow-on)
     let visibleAnchorStart = calendarTimelineVisibleStart(
-        containing: mappingState.anchorDate,
-        leadingExtendedHours: leadingExtendedHours,
-        calendar: calendar
+        clock: anchorClock,
+        leadingExtendedHours: leadingExtendedHours
     )
     let visibleAnchorEnd = calendarTimelineVisibleEnd(
-        containing: mappingState.anchorDate,
-        trailingExtendedHours: trailingExtendedHours,
-        calendar: calendar
+        clock: anchorClock,
+        trailingExtendedHours: trailingExtendedHours
     )
     let extendsForward = mappingState.range.end > visibleAnchorEnd
     let extendsBackward = mappingState.range.start < visibleAnchorStart
-    let wrapAnchor: Date?
+    let wrapClock: DayClock?
     if extendsForward {
-        wrapAnchor = calendar.date(byAdding: .day, value: 1, to: mappingState.anchorDate)
+        wrapClock = zoneClock.day(1, from: anchorClock)
     } else if extendsBackward {
-        wrapAnchor = calendar.date(byAdding: .day, value: -1, to: mappingState.anchorDate)
+        wrapClock = zoneClock.day(-1, from: anchorClock)
     } else {
-        wrapAnchor = nil
+        wrapClock = nil
     }
     let wrappedStartY: CGFloat?
     let wrappedEndY: CGFloat?
-    if let wrapAnchor {
+    if let wrapClock {
         wrappedStartY = calendarTimelineYPosition(
             for: mappingState.range.start,
-            containing: wrapAnchor,
+            clock: wrapClock,
             headerHeight: headerHeight,
             hourHeight: hourHeight,
             leadingExtendedHours: leadingExtendedHours,
-            trailingExtendedHours: trailingExtendedHours,
-            calendar: calendar
+            trailingExtendedHours: trailingExtendedHours
         )
         wrappedEndY = calendarTimelineYPosition(
             for: mappingState.range.end,
-            containing: wrapAnchor,
+            clock: wrapClock,
             headerHeight: headerHeight,
             hourHeight: hourHeight,
             leadingExtendedHours: leadingExtendedHours,
-            trailingExtendedHours: trailingExtendedHours,
-            calendar: calendar
+            trailingExtendedHours: trailingExtendedHours
         )
     } else {
         wrappedStartY = nil

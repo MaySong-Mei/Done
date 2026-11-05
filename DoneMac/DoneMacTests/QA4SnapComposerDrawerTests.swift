@@ -188,7 +188,7 @@ final class QA4SnapComposerDrawerTests: XCTestCase {
         XCTAssertEqual(ny.component(.hour, from: fallRange.start), 11,
                        "…which is WALL-CLOCK 11:00 on the 25h day (axis label says 12:00)")
         XCTAssertEqual(calendarTimelineYFraction(for: fallRange.start,
-                                                 containing: fallMidnight, calendar: ny),
+                                                 clock: DayClock.legacy24h(start: fallMidnight)),
                        0.5, "geometry round-trips: the block stays under the finger")
 
         // 23h spring-forward day: 2026-03-08.

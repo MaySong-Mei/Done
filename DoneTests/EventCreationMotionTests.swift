@@ -353,6 +353,7 @@ final class EventCreationMotionTests: XCTestCase {
     ) -> DayLayerHostView.Model {
         var model = DayLayerHostView.Model(
             date: date ?? day,
+            dayClock: CalendarZoneClock.current.day(containing: date ?? day),
             occurrences: occurrences,
             contentWidth: 360,
             headerHeight: 16,

@@ -360,7 +360,9 @@ enum CalendarLayout {
     /// what the eager path already paid.
     struct DayOccurrenceSource {
         struct Key: Equatable {
-            let anchorDate: Date
+            /// The column's day: its start is the anchor the window is
+            /// measured from, and its length is part of the window.
+            let clock: DayClock
             let leadingExtendedHours: Int
             let trailingExtendedHours: Int
             let sources: [[EventOccurrence]]
@@ -379,10 +381,9 @@ enum CalendarLayout {
     /// safe rather than merely usually-right.
     static func timelineVisibleOccurrenceSource(
         forDayOffset offset: Int,
-        anchorDate: Date,
+        clock: DayClock,
         leadingExtendedHours: Int = 0,
         trailingExtendedHours: Int = 0,
-        calendar: Calendar = .current,
         occurrencesForOffset: (Int) -> [EventOccurrence]
     ) -> DayOccurrenceSource {
         let candidateOffsets = timelineCandidateDayOffsets(
@@ -393,7 +394,7 @@ enum CalendarLayout {
         let sources = candidateOffsets.map(occurrencesForOffset)
         return DayOccurrenceSource(
             key: DayOccurrenceSource.Key(
-                anchorDate: anchorDate,
+                clock: clock,
                 leadingExtendedHours: leadingExtendedHours,
                 trailingExtendedHours: trailingExtendedHours,
                 sources: sources
@@ -403,8 +404,7 @@ enum CalendarLayout {
                     forDayOffset: offset,
                     leadingExtendedHours: leadingExtendedHours,
                     trailingExtendedHours: trailingExtendedHours,
-                    calendar: calendar,
-                    anchorDate: anchorDate,
+                    clock: clock,
                     occurrencesForOffset: { candidateOffset in
                         guard let index = candidateOffsets.firstIndex(of: candidateOffset) else {
                             return []
@@ -444,34 +444,35 @@ enum CalendarLayout {
     /// Builds the visible timed-event set for a timeline column, including
     /// adjacent-day occurrences when temporary boundary extension is active.
     ///
-    /// `anchorDate`: the column's own start-of-day. Defaults to nil, which
-    /// derives it from `reference` + `offset` exactly as before. The deferred
-    /// form passes the anchor the caller already computed
-    /// (`TimelineView.dayDate(forOffset:)`) so the key and the value it
-    /// admits are computed against the SAME day, not two `Date()` reads that
-    /// a midnight crossing could separate.
+    /// `clock`: the column's own day. Defaults to nil, which derives it from
+    /// `reference` + `offset` under `calendar` exactly as before. The
+    /// deferred form passes the clock the caller already computed so the key
+    /// and the value it admits are computed against the SAME day, not two
+    /// `Date()` reads that a midnight crossing could separate.
     static func timelineVisibleOccurrences(
         forDayOffset offset: Int,
         leadingExtendedHours: Int = 0,
         trailingExtendedHours: Int = 0,
         reference: Date = Date(),
         calendar: Calendar = .current,
-        anchorDate anchorDateOverride: Date? = nil,
+        clock clockOverride: DayClock? = nil,
         occurrencesForOffset: (Int) -> [EventOccurrence]
     ) -> [EventOccurrence] {
-        let referenceDay = calendar.startOfDay(for: reference)
-        let anchorDate = anchorDateOverride
-            ?? calendar.date(byAdding: .day, value: offset, to: referenceDay)
-            ?? referenceDay
+        let clock: DayClock
+        if let clockOverride {
+            clock = clockOverride
+        } else {
+            let referenceDay = calendar.startOfDay(for: reference)
+            let anchorDate = calendar.date(byAdding: .day, value: offset, to: referenceDay) ?? referenceDay
+            clock = CalendarZoneClock(calendar: calendar).day(containing: anchorDate)
+        }
         let visibleStart = calendarTimelineVisibleStart(
-            containing: anchorDate,
-            leadingExtendedHours: leadingExtendedHours,
-            calendar: calendar
+            clock: clock,
+            leadingExtendedHours: leadingExtendedHours
         )
         let visibleEnd = calendarTimelineVisibleEnd(
-            containing: anchorDate,
-            trailingExtendedHours: trailingExtendedHours,
-            calendar: calendar
+            clock: clock,
+            trailingExtendedHours: trailingExtendedHours
         )
 
         let candidateOffsets = timelineCandidateDayOffsets(

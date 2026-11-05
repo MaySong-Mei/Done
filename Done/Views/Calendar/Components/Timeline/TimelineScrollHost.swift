@@ -404,6 +404,7 @@ final class TimelineScrollProxy: ObservableObject {
 /// half-hour grids don't accumulate a ±0.5×hourHeight drift across band
 /// open/close.
 func calendarTimelineHostContentHeight(
+    clock: DayClock,
     headerHeight: CGFloat,
     allDayHeight: CGFloat,
     hourHeight: CGFloat,
@@ -414,12 +415,13 @@ func calendarTimelineHostContentHeight(
     topOverlayInset: CGFloat,
     timelineBottomScrollPadding: CGFloat
 ) -> CGFloat {
-    let totalVisibleHours = calendarTimelineTotalVisibleHours(
+    let totalVisibleMinutes = calendarTimelineVisibleMinutes(
+        clock: clock,
         leadingExtendedHours: leadingExtendedHours,
         trailingExtendedHours: trailingExtendedHours
     )
     let slotMinutes = max(1, effectiveSlotMinutes)
-    let slotCount = (totalVisibleHours * 60) / slotMinutes + 1
+    let slotCount = totalVisibleMinutes / slotMinutes + 1
     let slotHeight = hourHeight * CGFloat(slotMinutes) / 60
     let timelineHeight = headerHeight + CGFloat(slotCount) * slotHeight + timelineBottomInset
     let totalHeight = allDayHeight + timelineHeight

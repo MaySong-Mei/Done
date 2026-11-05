@@ -255,9 +255,13 @@ final class CalendarProjection {
             let zIndex = parent.flatMap { slots[$0.id] }.map { $0.zIndex + 1 } ?? ownSlot.zIndex
             let childRanges = family.childRanges(of: occurrence, dayStart: dayStart, dayEnd: dayEnd)
             let clippedStart = max(occurrence.range.start, dayStart)
-            let y = calendarTimelineYFraction(for: clippedStart, containing: dayStart, calendar: calendar)
+            // The Mac canvas keeps the legacy day: a standard length from its
+            // start (gh#285 S0; the real day length is the phone's for now).
+            let legacyClock = DayClock.legacy24h(start: dayStart)
+            let y = calendarTimelineYFraction(for: clippedStart, clock: legacyClock)
             let height = calendarTimelineDurationFraction(
-                seconds: Self.clippedDuration(for: occurrence, on: dayStart, calendar: calendar)
+                seconds: Self.clippedDuration(for: occurrence, on: dayStart, calendar: calendar),
+                clock: legacyClock
             )
             return DayBlockModel(
                 id: occurrence.id,
@@ -383,7 +387,7 @@ final class CalendarProjection {
         let dayStart = key.startOfDay(calendar: calendar) ?? calendar.startOfDay(for: now)
         return NowLineModel(
             dayKey: key,
-            yFraction: calendarTimelineYFraction(for: now, containing: dayStart, calendar: calendar)
+            yFraction: calendarTimelineYFraction(for: now, clock: DayClock.legacy24h(start: dayStart))
         )
     }
 }

@@ -25,7 +25,11 @@ import UIKit
 /// SwiftUI `TimeAxisLabels` view — same input surface so the call site at
 /// `timeAxis()` can swap the two behind the experimental flag.
 struct TimeAxisLayerHost: UIViewRepresentable {
-    let anchorDate: Date
+    /// The day the axis is drawn for: the selected day in single-day mode.
+    /// (Multi-day: the leftmost column of the settled window, pending S2.)
+    let clock: DayClock
+    /// The zone, for the day `now` is in when it is not `clock`'s.
+    let zoneClock: CalendarZoneClock
     let headerHeight: CGFloat
     let hourHeight: CGFloat
     let slotMinutes: Int
@@ -50,7 +54,8 @@ struct TimeAxisLayerHost: UIViewRepresentable {
 
     func updateUIView(_ uiView: TimeAxisLayerView, context: Context) {
         uiView.apply(
-            anchorDate: anchorDate,
+            clock: clock,
+            zoneClock: zoneClock,
             headerHeight: headerHeight,
             hourHeight: hourHeight,
             slotMinutes: slotMinutes,
@@ -75,7 +80,8 @@ final class TimeAxisLayerView: UIView {
     // Snapshot of the most recently applied inputs. Used to short-circuit
     // identical re-applies + to drive incremental layer updates.
     private struct Inputs: Equatable {
-        var anchorDate: Date
+        var clock: DayClock
+        var zoneClock: CalendarZoneClock
         var headerHeight: CGFloat
         var hourHeight: CGFloat
         var slotMinutes: Int
@@ -253,7 +259,8 @@ final class TimeAxisLayerView: UIView {
     /// (which call `updateUIView` on every state change up-tree) don't
     /// churn CALayer.
     func apply(
-        anchorDate: Date,
+        clock: DayClock,
+        zoneClock: CalendarZoneClock,
         headerHeight: CGFloat,
         hourHeight: CGFloat,
         slotMinutes: Int,
@@ -267,7 +274,8 @@ final class TimeAxisLayerView: UIView {
         isSingleDay: Bool
     ) {
         let next = Inputs(
-            anchorDate: anchorDate,
+            clock: clock,
+            zoneClock: zoneClock,
             headerHeight: headerHeight,
             hourHeight: hourHeight,
             slotMinutes: slotMinutes,
@@ -286,6 +294,7 @@ final class TimeAxisLayerView: UIView {
         // (fade progress, marker presentation) re-flow through dedicated
         // refresh paths in subsequent commits.
         let structuralChanged = inputs == nil
+            || inputs!.clock != next.clock
             || inputs!.headerHeight != next.headerHeight
             || inputs!.hourHeight != next.hourHeight
             || inputs!.slotMinutes != next.slotMinutes
@@ -311,6 +320,7 @@ final class TimeAxisLayerView: UIView {
         // Compute slot count + which slots carry text (on-the-hour only,
         // matching `label(forSlot:)` in `TimeAxisLabels`).
         let slotCount = Self.slotCount(
+            clock: inputs.clock,
             slotMinutes: inputs.slotMinutes,
             leadingExtendedHours: inputs.leadingExtendedHours,
             trailingExtendedHours: inputs.trailingExtendedHours
@@ -319,7 +329,10 @@ final class TimeAxisLayerView: UIView {
         // band-region labels are skipped when closed, keeping their Y positions
         // (which use the coordinate hours). Identity when drawable == coordinate.
         let drawTopMin = -inputs.drawableLeadingHours * 60
-        let drawBottomMin = (calendarTimelineBaseVisibleHours + inputs.drawableTrailingHours) * 60
+        let drawBottomMin = calendarTimelineVisibleMinutes(
+            clock: inputs.clock,
+            trailingExtendedHours: inputs.drawableTrailingHours
+        )
         // gh#219 slice E: the time-format read is loop-invariant across both
         // per-slot loops below — hoist it once (was read inside `labelText` on
         // every slot). The first loop only tests nil-ness (unaffected by is24),
@@ -404,7 +417,7 @@ final class TimeAxisLayerView: UIView {
         // Single-day axis only shows the now-legend when this page IS today.
         // Multi-day always shows it (parity with the SwiftUI gate).
         let showsCurrentTime = !inputs.isSingleDay
-            || Calendar.current.isDate(inputs.anchorDate, inSameDayAs: now)
+            || inputs.clock.contains(now)
         nowLegendLabel.text = Self.currentTimeText(for: now)
         nowLegendLabel.textColor = Self.currentTimeIndicatorColor()
         let labelHeight = calendarTimelineNowLegendLabelHeight
@@ -412,9 +425,13 @@ final class TimeAxisLayerView: UIView {
         // nil = culled, either because the page gate above is off OR
         // because the now-pointer falls outside the visible hour window
         // (never edge-pinned into the axis frame).
+        // The legend sits at now's elapsed time in now's own day: the axis
+        // day when now is in it, else (multi-day) the day now is in.
+        let nowClock = inputs.clock.contains(now) ? inputs.clock : inputs.zoneClock.day(containing: now)
         let legendY: CGFloat? = showsCurrentTime
             ? calendarTimelineNowLegendY(
                 for: now,
+                clock: nowClock,
                 headerHeight: inputs.headerHeight,
                 hourHeight: inputs.hourHeight,
                 leadingExtendedHours: inputs.leadingExtendedHours,
@@ -519,7 +536,7 @@ final class TimeAxisLayerView: UIView {
             0,
             CGFloat(inputs.leadingExtendedHours) * inputs.hourHeight - leadingBuf
         )
-        let baseHeight = CGFloat(calendarTimelineBaseVisibleHours) * inputs.hourHeight
+        let baseHeight = calendarTimelineContentHeight(clock: inputs.clock, hourHeight: inputs.hourHeight)
             + leadingBuf + trailingBuf
         let trailingBandHeight = max(
             0,
@@ -615,12 +632,13 @@ final class TimeAxisLayerView: UIView {
             return UIColor(Color.accentColor)
         }()
         let foreground = Self.legendForegroundColor(for: markerColor)
-        let totalVisibleHours = calendarTimelineTotalVisibleHours(
+        let yMin = inputs.headerHeight
+        let yMax = inputs.headerHeight + calendarTimelineContentHeight(
+            clock: inputs.clock,
+            hourHeight: inputs.hourHeight,
             leadingExtendedHours: inputs.leadingExtendedHours,
             trailingExtendedHours: inputs.trailingExtendedHours
         )
-        let yMin = inputs.headerHeight
-        let yMax = inputs.headerHeight + CGFloat(totalVisibleHours) * inputs.hourHeight
         let markerHeight: CGFloat = 16
         // SwiftUI tree positions each pill via
         //   .offset(x: 15, y: clampedY - markerHeight / 2)
@@ -657,14 +675,16 @@ final class TimeAxisLayerView: UIView {
 
     /// Mirrors `TimeAxisLabels.slotCount`.
     private static func slotCount(
+        clock: DayClock,
         slotMinutes: Int,
         leadingExtendedHours: Int,
         trailingExtendedHours: Int
     ) -> Int {
-        let totalMinutes = calendarTimelineTotalVisibleHours(
+        let totalMinutes = calendarTimelineVisibleMinutes(
+            clock: clock,
             leadingExtendedHours: leadingExtendedHours,
             trailingExtendedHours: trailingExtendedHours
-        ) * 60
+        )
         return max(1, totalMinutes / max(1, slotMinutes) + 1)
     }
 

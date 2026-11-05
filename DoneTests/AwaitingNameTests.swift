@@ -282,6 +282,7 @@ final class AwaitingNameTests: XCTestCase {
     ) -> DayLayerHostView.Model {
         DayLayerHostView.Model(
             date: today,
+            dayClock: CalendarZoneClock.current.day(containing: today),
             occurrences: occurrences,
             contentWidth: 360,
             headerHeight: 16,

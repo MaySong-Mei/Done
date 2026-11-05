@@ -38,6 +38,10 @@ struct CalendarDayLayerView: UIViewRepresentable {
     /// The day this column represents (start-of-day anchor used by the
     /// vertical-mapping + overlap functions).
     let date: Date
+    /// The same day as a clock: its start, end and length are what every
+    /// window, grid line and block position in the column is measured by
+    /// (gh#285). Computed once by the pager and read, never re-derived.
+    let dayClock: DayClock
     /// Layout-ready occurrences for this day offset (already filtered /
     /// recurring-expanded / absorbed-removed upstream by the host cache and
     /// `CalendarLayout.timelineVisibleOccurrences`), in DEFERRED form: a
@@ -202,6 +206,7 @@ struct CalendarDayLayerView: UIViewRepresentable {
     private func makeModel(occurrences: [CalendarLayout.EventOccurrence]) -> DayLayerHostView.Model {
         DayLayerHostView.Model(
             date: date,
+            dayClock: dayClock,
             occurrences: occurrences,
             contentWidth: contentWidth,
             headerHeight: headerHeight,
@@ -260,6 +265,10 @@ final class DayLayerHostView: UIView {
     /// short-circuit / value-type semantics keep the SwiftUI path identical.
     struct Model: Equatable {
         var date: Date
+        /// The day's clock. The three render paths (`render`,
+        /// `repaintVertical`, `cullViewport`) and the chrome all read the
+        /// window from this one field.
+        var dayClock: DayClock
         var occurrences: [CalendarLayout.EventOccurrence]
         var contentWidth: CGFloat
         var headerHeight: CGFloat
@@ -362,6 +371,7 @@ final class DayLayerHostView: UIView {
             let showTimeBelowTitle: Bool
             let multiTypeEnabled: Bool
             let date: Date
+            let dayClock: DayClock
         }
 
         var structureKey: StructureKey {
@@ -397,7 +407,8 @@ final class DayLayerHostView: UIView {
                 titleFontSizeSetting: titleFontSizeSetting,
                 showTimeBelowTitle: showTimeBelowTitle,
                 multiTypeEnabled: multiTypeEnabled,
-                date: date
+                date: date,
+                dayClock: dayClock
             )
         }
     }
@@ -733,6 +744,7 @@ final class DayLayerHostView: UIView {
     /// page turn or a resize of the column.
     private struct ResizeTweenBasis: Equatable {
         let date: Date
+        let dayClock: DayClock
         let hourHeight: CGFloat
         let leadingExtendedHours: Int
         let trailingExtendedHours: Int
@@ -1132,12 +1144,13 @@ final class DayLayerHostView: UIView {
                     from: model.nearFutureHorizonDays, now: Date(), calendar: .current
                 ) >= Calendar.current.startOfDay(for: model.date) else { return }
             let contentHeight = calendarTimelineContentHeight(
+                clock: model.dayClock,
                 hourHeight: model.hourHeight,
                 leadingExtendedHours: model.leadingExtendedHours,
                 trailingExtendedHours: model.trailingExtendedHours
             )
             let visibleStart = calendarTimelineVisibleStart(
-                containing: model.date, leadingExtendedHours: model.leadingExtendedHours
+                clock: model.dayClock, leadingExtendedHours: model.leadingExtendedHours
             )
             CATransaction.begin()
             CATransaction.setDisableActions(true)
@@ -1251,15 +1264,16 @@ final class DayLayerHostView: UIView {
               let visibleRect = bufferedVisibleRect(),
               cachedStructureKey == model.structureKey else { return 0 }
         let contentHeight = calendarTimelineContentHeight(
+            clock: model.dayClock,
             hourHeight: model.hourHeight,
             leadingExtendedHours: model.leadingExtendedHours,
             trailingExtendedHours: model.trailingExtendedHours
         )
         let visibleStart = calendarTimelineVisibleStart(
-            containing: model.date, leadingExtendedHours: model.leadingExtendedHours
+            clock: model.dayClock, leadingExtendedHours: model.leadingExtendedHours
         )
         let visibleEnd = calendarTimelineVisibleEnd(
-            containing: model.date, trailingExtendedHours: model.trailingExtendedHours
+            clock: model.dayClock, trailingExtendedHours: model.trailingExtendedHours
         )
         let t0 = CACurrentMediaTime()
         let slice = cullCandidateSlice(
@@ -1340,7 +1354,7 @@ final class DayLayerHostView: UIView {
         func timeAtY(_ y: CGFloat) -> Date {
             calendarTimelineDateFromYPosition(
                 y,
-                containing: model.date,
+                clock: model.dayClock,
                 headerHeight: model.headerHeight,
                 hourHeight: model.hourHeight,
                 leadingExtendedHours: model.leadingExtendedHours,
@@ -1387,7 +1401,7 @@ final class DayLayerHostView: UIView {
         func timeAtY(_ y: CGFloat) -> Date {
             calendarTimelineDateFromYPosition(
                 y,
-                containing: model.date,
+                clock: model.dayClock,
                 headerHeight: model.headerHeight,
                 hourHeight: model.hourHeight,
                 leadingExtendedHours: model.leadingExtendedHours,
@@ -1940,11 +1954,11 @@ final class DayLayerHostView: UIView {
             // opens extensions (calendar gate), so this widening is no-op
             // outside single-day. (#55 follow-on)
             let visibleStart = calendarTimelineVisibleStart(
-                containing: model.date,
+                clock: model.dayClock,
                 leadingExtendedHours: model.leadingExtendedHours
             )
             let visibleEnd = calendarTimelineVisibleEnd(
-                containing: model.date,
+                clock: model.dayClock,
                 trailingExtendedHours: model.trailingExtendedHours
             )
             guard preview.range.end > visibleStart, preview.range.start < visibleEnd else { return nil }
@@ -1995,11 +2009,11 @@ final class DayLayerHostView: UIView {
         // extensions (calendar-state gate), so this widening is a no-op
         // outside single-day. (#55 live-overlap follow-on)
         let overlapVisibleStart = calendarTimelineVisibleStart(
-            containing: model.date,
+            clock: model.dayClock,
             leadingExtendedHours: model.leadingExtendedHours
         )
         let overlapVisibleEnd = calendarTimelineVisibleEnd(
-            containing: model.date,
+            clock: model.dayClock,
             trailingExtendedHours: model.trailingExtendedHours
         )
         let slots = CalendarLayout.overlapLayout(
@@ -2057,6 +2071,7 @@ final class DayLayerHostView: UIView {
         }
 
         let contentHeight = calendarTimelineContentHeight(
+            clock: model.dayClock,
             hourHeight: model.hourHeight,
             leadingExtendedHours: model.leadingExtendedHours,
             trailingExtendedHours: model.trailingExtendedHours
@@ -2215,7 +2230,7 @@ final class DayLayerHostView: UIView {
                 let line = todayWindow.lowerBound != .distantPast ? todayWindow.lowerBound : todayWindow.upperBound
                 let lineY = model.headerHeight + calendarTimelineYFraction(
                     for: line,
-                    containing: model.date,
+                    clock: model.dayClock,
                     leadingExtendedHours: model.leadingExtendedHours,
                     trailingExtendedHours: model.trailingExtendedHours
                 ) * contentHeight
@@ -2884,15 +2899,16 @@ final class DayLayerHostView: UIView {
         defer { CATransaction.commit() }
 
         let contentHeight = calendarTimelineContentHeight(
+            clock: model.dayClock,
             hourHeight: model.hourHeight,
             leadingExtendedHours: model.leadingExtendedHours,
             trailingExtendedHours: model.trailingExtendedHours
         )
         let visibleStart = calendarTimelineVisibleStart(
-            containing: model.date, leadingExtendedHours: model.leadingExtendedHours
+            clock: model.dayClock, leadingExtendedHours: model.leadingExtendedHours
         )
         let visibleEnd = calendarTimelineVisibleEnd(
-            containing: model.date, trailingExtendedHours: model.trailingExtendedHours
+            clock: model.dayClock, trailingExtendedHours: model.trailingExtendedHours
         )
 
         // ── Sub-linear visible-set decision (issue #14) ──────────────────
@@ -3094,8 +3110,8 @@ final class DayLayerHostView: UIView {
             || (model.graceResizeEventID == event.id
                 && (model.graceResizeOccurrenceID == nil || model.graceResizeOccurrenceID == occurrence.id))
         guard !showsHandles || bandPiecesDay == model.date else { return whole }
-        let dayStart = Calendar.current.startOfDay(for: model.date)
-        let dayEnd = dayStart.addingTimeInterval(TimeInterval(calendarTimelineBaseVisibleHours * 3600))
+        let dayStart = model.dayClock.start
+        let dayEnd = model.dayClock.end
         let range = occurrence.range
         let crossesStart = model.leadingExtendedHours > 0 && range.start < dayStart && range.end > dayStart
         let crossesEnd = model.trailingExtendedHours > 0 && range.start < dayEnd && range.end > dayEnd
@@ -3186,7 +3202,7 @@ final class DayLayerHostView: UIView {
         func boundaryY(_ date: Date) -> CGFloat {
             model.headerHeight + calendarTimelineYFraction(
                 for: date,
-                containing: model.date,
+                clock: model.dayClock,
                 leadingExtendedHours: model.leadingExtendedHours,
                 trailingExtendedHours: model.trailingExtendedHours
             ) * contentHeight
@@ -3324,16 +3340,13 @@ final class DayLayerHostView: UIView {
         // `drawable*` == the coordinate hours, so the drawable window == the
         // visible window (and `clippedStart`/`yFraction` collapse to the old
         // range.start-with-clamp behavior).
-        let dayStart = Calendar.current.startOfDay(for: model.date)
         let drawableStart = max(
             visibleStart,
-            dayStart.addingTimeInterval(TimeInterval(-model.drawableLeadingHours * 3600))
+            calendarTimelineVisibleStart(clock: model.dayClock, leadingExtendedHours: model.drawableLeadingHours)
         )
         let drawableEnd = min(
             visibleEnd,
-            dayStart.addingTimeInterval(
-                TimeInterval((calendarTimelineBaseVisibleHours + model.drawableTrailingHours) * 3600)
-            )
+            calendarTimelineVisibleEnd(clock: model.dayClock, trailingExtendedHours: model.drawableTrailingHours)
         )
         let clippedStart = max(occurrence.range.start, drawableStart, window?.lowerBound ?? .distantPast)
         let clippedEnd = min(occurrence.range.end, drawableEnd, window?.upperBound ?? .distantFuture)
@@ -3341,6 +3354,7 @@ final class DayLayerHostView: UIView {
 
         let heightFrac = calendarTimelineDurationFraction(
             seconds: blockSeconds,
+            clock: model.dayClock,
             leadingExtendedHours: model.leadingExtendedHours,
             trailingExtendedHours: model.trailingExtendedHours
         )
@@ -3349,7 +3363,7 @@ final class DayLayerHostView: UIView {
 
         let yFraction = calendarTimelineYFraction(
             for: clippedStart,
-            containing: model.date,
+            clock: model.dayClock,
             leadingExtendedHours: model.leadingExtendedHours,
             trailingExtendedHours: model.trailingExtendedHours
         )
@@ -3466,11 +3480,11 @@ final class DayLayerHostView: UIView {
         // portion past midnight) the moment the preview fully crosses
         // midnight. (#55 follow-on)
         let visibleStart = calendarTimelineVisibleStart(
-            containing: model.date,
+            clock: model.dayClock,
             leadingExtendedHours: model.leadingExtendedHours
         )
         let visibleEnd = calendarTimelineVisibleEnd(
-            containing: model.date,
+            clock: model.dayClock,
             trailingExtendedHours: model.trailingExtendedHours
         )
         let adjusted: Event.TimeRange
@@ -4079,13 +4093,13 @@ final class DayLayerHostView: UIView {
         let eventAreaWidth = max(0, model.contentWidth - model.eventHorizontalInset * 2)
         let yStart = calendarTimelineYFraction(
             for: range.start,
-            containing: model.date,
+            clock: model.dayClock,
             leadingExtendedHours: model.leadingExtendedHours,
             trailingExtendedHours: model.trailingExtendedHours
         ) * contentHeight + model.headerHeight
         let yEnd = calendarTimelineYFraction(
             for: range.end,
-            containing: model.date,
+            clock: model.dayClock,
             leadingExtendedHours: model.leadingExtendedHours,
             trailingExtendedHours: model.trailingExtendedHours
         ) * contentHeight + model.headerHeight
@@ -4298,15 +4312,16 @@ final class DayLayerHostView: UIView {
         let overlapGap: CGFloat = slot.widthFraction < 1 ? 2 : 0
         let width = max(0, eventAreaWidth * slot.widthFraction - overlapGap)
         let contentHeight = calendarTimelineContentHeight(
+            clock: model.dayClock,
             hourHeight: model.hourHeight,
             leadingExtendedHours: model.leadingExtendedHours,
             trailingExtendedHours: model.trailingExtendedHours
         )
         let visibleStart = calendarTimelineVisibleStart(
-            containing: model.date, leadingExtendedHours: model.leadingExtendedHours
+            clock: model.dayClock, leadingExtendedHours: model.leadingExtendedHours
         )
         let visibleEnd = calendarTimelineVisibleEnd(
-            containing: model.date, trailingExtendedHours: model.trailingExtendedHours
+            clock: model.dayClock, trailingExtendedHours: model.trailingExtendedHours
         )
         let vf = verticalFrame(for: preview, model: model, contentHeight: contentHeight,
                                visibleStart: visibleStart, visibleEnd: visibleEnd)
@@ -4410,7 +4425,7 @@ final class DayLayerHostView: UIView {
         guard let model = currentModel else { return Date() }
         return calendarTimelineDateFromYPosition(
             y,
-            containing: model.date,
+            clock: model.dayClock,
             headerHeight: model.headerHeight,
             hourHeight: model.hourHeight,
             leadingExtendedHours: model.leadingExtendedHours,
@@ -4444,16 +4459,17 @@ final class DayLayerHostView: UIView {
         defer { CATransaction.commit() }
 
         let contentHeight = calendarTimelineContentHeight(
+            clock: model.dayClock,
             hourHeight: model.hourHeight,
             leadingExtendedHours: model.leadingExtendedHours,
             trailingExtendedHours: model.trailingExtendedHours
         )
         let visibleStart = calendarTimelineVisibleStart(
-            containing: model.date,
+            clock: model.dayClock,
             leadingExtendedHours: model.leadingExtendedHours
         )
         let visibleEnd = calendarTimelineVisibleEnd(
-            containing: model.date,
+            clock: model.dayClock,
             trailingExtendedHours: model.trailingExtendedHours
         )
 
@@ -4638,11 +4654,12 @@ final class DayLayerHostView: UIView {
         let effectiveSlotMinutes = model.frozenSlotMinutes ?? liveSlotMinutes
         let isHalfHourGrid = liveSlotMinutes == 30
         let slotHeight = model.hourHeight * CGFloat(effectiveSlotMinutes) / 60
-        let totalVisibleHours = calendarTimelineTotalVisibleHours(
+        let totalVisibleMinutes = calendarTimelineVisibleMinutes(
+            clock: model.dayClock,
             leadingExtendedHours: model.leadingExtendedHours,
             trailingExtendedHours: model.trailingExtendedHours
         )
-        let slotCount = max(1, Int(CGFloat(totalVisibleHours * 60) / CGFloat(effectiveSlotMinutes)) + 1)
+        let slotCount = max(1, totalVisibleMinutes / max(1, effectiveSlotMinutes) + 1)
         // `.view` style: solid (gridDashed=false) hour lines, secondary@0.15.
         let gridColor = UIColor.secondaryLabel.withAlphaComponent(0.15)
 
@@ -4653,7 +4670,10 @@ final class DayLayerHostView: UIView {
         // coordinate (12/12) hours, so 0:00 etc. don't move. Identity when
         // drawable == coordinate hours (non-imperative).
         let gridDrawTopMin = -model.drawableLeadingHours * 60
-        let gridDrawBottomMin = (calendarTimelineBaseVisibleHours + model.drawableTrailingHours) * 60
+        let gridDrawBottomMin = calendarTimelineVisibleMinutes(
+            clock: model.dayClock,
+            trailingExtendedHours: model.drawableTrailingHours
+        )
         for index in 0..<slotCount {
             let slotMin = -model.leadingExtendedHours * 60 + index * effectiveSlotMinutes
             if slotMin < gridDrawTopMin || slotMin > gridDrawBottomMin { continue }
@@ -4737,7 +4757,11 @@ final class DayLayerHostView: UIView {
         // instant — the "due by" line for todo / ddl-type events. Drawn above
         // events (zPosition 99) but below the now-line. Multiple deadlines on
         // a day share one compound path → one layer.
-        let totalSecondsVisible = TimeInterval(totalVisibleHours * 3600)
+        let totalSecondsVisible = calendarTimelineVisibleLength(
+            clock: model.dayClock,
+            leadingExtendedHours: model.leadingExtendedHours,
+            trailingExtendedHours: model.trailingExtendedHours
+        )
         let deadlinePath = CGMutablePath()
         if totalSecondsVisible > 0 {
             let screenScale = max(1, UIScreen.main.scale)
@@ -4772,7 +4796,7 @@ final class DayLayerHostView: UIView {
         if showsNow {
             let yFraction = calendarTimelineYFraction(
                 for: now,
-                containing: model.date,
+                clock: model.dayClock,
                 leadingExtendedHours: model.leadingExtendedHours,
                 trailingExtendedHours: model.trailingExtendedHours
             )
@@ -4869,6 +4893,7 @@ final class DayLayerHostView: UIView {
         }
         let basis = ResizeTweenBasis(
             date: Calendar.current.startOfDay(for: model.date),
+            dayClock: model.dayClock,
             hourHeight: model.hourHeight,
             leadingExtendedHours: model.leadingExtendedHours,
             trailingExtendedHours: model.trailingExtendedHours,
@@ -7572,7 +7597,7 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
     private func canResizeTop(for hit: DayLayerHostView.RenderedEventFrame) -> Bool {
         guard let model = host?.liveModel else { return true }
         let visibleStart = calendarTimelineVisibleStart(
-            containing: model.date, leadingExtendedHours: model.leadingExtendedHours
+            clock: model.dayClock, leadingExtendedHours: model.leadingExtendedHours
         )
         return hit.occurrence.range.start >= visibleStart
     }
@@ -7580,7 +7605,7 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
     private func canResizeBottom(for hit: DayLayerHostView.RenderedEventFrame) -> Bool {
         guard let model = host?.liveModel else { return true }
         let visibleEnd = calendarTimelineVisibleEnd(
-            containing: model.date, trailingExtendedHours: model.trailingExtendedHours
+            clock: model.dayClock, trailingExtendedHours: model.trailingExtendedHours
         )
         return hit.occurrence.range.end <= visibleEnd
     }
@@ -7593,13 +7618,13 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         // and `followEventAcrossMidnightIfNeeded` (finger-driven) handles the
         // anchor swap that brings it back into view on the next day.
         if model.useImperativeDayLayerModel { return -.infinity ... .infinity }
-        let calendar = Calendar.current
-        let dayStart = calendar.startOfDay(for: model.date)
-        let maxBoundaryStart = dayStart.addingTimeInterval(
-            TimeInterval(-calendarTimelineMaximumBoundaryExtensionHours * 3600)
+        let maxBoundaryStart = calendarTimelineVisibleStart(
+            clock: model.dayClock,
+            leadingExtendedHours: calendarTimelineMaximumBoundaryExtensionHours
         )
-        let maxBoundaryEnd = dayStart.addingTimeInterval(
-            TimeInterval((calendarTimelineBaseVisibleHours + calendarTimelineMaximumBoundaryExtensionHours) * 3600)
+        let maxBoundaryEnd = calendarTimelineVisibleEnd(
+            clock: model.dayClock,
+            trailingExtendedHours: calendarTimelineMaximumBoundaryExtensionHours
         )
         let range = hit.occurrence.range
         let dur = range.end.timeIntervalSince(range.start)
@@ -7729,7 +7754,7 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         let candidate = host.dateFromY(y, snapMinutes: 15)
         guard model.hourHeight > 0 else { return (candidate, nil) }
         let raw = calendarTimelineDateFromYPosition(
-            y, containing: model.date, headerHeight: model.headerHeight, hourHeight: model.hourHeight,
+            y, clock: model.dayClock, headerHeight: model.headerHeight, hourHeight: model.hourHeight,
             leadingExtendedHours: model.leadingExtendedHours,
             trailingExtendedHours: model.trailingExtendedHours, snapMinutes: 1
         )
@@ -7754,7 +7779,7 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         guard let model = host?.liveModel else { return 0 }
         let time = host?.dateFromY(y, snapMinutes: 15) ?? model.date
         let visibleStart = calendarTimelineVisibleStart(
-            containing: model.date, leadingExtendedHours: model.leadingExtendedHours
+            clock: model.dayClock, leadingExtendedHours: model.leadingExtendedHours
         )
         return Int((time.timeIntervalSince(visibleStart) / 60).rounded())
     }

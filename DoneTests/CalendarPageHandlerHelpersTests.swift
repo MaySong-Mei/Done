@@ -210,7 +210,7 @@ final class CalendarPageHandlerHelpersTests: XCTestCase {
             extensionOriginY: 100,
             scrollY: scrollY,
             viewportHeight: 600,
-            baseVisibleHours: 24
+            dayClock: DayClock.legacy24h(start: date(2026, 5, 1, 0, 0))
         )
     }
 
@@ -226,7 +226,7 @@ final class CalendarPageHandlerHelpersTests: XCTestCase {
             extensionOriginY: input.extensionOriginY,
             scrollY: input.scrollY,
             viewportHeight: input.viewportHeight,
-            baseVisibleHours: input.baseVisibleHours
+            dayClock: input.dayClock
         )
         let curves = computeAbandonedFadeCurves(input)
         XCTAssertNil(curves.leading)
@@ -244,7 +244,7 @@ final class CalendarPageHandlerHelpersTests: XCTestCase {
             extensionOriginY: input.extensionOriginY,
             scrollY: input.scrollY,
             viewportHeight: input.viewportHeight,
-            baseVisibleHours: input.baseVisibleHours
+            dayClock: input.dayClock
         )
         let curves = computeAbandonedFadeCurves(input)
         XCTAssertNil(curves.leading, "rawState.source == nil ⇒ no dissolve writes")
@@ -266,7 +266,7 @@ final class CalendarPageHandlerHelpersTests: XCTestCase {
             extensionOriginY: 100,
             scrollY: 0,
             viewportHeight: 600,
-            baseVisibleHours: 24
+            dayClock: DayClock.legacy24h(start: date(2026, 5, 1, 0, 0))
         )
         let curves = computeAbandonedFadeCurves(input)
         XCTAssertNil(curves.leading)
@@ -286,7 +286,7 @@ final class CalendarPageHandlerHelpersTests: XCTestCase {
             extensionOriginY: 100,
             scrollY: 0,
             viewportHeight: 600,
-            baseVisibleHours: 24
+            dayClock: DayClock.legacy24h(start: date(2026, 5, 1, 0, 0))
         )
         let curves = computeAbandonedFadeCurves(input)
         XCTAssertNil(curves.leading)
@@ -347,7 +347,7 @@ final class CalendarPageHandlerHelpersTests: XCTestCase {
             extensionOriginY: extensionOriginY,
             scrollY: scrollY,
             viewportHeight: 600,
-            baseVisibleHours: 24
+            dayClock: DayClock.legacy24h(start: date(2026, 5, 1, 0, 0))
         )
         let curves = computeAbandonedFadeCurves(input)
         // Combine identity: when either stage saturates to 1, result is 1.
@@ -384,7 +384,7 @@ final class CalendarPageHandlerHelpersTests: XCTestCase {
             extensionOriginY: extensionOriginY,
             scrollY: extensionOriginY,
             viewportHeight: 600,
-            baseVisibleHours: 24
+            dayClock: DayClock.legacy24h(start: date(2026, 5, 1, 0, 0))
         )
         let curves = computeAbandonedFadeCurves(input)
         XCTAssertEqual(curves.leading ?? -1, 0, accuracy: 0.0001)
@@ -417,7 +417,7 @@ final class CalendarPageHandlerHelpersTests: XCTestCase {
             extensionOriginY: extensionOriginY,
             scrollY: 180,
             viewportHeight: 600,
-            baseVisibleHours: 24
+            dayClock: DayClock.legacy24h(start: date(2026, 5, 1, 0, 0))
         )
         let curves = computeAbandonedFadeCurves(input)
         // s1 = 0.6, s2 = 0.5 ⇒ combine = 1 - 0.4 * 0.5 = 1 - 0.2 = 0.8.

@@ -181,6 +181,7 @@ final class EventDeletionMotionTests: XCTestCase {
     private func makeModel(_ occurrences: [CalendarLayout.EventOccurrence]) -> DayLayerHostView.Model {
         DayLayerHostView.Model(
             date: day,
+            dayClock: CalendarZoneClock.current.day(containing: day),
             occurrences: occurrences,
             contentWidth: 360,
             headerHeight: 16,

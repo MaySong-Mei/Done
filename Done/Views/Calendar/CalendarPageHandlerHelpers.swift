@@ -90,7 +90,9 @@ internal struct AbandonedFadeInputs {
     let extensionOriginY: CGFloat
     let scrollY: CGFloat
     let viewportHeight: CGFloat
-    let baseVisibleHours: Int
+    /// The day the drag began in: its start is the 0:00 line above the
+    /// leading band, its end the line the trailing band hangs from.
+    let dayClock: DayClock
 }
 
 /// Result of `computeAbandonedFadeCurves`.
@@ -132,8 +134,7 @@ internal func computeAbandonedFadeCurves(_ input: AbandonedFadeInputs) -> Abando
     // band dims, but only to `stage1MaxFade` (never empties → no in-view
     // gap). (#55 two-stage fade)
     let offsetHours = Double(input.dragOffsetY) / Double(input.hourHeight)
-    let cal = Calendar.current
-    let dayStart = cal.startOfDay(for: input.dragOriginalRange.start)
+    let dayStart = input.dayClock.start
     let abandonFadeStartHours: Double = 4   // tunable: dim begins here
     let abandonFadeRangeHours: Double = 4   // tunable: reaches the cap after this
     let stage1MaxFade: CGFloat = 0.6        // tunable: opacity floor = 1 - this
@@ -190,12 +191,16 @@ internal func computeAbandonedFadeCurves(_ input: AbandonedFadeInputs) -> Abando
         leadingResult = combineFades(s1, s2)
     }
     if trailing > 0 {
-        let dayEnd = dayStart.addingTimeInterval(24 * 3600)
+        let dayEnd = input.dayClock.end
         let liveEnd = input.dragOriginalRange.end.addingTimeInterval(offsetHours * 3600)
         let s1 = fingerDrivenStage1Fade(distHours: dayEnd.timeIntervalSince(liveEnd) / 3600)
         let bandHeight = CGFloat(trailing) * input.hourHeight
         let bandTop = input.extensionOriginY
-            + CGFloat(leading + input.baseVisibleHours) * input.hourHeight
+            + calendarTimelineContentHeight(
+                clock: input.dayClock,
+                hourHeight: input.hourHeight,
+                leadingExtendedHours: leading
+            )
         // d = how far the 24:00 line sits above the viewport bottom.
         let d = visibleBottom - bandTop
         let s2 = positionDrivenStage2Fade(boundarySpan: d, bandHeight: bandHeight)

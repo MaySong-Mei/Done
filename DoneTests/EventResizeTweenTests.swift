@@ -153,6 +153,7 @@ final class EventResizeTweenTests: XCTestCase {
     ) -> DayLayerHostView.Model {
         DayLayerHostView.Model(
             date: day,
+            dayClock: CalendarZoneClock.current.day(containing: day),
             occurrences: occurrences,
             contentWidth: 360,
             headerHeight: 16,
