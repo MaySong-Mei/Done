@@ -516,6 +516,7 @@ final class CalendarDragRenderMemoTests: XCTestCase {
             let host = DayLayerHostView(frame: CGRect(x: 400 * CGFloat(index), y: 0, width: 360, height: 2000))
             var model = makeModel(occurrences)
             model.date = dates[index]
+            model.dayClock = CalendarZoneClock.current.day(containing: dates[index])
             window.addSubview(host)
             host.apply(model)
             host.layoutIfNeeded()
@@ -719,6 +720,7 @@ final class CalendarDragRenderMemoTests: XCTestCase {
         first.apply(makeModel([]))
         var landedModel = makeModel([landed, b])
         landedModel.date = day2
+        landedModel.dayClock = CalendarZoneClock.current.day(containing: day2)
         second.apply(landedModel)
 
         XCTAssertEqual(second.renderedFrames["A2"]!.frame.width, eventAreaWidth, accuracy: 3.0,
