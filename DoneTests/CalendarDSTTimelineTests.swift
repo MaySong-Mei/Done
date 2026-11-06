@@ -400,7 +400,62 @@ final class CalendarDSTTimelineTests: XCTestCase {
     private let firstOneFifteen = Date(timeIntervalSince1970: 1_793_510_100)   // 01:15 EDT
     private let secondOneFifteen = Date(timeIntervalSince1970: 1_793_513_700)  // 01:15 EST
 
-    func testTheResolverKeepsTheOffsetOfTheOriginalInstant() {
+    func testAnOriginalOffTheDaysSecondPassTakesTheFirstPassWhateverItsOffset() {
+        // Two daily 01:15 series, one seeded in December (EST) and one in
+        // July (EDT): on the fall-back day both land on the first 01:15.
+        // Sharing the post-fall-back offset is not being on this day's
+        // second pass — only an instant on it keeps it (review round 3, F3).
+        let ny = newYork
+        let nov1 = ny.startOfDay(for: ny.date(from: DateComponents(year: 2026, month: 11, day: 1, hour: 12))!)
+        let december = ny.date(from: DateComponents(year: 2025, month: 12, day: 10, hour: 1, minute: 15))!
+        let july = ny.date(from: DateComponents(year: 2026, month: 7, day: 10, hour: 1, minute: 15))!
+        XCTAssertEqual(ny.timeZone.secondsFromGMT(for: december), -5 * 3600, "fixture: standard time")
+        XCTAssertEqual(ny.timeZone.secondsFromGMT(for: july), -4 * 3600, "fixture: daylight time")
+        XCTAssertEqual(
+            CalendarWallTime.instant(hour: 1, minute: 15, on: nov1, keepingOffsetOf: december, calendar: ny),
+            firstOneFifteen, "a December anchor"
+        )
+        XCTAssertEqual(
+            CalendarWallTime.instant(hour: 1, minute: 15, on: nov1, keepingOffsetOf: july, calendar: ny),
+            firstOneFifteen, "a July anchor"
+        )
+        XCTAssertEqual(Event.dateByCombining(day: nov1, timeFrom: december, calendar: ny), firstOneFifteen)
+        XCTAssertEqual(Event.dateByCombining(day: nov1, timeFrom: july, calendar: ny), firstOneFifteen)
+        // Through the expander: the two series' Nov 1 occurrences coincide.
+        func series(from start: Date) -> Event {
+            var event = Event(
+                title: "Night",
+                timeRanges: [Event.TimeRange(start: start, end: start.addingTimeInterval(1800))],
+                type: "Work"
+            )
+            event.repeatUnit = .day
+            event.repeatInterval = 1
+            return event
+        }
+        XCTAssertEqual(CalendarLayout.recurrenceOccurrence(for: series(from: december), on: nov1, calendar: ny)?.start, firstOneFifteen)
+        XCTAssertEqual(CalendarLayout.recurrenceOccurrence(for: series(from: july), on: nov1, calendar: ny)?.start, firstOneFifteen)
+
+        // An event at 05:00 EST on the day itself, its hour set to 1: the
+        // first 01:00, not the second, though 05:00 EST shares the second
+        // pass's offset.
+        let oneEDT = Date(timeIntervalSince1970: 1_793_509_200)
+        let oneEST = Date(timeIntervalSince1970: 1_793_512_800)
+        let fiveEST = oneEST.addingTimeInterval(4 * 3600)
+        XCTAssertEqual(ny.component(.hour, from: fiveEST), 5, "fixture")
+        XCTAssertEqual(ny.timeZone.secondsFromGMT(for: fiveEST), -5 * 3600, "fixture")
+        XCTAssertEqual(CalendarWallTime.replacing(hour: 1, of: fiveEST, calendar: ny), oneEDT)
+        // The same from 05:00 on the day after: the first pass again.
+        XCTAssertEqual(
+            CalendarWallTime.instant(hour: 1, minute: 0, on: nov1, keepingOffsetOf: fiveEST.addingTimeInterval(24 * 3600), calendar: ny),
+            oneEDT
+        )
+        // Control: an instant on the second pass still keeps it when its
+        // minute is edited, and 01:00 EST edited to hour 1 stays itself.
+        XCTAssertEqual(CalendarWallTime.replacing(minute: 30, of: secondOneFifteen, calendar: ny), secondOneFifteen.addingTimeInterval(15 * 60))
+        XCTAssertEqual(CalendarWallTime.replacing(hour: 1, of: oneEST, calendar: ny), oneEST)
+    }
+
+    func testTheResolverKeepsThePassOnlyOfAnOriginalOnThisDaysSecondPass() {
         let ny = newYork
         let noon = ny.date(from: DateComponents(year: 2026, month: 11, day: 1, hour: 12))!
         XCTAssertEqual(
@@ -473,16 +528,18 @@ final class CalendarDSTTimelineTests: XCTestCase {
         )
     }
 
-    func testDateByCombiningKeepsTheOffsetTheSeriesStartHad() {
+    func testDateByCombiningTakesTheFirstPassUnlessTheSeriesStartIsOnTheSecond() {
         let ny = newYork
         let nov1 = ny.startOfDay(for: ny.date(from: DateComponents(year: 2026, month: 11, day: 1, hour: 12))!)
-        // A series started at 01:15 on a winter day (EST) lands on the second
-        // 01:15; one started on a summer day (EDT) on the first.
+        // A series started at 01:15 on another day lands on the first 01:15
+        // whether that day was in winter (EST) or summer (EDT); only a start
+        // on this day's own second 01:15 stays there.
         let winterStart = ny.date(from: DateComponents(year: 2026, month: 1, day: 5, hour: 1, minute: 15))!
         let summerStart = ny.date(from: DateComponents(year: 2026, month: 7, day: 1, hour: 1, minute: 15))!
-        XCTAssertEqual(Event.dateByCombining(day: nov1, timeFrom: winterStart, calendar: ny), secondOneFifteen)
+        XCTAssertEqual(Event.dateByCombining(day: nov1, timeFrom: winterStart, calendar: ny), firstOneFifteen)
         XCTAssertEqual(Event.dateByCombining(day: nov1, timeFrom: summerStart, calendar: ny), firstOneFifteen)
         XCTAssertEqual(Event.dateByCombining(day: nov1, timeFrom: secondOneFifteen, calendar: ny), secondOneFifteen)
+        XCTAssertEqual(Event.dateByCombining(day: nov1, timeFrom: firstOneFifteen, calendar: ny), firstOneFifteen)
         // Control: a plain day and the gh#223 end-of-day clamp are untouched.
         let nov3 = ny.startOfDay(for: ny.date(from: DateComponents(year: 2026, month: 11, day: 3, hour: 12))!)
         XCTAssertEqual(ny.component(.hour, from: Event.dateByCombining(day: nov3, timeFrom: winterStart, calendar: ny)), 1)
@@ -493,12 +550,13 @@ final class CalendarDSTTimelineTests: XCTestCase {
     }
 
     func testEveryCallerOfDateByCombiningKeepsTheSecondOneFifteen() {
+        // A series seeded on the fall-back day at its second 01:15: every
+        // caller that re-derives that day's occurrence keeps the pass.
         let ny = newYork
         let nov1 = ny.startOfDay(for: ny.date(from: DateComponents(year: 2026, month: 11, day: 1, hour: 12))!)
-        let winterStart = ny.date(from: DateComponents(year: 2026, month: 1, day: 5, hour: 1, minute: 15))!
         var series = Event(
             title: "Night",
-            timeRanges: [Event.TimeRange(start: winterStart, end: winterStart.addingTimeInterval(1800))],
+            timeRanges: [Event.TimeRange(start: secondOneFifteen, end: secondOneFifteen.addingTimeInterval(1800))],
             type: "Work"
         )
         series.repeatUnit = .day

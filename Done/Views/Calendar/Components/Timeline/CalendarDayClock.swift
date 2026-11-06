@@ -151,17 +151,19 @@ nonisolated struct CalendarZoneClock: Equatable {
 /// Wall clock time to instant (gh#285). Foundation resolves a wall time the
 /// day visits twice to its first occurrence, so rebuilding a date from its
 /// components merged the second 01:15 into the first. This resolver keeps
-/// the offset the original instant had when the wall time is ambiguous, so
-/// an edit that re-derives a time leaves the instant where it was, and a
-/// brand-new time takes the first occurrence. A wall time the day skips
-/// resolves to the first instant after the jump (gh#223's policy), not to
-/// the components carried past the gap.
+/// the pass the original instant is on when it is on this day's second
+/// pass, so an edit that re-derives a time leaves the instant where it
+/// was; a time derived from any other instant takes the first occurrence,
+/// RFC 5545's rule for an ambiguous time — an anchor in standard time on
+/// some other day shares the second pass's offset but is not on it. A wall
+/// time the day skips resolves to the first instant after the jump
+/// (gh#223's policy), not to the components carried past the gap.
 nonisolated enum CalendarWallTime {
     /// The instant at `hour:minute:second` on the civil day of `day`.
     /// `original` is the instant the wall time was read off, if any: when the
-    /// wall time is ambiguous and `original` sits at the second pass's
-    /// offset, the second pass is returned. Nil only when the calendar
-    /// cannot make a date at all.
+    /// wall time is ambiguous and `original` is on this day's second pass,
+    /// the second pass is returned. Nil only when the calendar cannot make
+    /// a date at all.
     static func instant(
         hour: Int,
         minute: Int,
@@ -184,10 +186,9 @@ nonisolated enum CalendarWallTime {
             if let transition = clock.transition, clock.offsetChange > 0 { return transition }
             return first
         }
-        guard clock.repeatedPass(of: first) == 1, let original else { return first }
-        let second = first.addingTimeInterval(-clock.offsetChange)
-        let zone = calendar.timeZone
-        return zone.secondsFromGMT(for: original) == zone.secondsFromGMT(for: second) ? second : first
+        guard clock.repeatedPass(of: first) == 1, let original,
+              clock.repeatedPass(of: original) == 2 else { return first }
+        return first.addingTimeInterval(-clock.offsetChange)
     }
 
     /// `date` with its hour or minute replaced and its seconds dropped, the
