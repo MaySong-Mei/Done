@@ -5801,7 +5801,8 @@ private extension CalendarPageView {
             dayDelta: dayDelta,
             currentLeadingHours: timelineBoundaryExtensionState.leadingHours,
             hourHeight: hourHeight,
-            newHostDayOffset: newHostDayOffset
+            newHostDayOffset: newHostDayOffset,
+            mode: dayLengthMode
         )
         let mirroredExtension = mirror.mirroredExtension
         let scrollDelta = mirror.scrollDelta

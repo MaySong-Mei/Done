@@ -467,4 +467,84 @@ final class CalendarPageHandlerHelpersTests: XCTestCase {
         XCTAssertNotEqual(result, "Exercise")
         XCTAssertEqual(result, "Study")
     }
+
+    // MARK: - The follow-day mirror in the normalized mode (review round 3, F2)
+
+    private var newYork: Calendar {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "America/New_York")!
+        return cal
+    }
+
+    private func newYorkDay(_ y: Int, _ m: Int, _ d: Int) -> DayClock {
+        CalendarZoneClock(calendar: newYork, usesActualDayLength: true)
+            .day(containing: newYork.date(from: DateComponents(year: y, month: m, day: d, hour: 12))!)
+    }
+
+    private func follow(
+        _ old: DayClock, to new: DayClock, dayDelta: Int, leading: Int, hourHeight: CGFloat = 56, mode: DayLengthMode
+    ) -> CalendarFollowDayMirror {
+        calendarFollowDayMirror(
+            oldDayClock: old, newDayClock: new, dayDelta: dayDelta, currentLeadingHours: leading,
+            hourHeight: hourHeight, newHostDayOffset: dayDelta, mode: mode
+        )
+    }
+
+    func testInTheNormalizedModeTheFollowKeepsTheMidnightLineWhereTheScaledColumnDrewIt() {
+        // The swap keeps the day boundary still on screen: the old day's
+        // end going forward, its start going back. In the normalized mode
+        // a special day's column is drawn a standard day tall, so the
+        // boundary sits at a different height on the old page than the
+        // band on the new page puts it, and the offset must move by the
+        // difference — not by the actual mode's pure rename.
+        let hh: CGFloat = 56
+        let fallBack = newYorkDay(2026, 11, 1), nov2 = newYorkDay(2026, 11, 2)
+        let springForward = newYorkDay(2026, 3, 8), mar9 = newYorkDay(2026, 3, 9)
+        XCTAssertEqual(fallBack.length, 25 * 3600, "fixture")
+        XCTAssertEqual(springForward.length, 23 * 3600, "fixture")
+
+        // Forward from Nov 1 (hh × 24/25): its end sat twenty-four hh down;
+        // on Nov 2 the twenty-five-hour band above puts it twenty-five hh
+        // down, so the offset moves by one hour height; the settle is the
+        // band's height on the new column.
+        let forward = follow(fallBack, to: nov2, dayDelta: 1, leading: 0, mode: .normalized)
+        XCTAssertEqual(forward.mirroredExtension.leadingHours, 25)
+        XCTAssertEqual(forward.scrollDelta, hh, accuracy: 0.001)
+        XCTAssertEqual(forward.settleOffset, 25 * hh, accuracy: 0.001)
+        // Backward from Nov 2 (a twelve-hour band above, at hh) onto Nov 1:
+        // Nov 2's start was twelve hh down; on Nov 1's column it is
+        // twenty-five scaled hours, twenty-four hh, down.
+        let backward = follow(nov2, to: fallBack, dayDelta: -1, leading: 12, mode: .normalized)
+        XCTAssertEqual(backward.mirroredExtension.trailingHours, 24)
+        XCTAssertEqual(backward.scrollDelta, 12 * hh, accuracy: 0.001)
+        XCTAssertEqual(backward.settleOffset, 0, accuracy: 0.001)
+        // The spring day the same way: forward, its end sat twenty-four hh
+        // down and the twenty-three-hour band puts it twenty-three hh down;
+        // backward onto it, Mar 9's start moves from twelve hh to
+        // twenty-three scaled hours, twenty-four hh, down.
+        let spring = follow(springForward, to: mar9, dayDelta: 1, leading: 0, mode: .normalized)
+        XCTAssertEqual(spring.scrollDelta, -hh, accuracy: 0.001)
+        XCTAssertEqual(spring.settleOffset, 23 * hh, accuracy: 0.001)
+        let springBack = follow(mar9, to: springForward, dayDelta: -1, leading: 12, mode: .normalized)
+        XCTAssertEqual(springBack.scrollDelta, 12 * hh, accuracy: 0.001)
+
+        // Controls: a plain-day follow is the same in both modes, and the
+        // actual mode is the old maths for the special days.
+        let nov3 = newYorkDay(2026, 11, 3), nov4 = newYorkDay(2026, 11, 4)
+        for mode in DayLengthMode.allCases {
+            let plainForward = follow(nov3, to: nov4, dayDelta: 1, leading: 0, mode: mode)
+            XCTAssertEqual(plainForward.mirroredExtension.leadingHours, 24, "\(mode)")
+            XCTAssertEqual(plainForward.scrollDelta, 0, accuracy: 0.001, "\(mode)")
+            XCTAssertEqual(plainForward.settleOffset, 24 * hh, accuracy: 0.001, "\(mode)")
+            let plainBackward = follow(nov4, to: nov3, dayDelta: -1, leading: 12, mode: mode)
+            XCTAssertEqual(plainBackward.scrollDelta, 12 * hh, accuracy: 0.001, "\(mode)")
+            XCTAssertEqual(plainBackward.settleOffset, 0, accuracy: 0.001, "\(mode)")
+        }
+        let actualForward = follow(fallBack, to: nov2, dayDelta: 1, leading: 0, mode: .actual)
+        XCTAssertEqual(actualForward.scrollDelta, 0, accuracy: 0.001)
+        XCTAssertEqual(actualForward.settleOffset, 25 * hh, accuracy: 0.001)
+        XCTAssertEqual(follow(nov2, to: fallBack, dayDelta: -1, leading: 12, mode: .actual).scrollDelta, 13 * hh, accuracy: 0.001)
+        XCTAssertEqual(follow(springForward, to: mar9, dayDelta: 1, leading: 0, mode: .actual).scrollDelta, 0, accuracy: 0.001)
+        XCTAssertEqual(follow(mar9, to: springForward, dayDelta: -1, leading: 12, mode: .actual).scrollDelta, 11 * hh, accuracy: 0.001)
+    }
 }

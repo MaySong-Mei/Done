@@ -48,18 +48,23 @@ struct CalendarFollowDayMirror: Equatable {
 /// `oldDayClock` is the day the view was on, `newDayClock` the day it
 /// follows the event to, `dayDelta` their signed distance in days, and
 /// `currentLeadingHours` the band open above the old day at the swap.
-/// The mirrored band is as long as the OLD day, and the offset moves by
-/// how far the window's start moved: going back, from (old day − band
-/// above) to the new day's start; going forward, the new window starts a
-/// whole old day before the new day — the old day's start — so the swap
-/// is a pure rename.
+/// The mirrored band is as long as the OLD day. The swap keeps the day
+/// boundary the event crossed where it was on screen — the old day's end
+/// going forward, its start going back: the offset moves by the
+/// difference between where the new page draws that boundary and where
+/// the old page drew it. Each page draws at its own column's hour height
+/// (gh#285 S1.5): the same in the actual mode, so the move is how far the
+/// window's start moved and a forward swap is a pure rename; in the
+/// normalized mode a special day's column is scaled, so its boundary sat
+/// a different height from where the other page's band puts it.
 func calendarFollowDayMirror(
     oldDayClock: DayClock,
     newDayClock: DayClock,
     dayDelta: Int,
     currentLeadingHours: Int,
     hourHeight: CGFloat,
-    newHostDayOffset: Int
+    newHostDayOffset: Int,
+    mode: DayLengthMode = .actual
 ) -> CalendarFollowDayMirror {
     let mirroredHours = Int((oldDayClock.length / 3600).rounded())
     let mirroredExtension = dayDelta < 0
@@ -69,14 +74,19 @@ func calendarFollowDayMirror(
         : TimelineBoundaryExtensionState(
             leadingHours: mirroredHours, trailingHours: 0, source: nil, anchorDayOffset: newHostDayOffset
         )
+    let oldHourHeight = calendarColumnHourHeight(hourHeight, clock: oldDayClock, mode: mode)
+    let newHourHeight = calendarColumnHourHeight(hourHeight, clock: newDayClock, mode: mode)
+    let boundary = dayDelta < 0 ? oldDayClock.start : oldDayClock.end
     let oldWindowStart = calendarTimelineVisibleStart(
         clock: oldDayClock, leadingExtendedHours: currentLeadingHours
     )
     let newWindowStart = calendarTimelineVisibleStart(
         clock: newDayClock, leadingExtendedHours: mirroredExtension.leadingHours
     )
-    let scrollDelta = CGFloat(oldWindowStart.timeIntervalSince(newWindowStart) / 3600) * hourHeight
-    let settleOffset = dayDelta < 0 ? 0 : CGFloat(mirroredExtension.leadingHours) * hourHeight
+    let boundaryBefore = CGFloat(boundary.timeIntervalSince(oldWindowStart) / 3600) * oldHourHeight
+    let boundaryAfter = CGFloat(boundary.timeIntervalSince(newWindowStart) / 3600) * newHourHeight
+    let scrollDelta = boundaryAfter - boundaryBefore
+    let settleOffset = dayDelta < 0 ? 0 : CGFloat(mirroredExtension.leadingHours) * newHourHeight
     return CalendarFollowDayMirror(
         mirroredExtension: mirroredExtension,
         scrollDelta: scrollDelta,
