@@ -248,4 +248,44 @@ final class RenderReadFormatterEquivalenceTests: XCTestCase {
         }
     }
 
+    // MARK: The zone abbreviation under concurrent first calls (review round 3, F10)
+
+    /// The Mac projects off the main thread, so the per-zone formatter
+    /// cache behind `calendarZoneAbbreviation` is reached from several
+    /// threads at once, each zone's first call included. Every thread asks
+    /// for every known zone; the run must not crash on the shared cache,
+    /// and every answer must be what a formatter built on the spot gives.
+    func testTheZoneAbbreviationAnswersTheSameFromManyThreadsAtOnce() {
+        let instant = Date(timeIntervalSince1970: 1_793_541_600)
+        let calendars: [Calendar] = TimeZone.knownTimeZoneIdentifiers.compactMap { identifier in
+            guard let zone = TimeZone(identifier: identifier) else { return nil }
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = zone
+            return calendar
+        }
+        let expected: [String] = calendars.map { calendar in
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = calendar.timeZone
+            formatter.dateFormat = "zzz"
+            return formatter.string(from: instant)
+        }
+        XCTAssertGreaterThan(calendars.count, 100, "fixture: enough zones for first calls to collide")
+
+        let threads = 16
+        let lock = NSLock()
+        var disagreeingThreads = 0
+        DispatchQueue.concurrentPerform(iterations: threads) { _ in
+            let mine = calendars.map { calendarZoneAbbreviation(for: instant, calendar: $0) }
+            if mine != expected {
+                lock.lock()
+                disagreeingThreads += 1
+                lock.unlock()
+            }
+        }
+        XCTAssertEqual(disagreeingThreads, 0)
+        // And once more on this thread, from the now-warm cache.
+        XCTAssertEqual(calendars.map { calendarZoneAbbreviation(for: instant, calendar: $0) }, expected)
+    }
+
 }

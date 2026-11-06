@@ -330,22 +330,34 @@ func calendarNarrowZoneAbbreviation(_ abbreviation: String) -> String {
 
 /// The zone's abbreviation at `instant` ("EDT"), through a formatter rather
 /// than `TimeZone.abbreviation(for:)`, which is unreliable for past dates.
-func calendarZoneAbbreviation(for instant: Date, calendar: Calendar) -> String {
-    let zoneID = calendar.timeZone.identifier
-    let formatter: DateFormatter
-    if let cached = calendarZoneAbbreviationFormatters[zoneID] {
-        formatter = cached
-    } else {
-        formatter = DateFormatter()
+/// Callable from any thread: the Mac projects off the main one.
+nonisolated func calendarZoneAbbreviation(for instant: Date, calendar: Calendar) -> String {
+    CalendarZoneAbbreviationFormatters.shared.formatter(for: calendar).string(from: instant)
+}
+
+/// The abbreviation formatters, one per zone, built on first use behind a
+/// lock: two first calls for a zone may arrive on different threads at
+/// once, and the cache must not be read while it is being grown. A
+/// formatter, once built, answers from any thread.
+private nonisolated final class CalendarZoneAbbreviationFormatters: @unchecked Sendable {
+    static let shared = CalendarZoneAbbreviationFormatters()
+
+    private let lock = NSLock()
+    private var formatters: [String: DateFormatter] = [:]
+
+    func formatter(for calendar: Calendar) -> DateFormatter {
+        let zoneID = calendar.timeZone.identifier
+        lock.lock()
+        defer { lock.unlock() }
+        if let cached = formatters[zoneID] { return cached }
+        let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = calendar.timeZone
         formatter.dateFormat = "zzz"
-        calendarZoneAbbreviationFormatters[zoneID] = formatter
+        formatters[zoneID] = formatter
+        return formatter
     }
-    return formatter.string(from: instant)
 }
-
-private var calendarZoneAbbreviationFormatters: [String: DateFormatter] = [:]
 
 /// `date`'s wall time as `formatter` writes it, followed by the zone's
 /// abbreviation when the day visits that wall time twice (gh#285), so the
