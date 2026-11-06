@@ -504,10 +504,15 @@ nonisolated func calendarTimelineCanvasLength(longestInReach: TimeInterval, mode
 /// height, the window the now-legend reads, the day the scroll content is
 /// sized for, and each column's hour height and length. The decisions live
 /// here, where they can be tested; the pager builds this once per read and
-/// only forwards its fields.
+/// only forwards its fields. The page builds one too, without a window:
+/// its finger→time mappings and its content height read the selected
+/// column's hour height and the canvas from it, so they agree with what
+/// the pager draws.
 nonisolated struct CalendarTimelineGeometry: Equatable {
-    /// The settled legend window.
-    let window: CalendarLegendWindow
+    /// The settled legend window; nil for the page's geometry, which is
+    /// anchored on the selected day alone and reads no axis field — the
+    /// axis fields then describe a single-day page on that day.
+    let window: CalendarLegendWindow?
     /// The selected day: what the canvas is anchored on.
     let selectedDayClock: DayClock
     /// The longest day the page holds, if it holds one longer than the
@@ -519,15 +524,24 @@ nonisolated struct CalendarTimelineGeometry: Equatable {
 
     /// The day the fixed axis is drawn for: the leftmost column of the
     /// settled window (the selected day in single-day mode).
-    var axisClock: DayClock { window.axisClock }
+    var axisClock: DayClock { window?.axisClock ?? selectedDayClock }
 
     /// The hour height the fixed axis is drawn with: its day's column
     /// hour height, so a scaled special day's rows line up with its column.
     var axisHourHeight: CGFloat { columnHourHeight(for: axisClock) }
 
     var nowLegendWindow: CalendarNowLegendWindow {
-        CalendarNowLegendWindow(window: window, hourHeight: hourHeight, mode: mode)
+        guard let window else {
+            return CalendarNowLegendWindow(day: selectedDayClock, hourHeight: selectedColumnHourHeight)
+        }
+        return CalendarNowLegendWindow(window: window, hourHeight: hourHeight, mode: mode)
     }
+
+    /// The hour height the selected day's column is drawn with. On the
+    /// single-day page that column is the one under the finger, so every
+    /// finger→time mapping there and every band judgement reads this, not
+    /// the timeline's own hour height, which the normalized mode scales.
+    var selectedColumnHourHeight: CGFloat { columnHourHeight(for: selectedDayClock) }
 
     /// The day the scroll content is sized for: the selected day's start,
     /// stretched to the longest day in reach when the page holds a longer

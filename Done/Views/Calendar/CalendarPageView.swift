@@ -899,6 +899,55 @@ func calendarTimelineBoundaryExtensionCanLeaveView(
     )
 }
 
+/// The single-day page's judgement: the selected column's clock and the
+/// hour height it is drawn with, both read from the page's geometry
+/// (gh#285 S1.5). In the normalized mode a special day's column is
+/// scaled; judged at the timeline's own hour height its band below would
+/// be placed an hour lower than drawn and closed while in view.
+func calendarTimelineBoundaryExtensionVisibility(
+    geometry: CalendarTimelineGeometry,
+    currentOffsetY: CGFloat,
+    viewportHeight: CGFloat,
+    contentTopInset: CGFloat,
+    allDayHeight: CGFloat,
+    headerHeight: CGFloat,
+    state: TimelineBoundaryExtensionState
+) -> (leadingVisible: Bool, trailingVisible: Bool) {
+    calendarTimelineBoundaryExtensionVisibility(
+        clock: geometry.selectedDayClock,
+        currentOffsetY: currentOffsetY,
+        viewportHeight: viewportHeight,
+        contentTopInset: contentTopInset,
+        allDayHeight: allDayHeight,
+        headerHeight: headerHeight,
+        hourHeight: geometry.selectedColumnHourHeight,
+        state: state
+    )
+}
+
+/// The single-day page's judgement, from the page's geometry; see
+/// `calendarTimelineBoundaryExtensionVisibility(geometry:…)`.
+func calendarTimelineBoundaryExtensionCanLeaveView(
+    geometry: CalendarTimelineGeometry,
+    contentHeight: CGFloat,
+    viewportHeight: CGFloat,
+    contentTopInset: CGFloat,
+    allDayHeight: CGFloat,
+    headerHeight: CGFloat,
+    state: TimelineBoundaryExtensionState
+) -> (leading: Bool, trailing: Bool) {
+    calendarTimelineBoundaryExtensionCanLeaveView(
+        clock: geometry.selectedDayClock,
+        contentHeight: contentHeight,
+        viewportHeight: viewportHeight,
+        contentTopInset: contentTopInset,
+        allDayHeight: allDayHeight,
+        headerHeight: headerHeight,
+        hourHeight: geometry.selectedColumnHourHeight,
+        state: state
+    )
+}
+
 func calendarCollapsedTimelineBoundaryExtensionState(
     currentState: TimelineBoundaryExtensionState,
     leadingVisible: Bool,
@@ -2134,20 +2183,21 @@ private extension CalendarPageView {
         return calendarTimelineCanvasLength(longestInReach: longest, mode: dayLengthMode)
     }
 
-    /// The day the content is sized for: the selected day's start stretched
-    /// to the held canvas length, never shorter than the selected day — or,
-    /// in the normalized mode, a standard day whatever the selected day is.
-    var timelineCanvasClock: DayClock {
-        let selected = selectedDayClock
-        let length = dayLengthMode == .normalized
-            ? DayClock.standardLength
-            : max(selected.length, timelineCanvasLength)
-        guard abs(length - selected.length) > 1 else { return selected }
-        return DayClock(
-            start: selected.start,
-            end: selected.start.addingTimeInterval(length),
-            transition: nil,
-            offsetChange: 0
+    /// The page's day geometry (gh#285 S1.5): the selected day, the held
+    /// canvas length, the hour height and the mode in the one place the
+    /// pager also derives its columns from. The content height reads the
+    /// canvas from it, and every finger→time mapping of the single-day
+    /// page and every band judgement read the selected column's hour
+    /// height from it — scaled in the normalized mode, where the timeline's
+    /// own hour height is not what the column is drawn with. The pager's
+    /// own geometry adds the settled window; this one carries none.
+    var timelineGeometry: CalendarTimelineGeometry {
+        CalendarTimelineGeometry(
+            window: nil,
+            selectedDayClock: selectedDayClock,
+            longestInReach: timelineCanvasLength,
+            hourHeight: calendarState.timelineHourHeight,
+            mode: dayLengthMode
         )
     }
 
@@ -2189,7 +2239,7 @@ private extension CalendarPageView {
         let hourHeight = calendarState.timelineHourHeight
         guard hourHeight > 0 else { return 0 }
         return calendarTimelineHostContentHeight(
-            clock: timelineCanvasClock,
+            clock: timelineGeometry.canvasClock,
             headerHeight: calendarTimelineTopInset(hourHeight: hourHeight),
             allDayHeight: timelineAllDayHeight,
             hourHeight: hourHeight,
@@ -2240,8 +2290,6 @@ private extension CalendarPageView {
         guard calendarState.rangeMode == .day else { return nil }
         let frame = timelineVisibleDayFrameGlobal
         guard frame.width > 0, frame.height > 0 else { return nil }
-        let hourHeight = calendarState.timelineHourHeight
-        guard hourHeight.isFinite, hourHeight > 0 else { return nil }
         // #65: buffer columns USED to overwrite the reported frame's X
         // (a column parked thousands of points off-screen could be the
         // last writer). The report is now gated to the selected single-day
@@ -2253,31 +2301,14 @@ private extension CalendarPageView {
         let dayAreaMinX = max(0, pageWidth - frame.width)
         guard globalPoint.x >= dayAreaMinX, globalPoint.x <= pageWidth else { return nil }
 
-        let headerHeight = timelineHeaderHeight
-        let localY = globalPoint.y - frame.minY
-        let clock = selectedDayClock
-        let totalVisibleMinutes = calendarTimelineVisibleMinutes(
-            clock: clock,
-            leadingExtendedHours: timelineBoundaryExtensionState.leadingHours,
-            trailingExtendedHours: timelineBoundaryExtensionState.trailingHours
-        )
-        // `- 1` matches every other finger→time mapping in this file
-        // (`calendarResolvedHeaderDisplayDate`,
-        // `calendarResolvedTouchDrivenHeaderDisplayDate`): without it the very
-        // last pixel of the column rounds to the NEXT day's 00:00, and the
-        // preview then belongs to a column this one cannot paint.
-        let maxLocalY = headerHeight + CGFloat(max(0, totalVisibleMinutes - 1)) / 60 * hourHeight
-        guard localY >= headerHeight, localY <= maxLocalY else { return nil }
-
-        let start = calendarTimelineDateFromYPosition(
-            localY,
-            clock: clock,
-            headerHeight: headerHeight,
-            hourHeight: hourHeight,
-            leadingExtendedHours: timelineBoundaryExtensionState.leadingHours,
-            trailingExtendedHours: timelineBoundaryExtensionState.trailingHours,
-            snapMinutes: 15
-        )
+        // The finger→time mapping, at the hour height the selected column
+        // is drawn with (gh#285 S1.5); nil outside the column's window.
+        guard let start = calendarTodoStackDropStart(
+            localY: globalPoint.y - frame.minY,
+            headerHeight: timelineHeaderHeight,
+            geometry: timelineGeometry,
+            bandState: timelineBoundaryExtensionState
+        ) else { return nil }
 
         let parent = Self.todoStackDropAbsorbParent(
             candidates: store.rawCalendarEvents,
@@ -2995,7 +3026,7 @@ private extension CalendarPageView {
             rangeMode: calendarState.rangeMode,
             currentScrollY: timelineVerticalScrollY,
             headerHeight: timelineHeaderHeight,
-            hourHeight: calendarState.timelineHourHeight,
+            hourHeight: timelineGeometry.selectedColumnHourHeight,
             boundaryExtensionState: timelineBoundaryExtensionState,
             draggingEventID: timelineDragState.draggingEventID,
             dragMode: timelineDragState.dragMode,
@@ -3038,7 +3069,7 @@ private extension CalendarPageView {
                 rangeMode: calendarState.rangeMode,
                 currentScrollY: timelineVerticalScrollY,
                 headerHeight: timelineHeaderHeight,
-                hourHeight: calendarState.timelineHourHeight,
+                hourHeight: timelineGeometry.selectedColumnHourHeight,
                 boundaryExtensionState: timelineBoundaryExtensionState,
                 draggingEventID: timelineDragState.draggingEventID,
                 dragMode: timelineDragState.dragMode,
@@ -3498,7 +3529,7 @@ private extension CalendarPageView {
             appliedState: timelineBoundaryExtensionState,
             dragOriginalRange: original,
             dragOffsetY: timelineDragState.dragOffset.y,
-            hourHeight: calendarState.timelineHourHeight,
+            hourHeight: timelineGeometry.selectedColumnHourHeight,
             extensionOriginY: topOverlayInset + timelineAllDayHeight + timelineHeaderHeight,
             scrollY: timelineVerticalScrollY,
             viewportHeight: timelineScrollViewportHeight,
@@ -3962,24 +3993,22 @@ private extension CalendarPageView {
         guard !isVerticallyScrolling else { return }
 
         let visibility = calendarTimelineBoundaryExtensionVisibility(
-            clock: selectedDayClock,
+            geometry: timelineGeometry,
             currentOffsetY: timelineVerticalScrollY,
             viewportHeight: timelineScrollViewportHeight,
             contentTopInset: topOverlayInset,
             allDayHeight: timelineAllDayHeight,
             headerHeight: timelineHeaderHeight,
-            hourHeight: calendarState.timelineHourHeight,
             state: timelineBoundaryExtensionState
         )
         let reachable = closeUnreachable
             ? calendarTimelineBoundaryExtensionCanLeaveView(
-                clock: selectedDayClock,
+                geometry: timelineGeometry,
                 contentHeight: todoStackTimelineContentHeight(),
                 viewportHeight: timelineScrollViewportHeight,
                 contentTopInset: topOverlayInset,
                 allDayHeight: timelineAllDayHeight,
                 headerHeight: timelineHeaderHeight,
-                hourHeight: calendarState.timelineHourHeight,
                 state: timelineBoundaryExtensionState
             )
             : (leading: true, trailing: true)
@@ -4063,7 +4092,7 @@ private extension CalendarPageView {
             contentTopInset: topOverlayInset,
             contentBottomInset: bottomInset,
             allDayHeight: 0,  // safe lower bound; using 0 means we under-correct rather than over-correct
-            dayHours: CGFloat(timelineCanvasClock.length / 3600)
+            dayHours: CGFloat(timelineGeometry.canvasClock.length / 3600)
         )
         if calendarState.timelineHourHeight < dynamicMin {
             calendarState.setTimelineHourHeight(dynamicMin)
@@ -4240,7 +4269,7 @@ private extension CalendarPageView {
             ? calendarTimelineMaximumBoundaryExtensionHours
             : timelineBoundaryExtensionState.trailingHours
         let contentH = calendarTimelineHostContentHeight(
-            clock: timelineCanvasClock,
+            clock: timelineGeometry.canvasClock,
             headerHeight: calendarTimelineTopInset(hourHeight: hourHeight),
             allDayHeight: imperative ? 0 : timelineAllDayHeight,
             hourHeight: hourHeight,
@@ -4592,7 +4621,7 @@ private extension CalendarPageView {
             leadingFadeProgress: timelineLeadingFadeProgress,
             trailingFadeProgress: timelineTrailingFadeProgress,
             isDayOffsetFrozen: calendarState.isDayOffsetFrozen,
-            canvasLength: timelineCanvasClock.length,
+            canvasLength: timelineGeometry.canvasClock.length,
             dayLengthMode: dayLengthMode,
             daysCount: timelineDaysCount(for: calendarState.rangeMode),
             mode: .preview,
@@ -5655,7 +5684,7 @@ private extension CalendarPageView {
             selectedDayOffset: calendarState.selectedDayOffset,
             rangeMode: calendarState.rangeMode,
             headerHeight: timelineHeaderHeight,
-            hourHeight: calendarState.timelineHourHeight,
+            hourHeight: timelineGeometry.selectedColumnHourHeight,
             boundaryExtensionState: fingerMappingBandState,
             // Spec 07 Phase 1: imperative path — finger maps raw past the
             // ±12h substrate so day-switch sees the finger's true day.

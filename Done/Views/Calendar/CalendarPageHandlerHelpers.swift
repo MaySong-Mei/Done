@@ -84,6 +84,44 @@ func calendarFollowDayMirror(
     )
 }
 
+// MARK: - Stack-card drop (gh#285 S1.5)
+
+/// Where a stack card dropped at `localY` — below the top of the selected
+/// column's frame — lands: nil outside the column's drawn window, else the
+/// quarter hour there. The mapping reads the hour height the column is
+/// drawn with from the page's geometry, so in the normalized mode a special
+/// day's scaled column maps the finger onto the hour it is over.
+///
+/// The last minute is held back from the window, as every finger→time
+/// mapping of the page does: without it the very last pixel of the column
+/// rounds to the next day's midnight, which this column cannot paint.
+func calendarTodoStackDropStart(
+    localY: CGFloat,
+    headerHeight: CGFloat,
+    geometry: CalendarTimelineGeometry,
+    bandState: TimelineBoundaryExtensionState
+) -> Date? {
+    let hourHeight = geometry.selectedColumnHourHeight
+    guard hourHeight.isFinite, hourHeight > 0 else { return nil }
+    let clock = geometry.selectedDayClock
+    let totalVisibleMinutes = calendarTimelineVisibleMinutes(
+        clock: clock,
+        leadingExtendedHours: bandState.leadingHours,
+        trailingExtendedHours: bandState.trailingHours
+    )
+    let maxLocalY = headerHeight + CGFloat(max(0, totalVisibleMinutes - 1)) / 60 * hourHeight
+    guard localY >= headerHeight, localY <= maxLocalY else { return nil }
+    return calendarTimelineDateFromYPosition(
+        localY,
+        clock: clock,
+        headerHeight: headerHeight,
+        hourHeight: hourHeight,
+        leadingExtendedHours: bandState.leadingHours,
+        trailingExtendedHours: bandState.trailingHours,
+        snapMinutes: 15
+    )
+}
+
 // MARK: - §4b. Midnight-shift gate predicate
 
 /// Whether a pending midnight offset shift may be applied now.
@@ -138,6 +176,9 @@ internal struct AbandonedFadeInputs {
     let appliedState: TimelineBoundaryExtensionState
     let dragOriginalRange: Event.TimeRange
     let dragOffsetY: CGFloat
+    /// The hour height the dragged column is drawn with: the finger's
+    /// offset, the bands and the day are all measured in it. (In the
+    /// normalized mode a special day's column is scaled, gh#285 S1.5.)
     let hourHeight: CGFloat
     /// `topOverlayInset + timelineAllDayHeight + timelineHeaderHeight`.
     let extensionOriginY: CGFloat
