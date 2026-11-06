@@ -321,6 +321,13 @@ func calendarTimelineAxisHourLabel(
     )
 }
 
+/// A zone abbreviation for a legend too narrow for a nameless zone's
+/// prefix: "GMT+3" folds to "+3"; a named zone ("EDT") is returned as is.
+func calendarNarrowZoneAbbreviation(_ abbreviation: String) -> String {
+    guard abbreviation.hasPrefix("GMT"), abbreviation.count > 3 else { return abbreviation }
+    return String(abbreviation.dropFirst(3))
+}
+
 /// The zone's abbreviation at `instant` ("EDT"), through a formatter rather
 /// than `TimeZone.abbreviation(for:)`, which is unreliable for past dates.
 func calendarZoneAbbreviation(for instant: Date, calendar: Calendar) -> String {

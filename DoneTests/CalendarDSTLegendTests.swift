@@ -317,10 +317,21 @@ final class CalendarDSTLegendTests: XCTestCase {
                 XCTAssertLessThanOrEqual(width(narrow.text(of: label), size: narrow.hourFontSize), narrowRoom, "\(label.narrowText)")
             }
         }
-        for zone in ["EDT", "EST", "CEST", "EEST", "AEDT", "BST"] {
-            XCTAssertLessThanOrEqual(width(zone, size: standard.zoneFontSize), standardRoom, zone)
-            XCTAssertLessThanOrEqual(width(zone, size: narrow.zoneFontSize), narrowRoom, zone)
+        // Named zones, and the nameless "GMT±N" form Foundation gives zones
+        // such as Africa/Cairo, which the narrow legend folds to its offset.
+        for zone in ["EDT", "EST", "CEST", "EEST", "AEDT", "BST", "GMT+2", "GMT+3", "GMT+12", "GMT-3:30"] {
+            let label = CalendarAxisHourLabel(text: "1:00", narrowText: "1", zoneAbbreviation: zone)
+            XCTAssertLessThanOrEqual(width(standard.zoneText(of: label)!, size: standard.zoneFontSize), standardRoom, zone)
+            XCTAssertLessThanOrEqual(width(narrow.zoneText(of: label)!, size: narrow.zoneFontSize), narrowRoom, zone)
         }
+        XCTAssertEqual(calendarNarrowZoneAbbreviation("GMT+3"), "+3")
+        XCTAssertEqual(calendarNarrowZoneAbbreviation("GMT-3:30"), "-3:30")
+        XCTAssertEqual(calendarNarrowZoneAbbreviation("EDT"), "EDT")
+        XCTAssertEqual(calendarNarrowZoneAbbreviation("GMT"), "GMT")
+        let cairo = CalendarAxisHourLabel(text: "23:00", narrowText: "23", zoneAbbreviation: "GMT+3")
+        XCTAssertEqual(narrow.zoneText(of: cairo), "+3")
+        XCTAssertEqual(standard.zoneText(of: cairo), "GMT+3", "the wide form keeps the axis's text")
+        XCTAssertNil(narrow.zoneText(of: CalendarAxisHourLabel(text: "2:00", narrowText: "2", zoneAbbreviation: nil)))
     }
 
     // MARK: The three render paths agree on the legend inset

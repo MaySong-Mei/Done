@@ -64,6 +64,13 @@ struct CalendarColumnLegend: Equatable {
     func text(of label: CalendarAxisHourLabel) -> String {
         isNarrow ? label.narrowText : label.text
     }
+
+    /// The zone a row shows under its hour: the axis's abbreviation, or in
+    /// the narrow form a nameless zone's offset alone ("GMT+3" → "+3").
+    func zoneText(of label: CalendarAxisHourLabel) -> String? {
+        guard let zone = label.zoneAbbreviation else { return nil }
+        return isNarrow ? calendarNarrowZoneAbbreviation(zone) : zone
+    }
 }
 
 // MARK: - UIViewRepresentable boundary
@@ -1741,7 +1748,7 @@ final class DayLayerHostView: UIView {
                 text.font = hourFont
                 text.fontSize = legend.hourFontSize
                 text.foregroundColor = color
-                if let zone = row.label.zoneAbbreviation {
+                if let zone = legend.zoneText(of: row.label) {
                     let zoneText = legendZoneLayers[zoneIndex]
                     zoneIndex += 1
                     zoneText.string = zone
