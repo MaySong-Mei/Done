@@ -262,7 +262,7 @@ nonisolated struct LegendGroups: Equatable {
 /// The settled visible window of the timeline as its legends see it: the
 /// clocks of its columns in order, grouped. The fixed axis draws the first
 /// column's clock; every later column that starts a group draws its own
-/// legend; the now-legend shows only while now is inside the window.
+/// legend; the now-legend reads the window through `CalendarNowLegendWindow`.
 nonisolated struct CalendarLegendWindow: Equatable {
     /// The day offset of the first column.
     let leadingOffset: Int
@@ -300,6 +300,9 @@ nonisolated struct CalendarLegendWindow: Equatable {
     func contains(offset: Int) -> Bool {
         (leadingOffset..<(leadingOffset + clocks.count)).contains(offset)
     }
+
+    /// A single-day page: the window is the page's day alone.
+    var isSingleDay: Bool { clocks.count == 1 }
 }
 
 /// Whether the legends may take a new window: only once paging rests, with
@@ -323,11 +326,116 @@ nonisolated func calendarSettledLegendWindow(
     return previous
 }
 
-/// Whether the axis shows the now-legend: only while `now` is inside the
-/// window the legend is drawn for. A single day's window is the day itself,
-/// so a page that is not today shows none, as before.
-nonisolated func calendarNowLegendIsShown(now: Date, window: DateInterval) -> Bool {
-    now >= window.start && now < window.end
+/// The legends' settled window as the pager keeps it from one pass to the
+/// next. The pager hands it the live window and the gesture state on every
+/// reconcile; whether that window is taken is decided here, not in the
+/// view, so the gate can be tested where it is applied.
+nonisolated struct CalendarLegendWindowKeeper: Equatable {
+    /// The window the legends are drawn for; nil before the first reconcile.
+    private(set) var window: CalendarLegendWindow? = nil
+
+    init() {}
+
+    /// Takes `live` once paging rests with no pinch and no drag in
+    /// progress; otherwise keeps what it had. Returns whether the window
+    /// changed, so the pager writes its state only then.
+    mutating func reconcile(
+        live: CalendarLegendWindow,
+        isPinchActive: Bool,
+        isScrollInteracting: Bool,
+        draggingEventID: UUID?
+    ) -> Bool {
+        let canSettle = calendarLegendWindowCanSettle(
+            isPinchActive: isPinchActive,
+            isScrollInteracting: isScrollInteracting,
+            draggingEventID: draggingEventID
+        )
+        let next = calendarSettledLegendWindow(previous: window, live: live, canSettle: canSettle)
+        guard next != window else { return false }
+        window = next
+        return true
+    }
+
+    /// The window to draw: the settled one, else the live one (built only
+    /// when needed) before anything has settled.
+    func window(orLive live: @autoclosure () -> CalendarLegendWindow) -> CalendarLegendWindow {
+        window ?? live()
+    }
+}
+
+// MARK: - The now-legend (gh#285 S2, round 2)
+
+/// The settled window as the now-legend reads it: the instants its columns
+/// cover, and whether the page is a single day.
+nonisolated struct CalendarNowLegendWindow: Equatable {
+    let interval: DateInterval
+    let isSingleDay: Bool
+
+    init(window: CalendarLegendWindow) {
+        interval = window.interval
+        isSingleDay = window.isSingleDay
+    }
+
+    /// A single-day page drawn for `day` alone.
+    init(day: DayClock) {
+        interval = DateInterval(start: day.start, end: day.end)
+        isSingleDay = true
+    }
+
+    /// Whether `now` falls on one of the window's days (half-open at the end).
+    func contains(_ now: Date) -> Bool {
+        now >= interval.start && now < interval.end
+    }
+}
+
+/// Whether the axis shows the now-legend. A single-day page shows it only
+/// while now is on that page's day, as before. A multi-day window shows it
+/// whether or not today is one of its columns, as the timeline always has;
+/// with today outside the window the legend reads now's wall time on the
+/// axis (`calendarNowLegendPlacement`).
+nonisolated func calendarNowLegendIsShown(now: Date, window: CalendarNowLegendWindow) -> Bool {
+    !window.isSingleDay || window.contains(now)
+}
+
+/// Where the now-legend sits: the instant it marks and the day clock that
+/// instant is positioned on.
+nonisolated struct CalendarNowLegendPlacement: Equatable {
+    let instant: Date
+    let clock: DayClock
+}
+
+/// The now-legend's placement for both axis render paths (gh#80: every
+/// consumer derives from this one optional); nil when the legend is not
+/// shown. While today is one of the window's days the legend sits at now
+/// on today's own clock, level with the now-line in today's column. When
+/// today is outside the window there is no now-line, and the legend sits
+/// where the axis reads now's wall time: that hour, minute and second on
+/// the axis day — the first pass of a wall time the day visits twice, the
+/// first instant after a jump for one it skips, the resolver's own rules.
+/// On a plain axis day that is the same elapsed time since the day's
+/// start as on today, so nothing moves there.
+nonisolated func calendarNowLegendPlacement(
+    now: Date,
+    window: CalendarNowLegendWindow,
+    axisClock: DayClock,
+    zoneClock: CalendarZoneClock
+) -> CalendarNowLegendPlacement? {
+    guard calendarNowLegendIsShown(now: now, window: window) else { return nil }
+    if window.contains(now) {
+        let clock = axisClock.contains(now) ? axisClock : zoneClock.day(containing: now)
+        return CalendarNowLegendPlacement(instant: now, clock: clock)
+    }
+    let calendar = zoneClock.calendar
+    let wall = calendar.dateComponents([.hour, .minute, .second], from: now)
+    let instant = CalendarWallTime.instant(
+        hour: wall.hour ?? 0,
+        minute: wall.minute ?? 0,
+        second: wall.second ?? 0,
+        on: axisClock.start,
+        keepingOffsetOf: nil,
+        calendar: calendar
+    ) ?? axisClock.start
+    return CalendarNowLegendPlacement(instant: instant, clock: axisClock)
 }
 
 // MARK: - Day length mode (gh#285 S1.5)
@@ -369,4 +477,64 @@ nonisolated func calendarColumnHourHeight(_ hourHeight: CGFloat, clock: DayClock
 /// `actual`, a standard day always in `normalized`.
 nonisolated func calendarTimelineCanvasLength(longestInReach: TimeInterval, mode: DayLengthMode) -> TimeInterval {
     mode == .normalized ? DayClock.standardLength : longestInReach
+}
+
+/// What the pager derives from the settled window, the selected day and the
+/// mode on every pass: the day the fixed axis is drawn for and at what hour
+/// height, the window the now-legend reads, the day the scroll content is
+/// sized for, and each column's hour height and length. The decisions live
+/// here, where they can be tested; the pager builds this once per read and
+/// only forwards its fields.
+nonisolated struct CalendarTimelineGeometry: Equatable {
+    /// The settled legend window.
+    let window: CalendarLegendWindow
+    /// The selected day: what the canvas is anchored on.
+    let selectedDayClock: DayClock
+    /// The longest day the page holds, if it holds one longer than the
+    /// selected day (the actual mode's canvas).
+    let longestInReach: TimeInterval?
+    /// The timeline's own hour height.
+    let hourHeight: CGFloat
+    let mode: DayLengthMode
+
+    /// The day the fixed axis is drawn for: the leftmost column of the
+    /// settled window (the selected day in single-day mode).
+    var axisClock: DayClock { window.axisClock }
+
+    /// The hour height the fixed axis is drawn with: its day's column
+    /// hour height, so a scaled special day's rows line up with its column.
+    var axisHourHeight: CGFloat { columnHourHeight(for: axisClock) }
+
+    var nowLegendWindow: CalendarNowLegendWindow { CalendarNowLegendWindow(window: window) }
+
+    /// The day the scroll content is sized for: the selected day's start,
+    /// stretched to the longest day in reach when the page holds a longer
+    /// one, so a column never has less room than it needs and a shorter
+    /// day's tail is drawn as not this day; a standard day in `normalized`.
+    var canvasClock: DayClock {
+        let length: TimeInterval
+        switch mode {
+        case .actual: length = max(selectedDayClock.length, longestInReach ?? 0)
+        case .normalized: length = DayClock.standardLength
+        }
+        guard abs(length - selectedDayClock.length) > 1 else { return selectedDayClock }
+        return DayClock(
+            start: selectedDayClock.start,
+            end: selectedDayClock.start.addingTimeInterval(length),
+            transition: nil,
+            offsetChange: 0
+        )
+    }
+
+    /// The hour height a column of `clock` is drawn with.
+    func columnHourHeight(for clock: DayClock) -> CGFloat {
+        calendarColumnHourHeight(hourHeight, clock: clock, mode: mode)
+    }
+
+    /// What a column of `clock` is sized for: the canvas in the actual mode
+    /// (a shorter day draws its tail as not this day), itself in the
+    /// normalized mode (every column fills the canvas).
+    func columnCanvasLength(for clock: DayClock) -> TimeInterval {
+        mode == .normalized ? clock.length : canvasClock.length
+    }
 }

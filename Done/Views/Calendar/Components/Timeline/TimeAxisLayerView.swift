@@ -43,9 +43,9 @@ struct TimeAxisLayerHost: UIViewRepresentable {
     var editMappingPresentation: TimelineAxisMarkerPresentation? = nil
     var leadingFadeProgress: CGFloat = 0
     var trailingFadeProgress: CGFloat = 0
-    /// The instants the now-legend shows for: the axis day on a single-day
-    /// page, the settled window in multi-day (gh#285 S2).
-    let nowLegendWindow: DateInterval
+    /// The settled window as the now-legend reads it (gh#285 S2): the axis
+    /// day alone on a single-day page.
+    let nowLegendWindow: CalendarNowLegendWindow
 
     func makeUIView(context: Context) -> TimeAxisLayerView {
         let view = TimeAxisLayerView()
@@ -94,7 +94,7 @@ final class TimeAxisLayerView: UIView {
         var editMappingPresentation: TimelineAxisMarkerPresentation?
         var leadingFadeProgress: CGFloat
         var trailingFadeProgress: CGFloat
-        var nowLegendWindow: DateInterval
+        var nowLegendWindow: CalendarNowLegendWindow
     }
     private var inputs: Inputs?
     // The labels the pool was last built for, so a clock change can tell
@@ -142,6 +142,19 @@ final class TimeAxisLayerView: UIView {
         }
         return result
     }
+
+    /// TEST-ONLY: the now-legend as last laid out — whether it is shown
+    /// (the alpha it is fading to), its frame and its text.
+    func debugNowLegend() -> (isVisible: Bool, frame: CGRect, text: String) {
+        (nowLegendVisible, nowLegendLabel.frame, nowLegendLabel.text ?? "")
+    }
+
+    /// TEST-ONLY: the 1-Hz tick's work for a chosen `now`, so a test can
+    /// read the legend for an instant of its choosing.
+    func debugRefreshNowDependentState(now: Date) {
+        guard let inputs else { return }
+        refreshNowDependentState(inputs: inputs, now: now)
+    }
     #endif
 
     // Hour labels live in this container so the band-fade mask (#55
@@ -155,10 +168,10 @@ final class TimeAxisLayerView: UIView {
 
     // Now-time legend (mirrors the SwiftUI Text inside the
     // `TimelineView(.periodic(from: .now, by: 1))` block). Rendered as a
-    // single UILabel positioned at the current wall-clock time's Y via
-    // the shared `calendarTimelineNowLegendY` (gh#80); visible only when
-    // the page gate is on (multi-day OR this page IS today) AND the
-    // now-pointer lies inside the visible hour window.
+    // single UILabel positioned through the shared
+    // `calendarNowLegendPlacement` + `calendarTimelineNowLegendY` (gh#80);
+    // visible only when the page gate is on (multi-day OR this page IS
+    // today) AND the now-pointer lies inside the visible hour window.
     private let nowLegendLabel: UILabel = {
         let label = UILabel()
         // Equivalent of SwiftUI `.font(.system(size: 9, weight: .bold).monospacedDigit())`.
@@ -265,9 +278,21 @@ final class TimeAxisLayerView: UIView {
 
     private func refreshNowDependentState() {
         guard let inputs else { return }
-        let now = Date()
-        let legendVisible = updateNowLegend(inputs: inputs, now: now)
-        updateHourLabelOpacities(inputs: inputs, now: now, legendVisible: legendVisible)
+        refreshNowDependentState(inputs: inputs, now: Date())
+    }
+
+    /// Everything that follows `now`: the legend's placement (gh#80: the
+    /// one optional both the legend and the hour-label yield derive from),
+    /// the legend itself, and the colliding hour label's opacity.
+    private func refreshNowDependentState(inputs: Inputs, now: Date) {
+        let placement = calendarNowLegendPlacement(
+            now: now,
+            window: inputs.nowLegendWindow,
+            axisClock: inputs.clock,
+            zoneClock: inputs.zoneClock
+        )
+        let legendVisible = updateNowLegend(inputs: inputs, now: now, placement: placement)
+        updateHourLabelOpacities(inputs: inputs, placement: placement, legendVisible: legendVisible)
     }
 
     private static let disabledActions: [String: CAAction] = [
@@ -310,7 +335,7 @@ final class TimeAxisLayerView: UIView {
         editMappingPresentation: TimelineAxisMarkerPresentation?,
         leadingFadeProgress: CGFloat,
         trailingFadeProgress: CGFloat,
-        nowLegendWindow: DateInterval
+        nowLegendWindow: CalendarNowLegendWindow
     ) {
         let next = Inputs(
             clock: clock,
@@ -382,9 +407,7 @@ final class TimeAxisLayerView: UIView {
             }
         }
         layoutHourLabels(inputs: next)
-        let now = Date()
-        let legendVisible = updateNowLegend(inputs: next, now: now)
-        updateHourLabelOpacities(inputs: next, now: now, legendVisible: legendVisible)
+        refreshNowDependentState(inputs: next, now: Date())
         updateAxisMarkers(inputs: next)
         updateHourLabelMask(inputs: next)
     }
@@ -537,11 +560,10 @@ final class TimeAxisLayerView: UIView {
     /// Returns whether the legend is visible this pass, so the hour-label
     /// collision yield can key off the SAME predicate (gh#80: a culled
     /// legend must not dim any hour label).
-    private func updateNowLegend(inputs: Inputs, now: Date) -> Bool {
-        // The legend shows only while now is inside the window the axis is
-        // drawn for: the page's day, or the settled multi-day window
-        // (gh#285 S2; parity with the SwiftUI gate).
-        let showsCurrentTime = calendarNowLegendIsShown(now: now, window: inputs.nowLegendWindow)
+    private func updateNowLegend(inputs: Inputs, now: Date, placement: CalendarNowLegendPlacement?) -> Bool {
+        // `placement` is nil when the page gate is off: a single-day page
+        // that is not today (gh#285 S2; parity with the SwiftUI gate). A
+        // multi-day window shows the legend whether or not today is in it.
         nowLegendLabel.text = Self.currentTimeText(for: now)
         nowLegendLabel.textColor = Self.currentTimeIndicatorColor()
         let labelHeight = calendarTimelineNowLegendLabelHeight
@@ -549,19 +571,16 @@ final class TimeAxisLayerView: UIView {
         // nil = culled, either because the page gate above is off OR
         // because the now-pointer falls outside the visible hour window
         // (never edge-pinned into the axis frame).
-        // The legend sits at now's elapsed time in now's own day: the axis
-        // day when now is in it, else (multi-day) the day now is in.
-        let nowClock = inputs.clock.contains(now) ? inputs.clock : inputs.zoneClock.day(containing: now)
-        let legendY: CGFloat? = showsCurrentTime
-            ? calendarTimelineNowLegendY(
-                for: now,
-                clock: nowClock,
+        let legendY: CGFloat? = placement.flatMap { placement in
+            calendarTimelineNowLegendY(
+                for: placement.instant,
+                clock: placement.clock,
                 headerHeight: inputs.headerHeight,
                 hourHeight: inputs.hourHeight,
                 leadingExtendedHours: inputs.leadingExtendedHours,
                 trailingExtendedHours: inputs.trailingExtendedHours
             )
-            : nil
+        }
         if let legendY {
             let trailingPadding: CGFloat = 2
             let fitSize = nowLegendLabel.sizeThatFits(
@@ -602,11 +621,10 @@ final class TimeAxisLayerView: UIView {
     /// they overlap within `collisionThresholdPoints`. Driven by the same
     /// 1-Hz tick + a crossfade animation so the page-switch transition
     /// blends back in step. Mirrors `TimeAxisLabels.hourLabelOpacity`.
-    private func updateHourLabelOpacities(inputs: Inputs, now: Date, legendVisible: Bool) {
+    private func updateHourLabelOpacities(inputs: Inputs, placement: CalendarNowLegendPlacement?, legendVisible: Bool) {
         // The same elapsed measure the slots are laid out in, against the
         // day the legend was positioned on.
-        let nowClock = inputs.clock.contains(now) ? inputs.clock : inputs.zoneClock.day(containing: now)
-        let nowTotalMinutes = calendarTimelineElapsedMinutes(of: now, clock: nowClock)
+        let nowTotalMinutes = placement.map { calendarTimelineElapsedMinutes(of: $0.instant, clock: $0.clock) } ?? 0
         for (poolIndex, slotIndex) in hourLabelSlotIndices.enumerated() {
             let label = hourLabels[poolIndex]
             let totalMinutes = -inputs.leadingExtendedHours * 60

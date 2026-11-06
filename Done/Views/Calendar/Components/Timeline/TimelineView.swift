@@ -1395,11 +1395,11 @@ struct TimelinePagerView: View {
     }
     /// The window the legends are drawn for (gh#285 S2): the fixed axis
     /// shows its leftmost column's clock, a later column that starts a
-    /// group draws its own, and the now-legend shows only while today is in
-    /// it. Taken when paging rests with no pinch or drag, and kept through
-    /// the next swipe, so nothing regroups under a moving finger.
+    /// group draws its own, and the now-legend reads it to place itself.
+    /// Taken when paging rests with no pinch or drag, and kept through the
+    /// next swipe, so nothing regroups under a moving finger.
     private var legendWindow: CalendarLegendWindow {
-        settledLegendWindow ?? liveLegendWindow()
+        legendWindowKeeper.window(orLive: liveLegendWindow())
     }
     private func liveLegendWindow() -> CalendarLegendWindow {
         let leading = calendarLeadingDayOffsetFromCentered(
@@ -1414,25 +1414,26 @@ struct TimelinePagerView: View {
             zoneClock: zoneClock
         )
     }
+    /// Hands the keeper the live window and the gesture state; the keeper
+    /// decides whether the legends take it. The state is written only when
+    /// the window changed.
     private func reconcileLegendWindow() {
-        let canSettle = calendarLegendWindowCanSettle(
+        var keeper = legendWindowKeeper
+        let changed = keeper.reconcile(
+            live: liveLegendWindow(),
             isPinchActive: isRangePinchActive,
             isScrollInteracting: horizontalScrollIsInteracting,
             draggingEventID: dragState.draggingEventID
         )
-        let settled = calendarSettledLegendWindow(
-            previous: settledLegendWindow, live: liveLegendWindow(), canSettle: canSettle
+        guard changed, let settled = keeper.window else { return }
+        legendWindowKeeper = keeper
+        calendarDebugLog(
+            "timeline.legendWindow.settled",
+            fields: [
+                "leadingOffset": "\(settled.leadingOffset)",
+                "groups": "\(settled.groups.groupCount)"
+            ]
         )
-        if settledLegendWindow != settled {
-            settledLegendWindow = settled
-            calendarDebugLog(
-                "timeline.legendWindow.settled",
-                fields: [
-                    "leadingOffset": "\(settled.leadingOffset)",
-                    "groups": "\(settled.groups.groupCount)"
-                ]
-            )
-        }
     }
     /// The legend the column at `offset` draws: its own clock, when it
     /// starts a group of the settled window that the fixed axis does not
@@ -1441,34 +1442,19 @@ struct TimelinePagerView: View {
         guard legendWindow.drawsLegend(atOffset: offset) else { return nil }
         return rangeMode == .week ? .narrow(zoneClock: zoneClock) : .standard(zoneClock: zoneClock)
     }
-    /// The day the scroll content is sized for: the selected day's start,
-    /// stretched to `canvasLength` when the page holds a longer one, so a
-    /// column never has less room than it needs and a shorter day's tail
-    /// is drawn as not this day.
-    private var canvasClock: DayClock {
-        let selected = selectedDayClock
-        let length: TimeInterval
-        switch dayLengthMode {
-        case .actual: length = max(selected.length, canvasLength ?? 0)
-        case .normalized: length = DayClock.standardLength
-        }
-        guard abs(length - selected.length) > 1 else { return selected }
-        return DayClock(
-            start: selected.start,
-            end: selected.start.addingTimeInterval(length),
-            transition: nil,
-            offsetChange: 0
+    /// The day geometry of this pass (gh#285 S1.5 / S2): the axis's day and
+    /// hour height, the canvas, and each column's hour height and length,
+    /// decided in one tested place from the settled window, the selected
+    /// day, the page's canvas length and the mode. The pager only forwards
+    /// its fields.
+    private var geometry: CalendarTimelineGeometry {
+        CalendarTimelineGeometry(
+            window: legendWindow,
+            selectedDayClock: selectedDayClock,
+            longestInReach: canvasLength,
+            hourHeight: hourHeight,
+            mode: dayLengthMode
         )
-    }
-    /// The hour height a column of `clock` is drawn with (gh#285 S1.5).
-    private func columnHourHeight(for clock: DayClock) -> CGFloat {
-        calendarColumnHourHeight(hourHeight, clock: clock, mode: dayLengthMode)
-    }
-    /// What a column of `clock` is sized for: the canvas in the actual mode
-    /// (a shorter day draws its tail as not this day), itself in the
-    /// normalized mode (every column fills the canvas).
-    private func columnCanvasLength(for clock: DayClock) -> TimeInterval {
-        dayLengthMode == .normalized ? clock.length : canvasClock.length
     }
 
     /// Dynamic min hourHeight for the live pinch gesture: the value at which
@@ -1486,7 +1472,7 @@ struct TimelinePagerView: View {
             // early-morning hours render behind the pinned pills at max pinch.
             allDayHeight: allDayHeight,
             safetyFloor: calendarTimelineHourHeightMin,
-            dayHours: CGFloat(canvasClock.length / 3600)
+            dayHours: CGFloat(geometry.canvasClock.length / 3600)
         )
     }
     // `editMappingState` / `editMappingPresentation` moved into
@@ -1691,7 +1677,7 @@ struct TimelinePagerView: View {
         max(
             1,
             calendarTimelineVisibleMinutes(
-                clock: canvasClock,
+                clock: geometry.canvasClock,
                 leadingExtendedHours: renderBoundaryExtensionHours.leading,
                 trailingExtendedHours: renderBoundaryExtensionHours.trailing
             ) / max(1, effectiveSlotMinutes) + 1
@@ -1750,7 +1736,7 @@ struct TimelinePagerView: View {
     @State private var horizontalScrollIsInteracting = false
     /// The window the legends were last settled on (gh#285 S2); nil until
     /// the first settle, when the live window stands in.
-    @State private var settledLegendWindow: CalendarLegendWindow? = nil
+    @State private var legendWindowKeeper = CalendarLegendWindowKeeper()
 
     /// Extension hours frozen at drag start, used for occurrences fetching.
     /// This keeps the EventBlock tree stable while the visible timeline expands.
@@ -2047,14 +2033,15 @@ struct TimelinePagerView: View {
         // `dragState.dragOffset` via `resolvedDragEditMapping`). The sub-view's
         // body still re-evaluates per drag frame — that compute can't be
         // elided, only relocated — but the parent's no longer does.
+        let geometry = geometry
         TimelineAxisDragOverlay(
             useCALayerAxisMarkers: useCALayerAxisMarkers,
             allDayHeight: effectiveAllDayHeight,
             timelineHeight: timelineHeight,
-            clock: legendWindow.axisClock,
+            clock: geometry.axisClock,
             zoneClock: zoneClock,
             headerHeight: headerHeight,
-            hourHeight: columnHourHeight(for: legendWindow.axisClock),
+            hourHeight: geometry.axisHourHeight,
             effectiveSlotMinutes: effectiveSlotMinutes,
             leadingExtendedHours: renderBoundaryExtensionHours.leading,
             trailingExtendedHours: renderBoundaryExtensionHours.trailing,
@@ -2063,7 +2050,7 @@ struct TimelinePagerView: View {
             mode: mode,
             leadingFadeProgress: leadingFadeProgress,
             trailingFadeProgress: trailingFadeProgress,
-            nowLegendWindow: legendWindow.interval,
+            nowLegendWindow: geometry.nowLegendWindow,
             dragState: dragState,
             resolvedCreationEditMapping: resolvedCreationEditMapping,
             resolvedFocusedEditMapping: resolvedFocusedEditMapping,
@@ -3030,14 +3017,15 @@ struct TimelinePagerView: View {
         // Full per-event visual fidelity + grid / chrome, pinch repaint, and
         // native UIKit gestures (move / resize / drag-to-create / edge-auto-
         // scroll / boundary-paging / absorption / tap / focus).
+        let geometry = geometry
         CalendarDayLayerView(
             date: date,
             dayClock: dayClock,
-            canvasLength: columnCanvasLength(for: dayClock),
+            canvasLength: geometry.columnCanvasLength(for: dayClock),
             occurrenceSource: dayOccurrenceSource,
             contentWidth: dayWidth,
             headerHeight: headerHeight,
-            hourHeight: columnHourHeight(for: dayClock),
+            hourHeight: geometry.columnHourHeight(for: dayClock),
             eventHorizontalInset: eventHorizontalInset,
             legend: columnLegend(forOffset: offset),
             leadingExtendedHours: renderBoundaryExtensionHours.leading,
@@ -3092,7 +3080,7 @@ struct TimelinePagerView: View {
             ) ? onVisibleTimelineFrameChange : nil
         )
         .frame(width: dayWidth, height: timelineHeight, alignment: .top)
-        .mask { extensionFadeMask(clock: dayClock, hourHeight: columnHourHeight(for: dayClock)) }
+        .mask { extensionFadeMask(clock: dayClock, hourHeight: geometry.columnHourHeight(for: dayClock)) }
     }
 
     /// Alpha mask for the follow-event band fade: header + base 24h fully
@@ -3307,8 +3295,8 @@ private struct TimelineAxisDragOverlay: View {
     let mode: PageMode
     let leadingFadeProgress: CGFloat
     let trailingFadeProgress: CGFloat
-    /// The instants the now-legend shows for (gh#285 S2).
-    let nowLegendWindow: DateInterval
+    /// The settled window as the now-legend reads it (gh#285 S2).
+    let nowLegendWindow: CalendarNowLegendWindow
 
     // Mapping inputs. `dragState` is read for `dragOffset` etc. inside this
     // sub-view's body — that's the whole point of the extraction. The
@@ -3451,14 +3439,14 @@ struct TimeAxisLabels: View {
     /// legend stay fully opaque. Leading/trailing independent.
     var leadingFadeProgress: CGFloat = 0
     var trailingFadeProgress: CGFloat = 0
-    /// The instants the current-time legend Text (and the hour-label
-    /// collision-hide) show for: the displayed day on a single-day page —
-    /// on non-today pages the now-line itself is already suppressed in the
+    /// The window the current-time legend Text (and the hour-label
+    /// collision-hide) read: the displayed day on a single-day page — on
+    /// non-today pages the now-line itself is already suppressed in the
     /// day column (CALayer `showsNow` check), and a stray "now" Text on
     /// yesterday / tomorrow would hide an hour label for nothing — and the
     /// settled window in multi-day (gh#285 S2). Nil means the axis's own
     /// day.
-    var nowLegendWindow: DateInterval? = nil
+    var nowLegendWindow: CalendarNowLegendWindow? = nil
 
     private var slotHeight: CGFloat {
         hourHeight * CGFloat(slotMinutes) / 60
@@ -3478,13 +3466,17 @@ struct TimeAxisLabels: View {
     var body: some View {
         SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
             let now = context.date
-            // The now-legend (and the colliding hour label's yield) only
-            // while now is inside the window the axis is drawn for: this
-            // page's day, or the settled multi-day window (gh#285 S2).
-            // Re-evaluated each tick so a midnight crossover flips the gate
-            // naturally.
-            let showsCurrentTime = calendarNowLegendIsShown(
-                now: now, window: nowLegendWindow ?? DateInterval(start: clock.start, end: clock.end)
+            // The now-legend (and the colliding hour label's yield): on a
+            // single-day page only while now is on this page's day; in a
+            // multi-day window always, placed on today's clock while today
+            // is in the window, else where the axis reads now's wall time
+            // (gh#285 S2). Re-evaluated each tick so a midnight crossover
+            // flips the gate naturally.
+            let placement = calendarNowLegendPlacement(
+                now: now,
+                window: nowLegendWindow ?? CalendarNowLegendWindow(day: clock),
+                axisClock: clock,
+                zoneClock: zoneClock
             )
             // Single-source legend position (gh#80): nil = culled, either
             // because the page gate above is off OR because the now-pointer
@@ -3492,19 +3484,16 @@ struct TimeAxisLabels: View {
             // (legend Text, hour-label collision yield, crossfade trigger)
             // derives visibility from this one optional — no second
             // hand-derived condition.
-            // The legend sits at now's elapsed time in now's own day: the
-            // axis day when now is in it, else (multi-day) the day now is in.
-            let nowClock = clock.contains(now) ? clock : zoneClock.day(containing: now)
-            let legendY: CGFloat? = showsCurrentTime
-                ? calendarTimelineNowLegendY(
-                    for: now,
-                    clock: nowClock,
+            let legendY: CGFloat? = placement.flatMap { placement in
+                calendarTimelineNowLegendY(
+                    for: placement.instant,
+                    clock: placement.clock,
                     headerHeight: headerHeight,
                     hourHeight: hourHeight,
                     leadingExtendedHours: leadingExtendedHours,
                     trailingExtendedHours: trailingExtendedHours
                 )
-                : nil
+            }
             // gh#219 slice E: these are loop-invariant across the hour-slot
             // ForEach (they depend only on `now` and the time-format setting,
             // both fixed for this 1Hz body pass), so read/compute them ONCE
@@ -3512,7 +3501,7 @@ struct TimeAxisLabels: View {
             let is24 = AppTimeFormat.current.is24
             // The same elapsed measure the slots are laid out in, against
             // the day the legend was positioned on.
-            let nowTotalMinutes = calendarTimelineElapsedMinutes(of: now, clock: nowClock)
+            let nowTotalMinutes = placement.map { calendarTimelineElapsedMinutes(of: $0.instant, clock: $0.clock) } ?? 0
             let showsZones = hourHeight >= TimeAxisLayerView.zoneSublabelMinimumHourHeight
             ZStack(alignment: .topTrailing) {
                 VStack(spacing: 0) {
