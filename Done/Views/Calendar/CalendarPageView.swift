@@ -1868,6 +1868,10 @@ struct CalendarPageView: View {
         }
         .onChange(of: calendarState.rangeMode) { _, newValue in
             calendarState.persistRangeMode()
+            // The new window and its neighbours may hold a longer day than
+            // the old reach did; the pager is rebuilt for the new mode, so
+            // the held canvas takes the wanted length at once (gh#285).
+            reconcileTimelineCanvasLength(afterRebuild: true)
             if boundaryExtensionShouldClearOnRangeModeChange(
                 newMode: newValue,
                 currentExtensionState: timelineBoundaryExtensionState
@@ -2204,8 +2208,11 @@ private extension CalendarPageView {
     /// Grows the held canvas length at once when a longer day comes into
     /// reach; shrinks it only once the scroll is at rest, nothing is being
     /// dragged, and the tail that would be cut is below the screen — so the
-    /// offset never moves because a day changed length (gh#285).
-    func reconcileTimelineCanvasLength() {
+    /// offset never moves because a day changed length (gh#285). After a
+    /// rebuild of the pager — a range-mode or day-length change — there is
+    /// no offset to keep and the new window may hold a longer day, so the
+    /// held length takes the wanted one at once either way.
+    func reconcileTimelineCanvasLength(afterRebuild: Bool = false) {
         let wanted = wantedTimelineCanvasLength
         if wanted > timelineCanvasLength {
             timelineCanvasLength = wanted
@@ -2213,6 +2220,14 @@ private extension CalendarPageView {
             return
         }
         guard wanted < timelineCanvasLength else { return }
+        if afterRebuild {
+            timelineCanvasLength = wanted
+            calendarDebugLog(
+                "canvas.length.shrink",
+                fields: ["hours": String(format: "%.2f", wanted / 3600), "afterRebuild": "true"]
+            )
+            return
+        }
         guard !isVerticallyScrolling, timelineDragState.draggingEventID == nil else { return }
         let selected = selectedDayClock
         let keptClock = DayClock(
@@ -4225,6 +4240,11 @@ private extension CalendarPageView {
         .onChange(of: timelineDragState.dragOffset.y) { _, _ in
             refreshAbandonedExtension(topOverlayInset: lastTimelineTopOverlayInset)
         }
+        // The pager is rebuilt for a new day-length mode; the held canvas
+        // takes the mode's wanted length with it (gh#285 S1.5).
+        .onChange(of: dayLengthModeRaw) { _, _ in
+            reconcileTimelineCanvasLength(afterRebuild: true)
+        }
         .mask {
             TimelineMaskView(
                 top: metrics.topMaskConfig,
@@ -4481,6 +4501,9 @@ private extension CalendarPageView {
         }
         .onChange(of: timelineDragState.dragOffset.y) { _, _ in
             refreshAbandonedExtension(topOverlayInset: lastTimelineTopOverlayInset)
+        }
+        .onChange(of: dayLengthModeRaw) { _, _ in
+            reconcileTimelineCanvasLength(afterRebuild: true)
         }
         .mask {
             TimelineMaskView(
