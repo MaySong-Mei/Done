@@ -49,9 +49,12 @@ final class CalendarDayLengthModeTests: XCTestCase {
         XCTAssertEqual(DayLengthMode.current, .normalized)
     }
 
-    func testTheKeyIsResetWithTheRestAndSyncedWithTheCalendarLook() {
+    func testTheKeyIsResetWithTheRestAndStaysLocalUntilTheSyncProjectionMayGrow() {
         XCTAssertTrue(AppSettingsKeys.resettableUserDefaultsKeys.contains(AppSettingsKeys.calendarDayLengthMode))
-        XCTAssertTrue(SyncedSettings.allKeys.contains(AppSettingsKeys.calendarDayLengthMode))
+        // The synced field set is pinned by `SyncProjectionSnapshotTests`
+        // until the mixed-version write-back guard ships (survey L3); the
+        // mode is a per-device setting until then.
+        XCTAssertFalse(SyncedSettings.allKeys.contains(AppSettingsKeys.calendarDayLengthMode))
     }
 
     // MARK: Column height per mode (A8)

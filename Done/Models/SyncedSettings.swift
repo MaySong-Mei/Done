@@ -88,7 +88,10 @@ enum SyncedSettings {
         AppSettingsKeys.calendarAdjacentEventSnapEnabled,
         AppSettingsKeys.calendarEventFontSize,
         AppSettingsKeys.calendarEventShowTimeBelowTitle,
-        AppSettingsKeys.calendarDayLengthMode,
+        // `calendarDayLengthMode` (gh#285) intentionally excluded for now:
+        // a new synced column changes what an older build writes back
+        // (`SyncProjectionSnapshotTests`, survey L3). Add it once L3's
+        // mechanism ships or with the user's explicit waiver.
         // `nearFutureHorizonDays` intentionally excluded — it's part of
         // the experimental calendar/todo unification feature (issue #38
         // tracks the related sync gap). Add back once the feature ships.
