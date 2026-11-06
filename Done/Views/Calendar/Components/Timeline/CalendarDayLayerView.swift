@@ -29,6 +29,43 @@
 
 import SwiftUI
 
+// MARK: - In-column hour legend (gh#285 S2)
+
+/// An hour legend drawn inside a column that starts a legend group the
+/// fixed axis does not serve: the column's own clock, read in a leading
+/// inset of `width` points that the event area gives up. The narrow form
+/// (the week view) shows the hour number alone in a smaller type.
+struct CalendarColumnLegend: Equatable {
+    /// The zone, for the hour of each slot's instant and for the days the
+    /// band slots belong to.
+    let zoneClock: CalendarZoneClock
+    let width: CGFloat
+    let isNarrow: Bool
+
+    /// The inset a three-day column gives its legend: the fixed axis's width.
+    static let standardWidth: CGFloat = 26
+    /// The inset a week column gives its legend.
+    static let narrowWidth: CGFloat = 14
+    /// Between a label's trailing edge and the event area, as on the axis.
+    static let trailingPadding: CGFloat = 2
+
+    static func standard(zoneClock: CalendarZoneClock) -> CalendarColumnLegend {
+        CalendarColumnLegend(zoneClock: zoneClock, width: standardWidth, isNarrow: false)
+    }
+
+    static func narrow(zoneClock: CalendarZoneClock) -> CalendarColumnLegend {
+        CalendarColumnLegend(zoneClock: zoneClock, width: narrowWidth, isNarrow: true)
+    }
+
+    var hourFontSize: CGFloat { isNarrow ? 7 : 9 }
+    var zoneFontSize: CGFloat { isNarrow ? 5 : 7 }
+
+    /// The text a row shows: the axis's text, or the hour number alone.
+    func text(of label: CalendarAxisHourLabel) -> String {
+        isNarrow ? label.narrowText : label.text
+    }
+}
+
 // MARK: - UIViewRepresentable boundary
 
 /// Renders one day column's events at full `EventBlock` visual fidelity via a
@@ -64,6 +101,9 @@ struct CalendarDayLayerView: UIViewRepresentable {
     let hourHeight: CGFloat
     /// L/R inset of the event area inside a day column (8 single-day, 4 multi-day).
     let eventHorizontalInset: CGFloat
+    /// The hour legend this column draws in its leading inset, when it
+    /// starts a legend group the fixed axis does not serve (gh#285 S2).
+    var legend: CalendarColumnLegend? = nil
     /// Leading / trailing boundary-extension hours (0 in the static S1 case).
     let leadingExtendedHours: Int
     let trailingExtendedHours: Int
@@ -217,6 +257,7 @@ struct CalendarDayLayerView: UIViewRepresentable {
             headerHeight: headerHeight,
             hourHeight: hourHeight,
             eventHorizontalInset: eventHorizontalInset,
+            legend: legend,
             leadingExtendedHours: leadingExtendedHours,
             trailingExtendedHours: trailingExtendedHours,
             drawableLeadingHours: drawableLeadingHours,
@@ -283,8 +324,20 @@ final class DayLayerHostView: UIView {
         var headerHeight: CGFloat
         var hourHeight: CGFloat
         var eventHorizontalInset: CGFloat
+        /// The hour legend drawn in this column's leading inset, when it
+        /// starts a legend group the fixed axis does not serve (gh#285 S2).
+        /// The event area gives up its width; the column, the paging step
+        /// and the vertical geometry do not change.
+        var legend: CalendarColumnLegend? = nil
         var leadingExtendedHours: Int
         var trailingExtendedHours: Int
+        /// Where the event area starts: past the column's inset and its
+        /// legend. The three render paths and the chrome all read this.
+        var eventAreaLeadingInset: CGFloat { eventHorizontalInset + (legend?.width ?? 0) }
+        /// The event area's width: the column less both insets and the legend.
+        var eventAreaWidth: CGFloat {
+            max(0, contentWidth - eventHorizontalInset * 2 - (legend?.width ?? 0))
+        }
         /// Spec 07: the REAL band window to DRAW grid lines / axis labels for,
         /// kept separate from the 12/12 COORDINATE hours above so the band
         /// regions render EMPTY when closed (positions still use the coordinate
@@ -365,6 +418,7 @@ final class DayLayerHostView: UIView {
             let occurrenceStamps: [String]   // per-occurrence range + identity stamp
             let contentWidth: CGFloat
             let eventHorizontalInset: CGFloat
+            let legend: CalendarColumnLegend?
             let leadingExtendedHours: Int
             let trailingExtendedHours: Int
             // NOTE: `drawableLeadingHours`/`drawableTrailingHours` deliberately
@@ -408,6 +462,7 @@ final class DayLayerHostView: UIView {
                 },
                 contentWidth: contentWidth,
                 eventHorizontalInset: eventHorizontalInset,
+                legend: legend,
                 leadingExtendedHours: leadingExtendedHours,
                 trailingExtendedHours: trailingExtendedHours,
                 showEventText: showEventText,
@@ -1522,6 +1577,9 @@ final class DayLayerHostView: UIView {
         /// The stretch below this day's window that a longer day in reach
         /// gives the content: not this day (gh#285). Behind the grid.
         let notThisDay = CALayer()                  // zPosition -3
+        /// The in-column hour legend's labels (gh#285 S2), in the leading
+        /// inset beside the grid; fades in and out with the legend.
+        let legend = CALayer()                      // zPosition -1
         /// Now-line line + dot (today only). Above events.
         let nowLine = CALayer()                     // zPosition 100
         let nowDot = CAShapeLayer()                 // child of nowLine
@@ -1533,6 +1591,8 @@ final class DayLayerHostView: UIView {
             hourGrid.zPosition = -2
             halfHourGrid.zPosition = -2
             horizonLine.zPosition = -1
+            legend.zPosition = -1
+            legend.opacity = 0
             deadlineLines.zPosition = 99
             nowLine.zPosition = 100
 
@@ -1545,7 +1605,7 @@ final class DayLayerHostView: UIView {
             nowLine.addSublayer(nowDot)
             nowDot.fillColor = UIColor.clear.cgColor
 
-            for l in [futureTint, hourGrid, halfHourGrid, horizonLine, deadlineLines, nowLine, notThisDay] {
+            for l in [futureTint, hourGrid, halfHourGrid, horizonLine, deadlineLines, nowLine, notThisDay, legend] {
                 l.isHidden = true
             }
             // Render thin grid lines / now-line / dot at screen scale so they
@@ -1567,10 +1627,236 @@ final class DayLayerHostView: UIView {
         layer.addSublayer(c.hourGrid)
         layer.addSublayer(c.halfHourGrid)
         layer.addSublayer(c.horizonLine)
+        layer.addSublayer(c.legend)
         layer.addSublayer(c.deadlineLines)
         layer.addSublayer(c.nowLine)
         return c
     }()
+
+    // MARK: In-column hour legend (gh#285 S2)
+
+    /// How long an in-column legend takes to fade in or out, and the
+    /// chrome beside it to glide: the axis's own legend crossfade.
+    static let legendTransitionDuration: CFTimeInterval = 0.22
+
+    /// What the legend's label pool was last built for; the pool is rebuilt
+    /// only when one of these moves, not on every settle.
+    private struct LegendPoolKey: Equatable {
+        let legend: CalendarColumnLegend
+        let dayClock: DayClock
+        let slotMinutes: Int
+        let leadingExtendedHours: Int
+        let trailingExtendedHours: Int
+        let drawableLeadingHours: Int
+        let drawableTrailingHours: Int
+        let is24: Bool
+    }
+    private var legendPoolKey: LegendPoolKey?
+    private var legendRows: [(slotIndex: Int, label: CalendarAxisHourLabel)] = []
+    private var legendHourLayers: [CATextLayer] = []
+    /// One per row whose label carries a zone, in row order.
+    private var legendZoneLayers: [CATextLayer] = []
+    private var legendShown = false
+    /// The legend width the chrome was last laid out with; nil before the
+    /// first chrome pass.
+    private var lastLegendWidth: CGFloat?
+
+    /// The rows an in-column legend draws for `model`: the slots and texts
+    /// the fixed axis would draw for the column's own clock, through the
+    /// same function. Empty when the column draws no legend.
+    static func legendRows(model: Model, is24: Bool) -> [(slotIndex: Int, label: CalendarAxisHourLabel)] {
+        guard let legend = model.legend else { return [] }
+        let slotMinutes = model.frozenSlotMinutes ?? calendarLegendSlotMinutes(forHourHeight: model.hourHeight)
+        let totalMinutes = calendarTimelineVisibleMinutes(
+            clock: model.dayClock,
+            leadingExtendedHours: model.leadingExtendedHours,
+            trailingExtendedHours: model.trailingExtendedHours
+        )
+        let slotCount = max(1, totalMinutes / max(1, slotMinutes) + 1)
+        let drawTopMin = -model.drawableLeadingHours * 60
+        let drawBottomMin = calendarTimelineVisibleMinutes(
+            clock: model.dayClock,
+            trailingExtendedHours: model.drawableTrailingHours
+        )
+        var rows: [(slotIndex: Int, label: CalendarAxisHourLabel)] = []
+        for index in 0..<slotCount {
+            let slotMin = -model.leadingExtendedHours * 60 + index * slotMinutes
+            if slotMin < drawTopMin || slotMin > drawBottomMin { continue }
+            if let label = calendarTimelineAxisHourLabel(
+                slotMinute: slotMin, clock: model.dayClock, zoneClock: legend.zoneClock, is24: is24
+            ) {
+                rows.append((index, label))
+            }
+        }
+        return rows
+    }
+
+    private func makeLegendTextLayer() -> CATextLayer {
+        let text = CATextLayer()
+        text.contentsScale = UIScreen.main.scale
+        text.alignmentMode = .right
+        text.truncationMode = .none
+        text.isWrapped = false
+        chrome.legend.addSublayer(text)
+        return text
+    }
+
+    /// Draws the legend's labels in the leading inset, rebuilding the pool
+    /// only when its key moved; fades the legend in when it arrives on a
+    /// settle and out over its last rows when it goes.
+    private func renderLegend(model: Model, slotHeight: CGFloat, insetMoved: Bool) {
+        guard let legend = model.legend else {
+            if legendShown {
+                legendShown = false
+                setLegendOpacity(0, animated: insetMoved)
+            }
+            return
+        }
+        let is24 = AppTimeFormat.current.is24
+        let key = LegendPoolKey(
+            legend: legend,
+            dayClock: model.dayClock,
+            slotMinutes: model.frozenSlotMinutes ?? calendarLegendSlotMinutes(forHourHeight: model.hourHeight),
+            leadingExtendedHours: model.leadingExtendedHours,
+            trailingExtendedHours: model.trailingExtendedHours,
+            drawableLeadingHours: model.drawableLeadingHours,
+            drawableTrailingHours: model.drawableTrailingHours,
+            is24: is24
+        )
+        let hourFont = UIFont.systemFont(ofSize: legend.hourFontSize, weight: .semibold)
+        let zoneFont = UIFont.systemFont(ofSize: legend.zoneFontSize, weight: .semibold)
+        if key != legendPoolKey {
+            legendPoolKey = key
+            legendRows = Self.legendRows(model: model, is24: is24)
+            while legendHourLayers.count < legendRows.count { legendHourLayers.append(makeLegendTextLayer()) }
+            while legendHourLayers.count > legendRows.count { legendHourLayers.removeLast().removeFromSuperlayer() }
+            let zoneCount = legendRows.filter { $0.label.zoneAbbreviation != nil }.count
+            while legendZoneLayers.count < zoneCount { legendZoneLayers.append(makeLegendTextLayer()) }
+            while legendZoneLayers.count > zoneCount { legendZoneLayers.removeLast().removeFromSuperlayer() }
+            let color = UIColor.secondaryLabel.withAlphaComponent(0.6).cgColor
+            var zoneIndex = 0
+            for (poolIndex, row) in legendRows.enumerated() {
+                let text = legendHourLayers[poolIndex]
+                text.string = legend.text(of: row.label)
+                text.font = hourFont
+                text.fontSize = legend.hourFontSize
+                text.foregroundColor = color
+                if let zone = row.label.zoneAbbreviation {
+                    let zoneText = legendZoneLayers[zoneIndex]
+                    zoneIndex += 1
+                    zoneText.string = zone
+                    zoneText.font = zoneFont
+                    zoneText.fontSize = legend.zoneFontSize
+                    zoneText.foregroundColor = color
+                }
+            }
+        }
+        // Lay the rows out on every pass: the vertical scale may have moved.
+        // A label's top sits just above its hour line, as on the axis.
+        let rightEdge = max(0, model.eventAreaLeadingInset - CalendarColumnLegend.trailingPadding)
+        let hourLineHeight = ceil(hourFont.lineHeight)
+        let zoneLineHeight = ceil(zoneFont.lineHeight)
+        let showsZones = model.hourHeight >= TimeAxisLayerView.zoneSublabelMinimumHourHeight
+        var zoneIndex = 0
+        for (poolIndex, row) in legendRows.enumerated() {
+            let topY = model.headerHeight + CGFloat(row.slotIndex) * slotHeight - 2
+            legendHourLayers[poolIndex].frame = CGRect(x: 0, y: topY, width: rightEdge, height: hourLineHeight)
+            if row.label.zoneAbbreviation != nil, zoneIndex < legendZoneLayers.count {
+                let zoneText = legendZoneLayers[zoneIndex]
+                zoneIndex += 1
+                zoneText.isHidden = !showsZones
+                zoneText.frame = CGRect(
+                    x: 0, y: topY + hourLineHeight - 1, width: rightEdge, height: zoneLineHeight
+                )
+            }
+        }
+        chrome.legend.frame = bounds
+        if !legendShown {
+            legendShown = true
+            chrome.legend.isHidden = false
+            // A legend that arrives on a settle fades in; a column's first
+            // paint shows it at once like the rest of the chrome.
+            setLegendOpacity(1, animated: insetMoved)
+        }
+    }
+
+    private func setLegendOpacity(_ target: Float, animated: Bool) {
+        let layer = chrome.legend
+        let from = layer.presentation()?.opacity ?? layer.opacity
+        layer.removeAnimation(forKey: "legend.fade")
+        layer.opacity = target
+        guard animated, !calendarReduceMotionEnabled, abs(from - target) > 0.001 else { return }
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = from
+        fade.toValue = target
+        fade.duration = Self.legendTransitionDuration
+        fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        layer.add(fade, forKey: "legend.fade")
+    }
+
+    /// Sets a chrome layer's frame, gliding it from where it was when the
+    /// legend inset moved on this render (`carried`).
+    private func carry(_ layer: CALayer, toFrame frame: CGRect, when carried: Bool) {
+        let from = layer.presentation()?.frame ?? layer.frame
+        layer.removeAnimation(forKey: "legend.carry.position")
+        layer.removeAnimation(forKey: "legend.carry.bounds")
+        layer.frame = frame
+        guard carried, !calendarReduceMotionEnabled, from != frame else { return }
+        let position = CABasicAnimation(keyPath: "position")
+        position.fromValue = NSValue(cgPoint: CGPoint(x: from.midX, y: from.midY))
+        position.toValue = NSValue(cgPoint: CGPoint(x: frame.midX, y: frame.midY))
+        let size = CABasicAnimation(keyPath: "bounds.size")
+        size.fromValue = NSValue(cgSize: from.size)
+        size.toValue = NSValue(cgSize: frame.size)
+        for (animation, key) in [(position, "legend.carry.position"), (size, "legend.carry.bounds")] {
+            animation.duration = Self.legendTransitionDuration
+            animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            layer.add(animation, forKey: key)
+        }
+    }
+
+    /// Sets a shape layer's path, gliding it from the path it showed when the
+    /// legend inset moved on this render (`carried`).
+    private func carry(_ layer: CAShapeLayer, toPath path: CGPath, when carried: Bool) {
+        let from = layer.presentation()?.path ?? layer.path
+        layer.removeAnimation(forKey: "legend.carry.path")
+        layer.path = path
+        guard carried, !calendarReduceMotionEnabled, let from, from != path else { return }
+        let animation = CABasicAnimation(keyPath: "path")
+        animation.fromValue = from
+        animation.toValue = path
+        animation.duration = Self.legendTransitionDuration
+        animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        layer.add(animation, forKey: "legend.carry.path")
+    }
+
+    #if DEBUG
+    /// TEST-ONLY: the in-column legend as drawn — each row's slot, text and
+    /// zone with its frame, the layer's opacity target, and whether a fade
+    /// or a chrome glide is running.
+    func debugLegendState() -> (
+        rows: [(slotIndex: Int, text: String, zone: String?, frame: CGRect)],
+        opacity: Float, fading: Bool, gridGliding: Bool
+    ) {
+        let rows = legendRows.enumerated().map { index, row in
+            (row.slotIndex, legendHourLayers[index].string as? String ?? "", row.label.zoneAbbreviation,
+             legendHourLayers[index].frame)
+        }
+        return (
+            rows,
+            chrome.legend.opacity,
+            chrome.legend.animation(forKey: "legend.fade") != nil,
+            chrome.hourGrid.animation(forKey: "legend.carry.path") != nil
+        )
+    }
+
+    /// TEST-ONLY: the hour grid's left edge and width, as drawn.
+    func debugGridSpan() -> (x: CGFloat, width: CGFloat)? {
+        guard let path = chrome.hourGrid.path else { return nil }
+        let box = path.boundingBoxOfPath
+        return (box.minX, box.width)
+    }
+    #endif
 
     // MARK: Apply
 
@@ -1803,7 +2089,7 @@ final class DayLayerHostView: UIView {
         // to stack-peek a dominant host (full width + `coverRanges`) and the
         // live modes frozen to equal-split / held. `stackPeekStripWidthPt`
         // is a render-side constant for the host's text-region clamping.
-        let eventAreaWidth = max(0, model.contentWidth - model.eventHorizontalInset * 2)
+        let eventAreaWidth = model.eventAreaWidth
         let stackPeekStripWidthPt: CGFloat = 8
 
         // ── Live drag session + overlap mode (hoisted for the gh#181 memo) ──
@@ -2145,7 +2431,7 @@ final class DayLayerHostView: UIView {
                 for: occurrence,
                 slots: slotSource,
                 eventAreaWidth: eventAreaWidth,
-                inset: model.eventHorizontalInset
+                inset: model.eventAreaLeadingInset
             )
 
             let slot = slotSource[occurrence.id] ?? .default
@@ -2164,7 +2450,7 @@ final class DayLayerHostView: UIView {
             } else {
                 let overlapGap: CGFloat = slot.widthFraction < 1 ? 2 : 0
                 blockWidth = max(0, eventAreaWidth * slot.widthFraction - overlapGap)
-                blockX = model.eventHorizontalInset + eventAreaWidth * slot.xOffsetFraction
+                blockX = model.eventAreaLeadingInset + eventAreaWidth * slot.xOffsetFraction
             }
 
             // Vertical frame (depends on hourHeight) — shared with the cheap
@@ -3409,10 +3695,10 @@ final class DayLayerHostView: UIView {
         visibleRect: CGRect?,
         liveIDs: inout Set<String>
     ) -> RenderedEventFrame? {
-        let eventAreaWidth = max(0, model.contentWidth - model.eventHorizontalInset * 2)
+        let eventAreaWidth = model.eventAreaWidth
         let overlapGap: CGFloat = slot.widthFraction < 1 ? 2 : 0
         let blockWidth = max(0, eventAreaWidth * slot.widthFraction - overlapGap)
-        let blockX = model.eventHorizontalInset + eventAreaWidth * slot.xOffsetFraction
+        let blockX = model.eventAreaLeadingInset + eventAreaWidth * slot.xOffsetFraction
         let vf = verticalFrame(
             for: preview, model: model, contentHeight: contentHeight,
             visibleStart: visibleStart, visibleEnd: visibleEnd
@@ -4104,7 +4390,7 @@ final class DayLayerHostView: UIView {
             if handoff.frozen { draftHandoff = nil }
         }
 
-        let eventAreaWidth = max(0, model.contentWidth - model.eventHorizontalInset * 2)
+        let eventAreaWidth = model.eventAreaWidth
         let yStart = calendarTimelineYFraction(
             for: range.start,
             clock: model.dayClock,
@@ -4122,7 +4408,7 @@ final class DayLayerHostView: UIView {
         let slot = creationSlot ?? .default
         let overlapGap: CGFloat = slot.widthFraction < 1 ? 2 : 0
         let previewWidth = max(0, eventAreaWidth * slot.widthFraction - overlapGap)
-        let previewX = model.eventHorizontalInset + eventAreaWidth * slot.xOffsetFraction
+        let previewX = model.eventAreaLeadingInset + eventAreaWidth * slot.xOffsetFraction
         let rect = CGRect(
             x: previewX,
             y: yStart,
@@ -4290,10 +4576,10 @@ final class DayLayerHostView: UIView {
     /// slot for this column (chip then keeps its source width).
     func previewChipGeometryInWindow() -> (width: CGFloat, centerX: CGFloat)? {
         guard let model = currentModel, let slot = cachedPreviewSlot else { return nil }
-        let eventAreaWidth = max(0, model.contentWidth - model.eventHorizontalInset * 2)
+        let eventAreaWidth = model.eventAreaWidth
         let overlapGap: CGFloat = slot.widthFraction < 1 ? 2 : 0
         let width = max(0, eventAreaWidth * slot.widthFraction - overlapGap)
-        let xLocal = model.eventHorizontalInset + eventAreaWidth * slot.xOffsetFraction
+        let xLocal = model.eventAreaLeadingInset + eventAreaWidth * slot.xOffsetFraction
         let centerX = convert(CGPoint(x: xLocal + width / 2, y: 0), to: nil).x
         return (width, centerX)
     }
@@ -4322,7 +4608,7 @@ final class DayLayerHostView: UIView {
               let preview = dragPreviewOccurrence,
               let slot = cachedPreviewSlot,
               let interrupt = cachedInterrupt else { return nil }
-        let eventAreaWidth = max(0, model.contentWidth - model.eventHorizontalInset * 2)
+        let eventAreaWidth = model.eventAreaWidth
         let overlapGap: CGFloat = slot.widthFraction < 1 ? 2 : 0
         let width = max(0, eventAreaWidth * slot.widthFraction - overlapGap)
         let contentHeight = calendarTimelineContentHeight(
@@ -4677,8 +4963,13 @@ final class DayLayerHostView: UIView {
         contentHeight: CGFloat,
         visibleStart: Date
     ) {
-        let eventAreaWidth = max(0, model.contentWidth - model.eventHorizontalInset * 2)
-        let lineInsetX = model.eventHorizontalInset // == (contentWidth - lineWidth)/2
+        let eventAreaWidth = model.eventAreaWidth
+        let lineInsetX = model.eventAreaLeadingInset
+        // A legend that came or went on this render moved the event area
+        // sideways; the chrome glides to its new place as the blocks do.
+        let legendWidth = model.legend?.width ?? 0
+        let legendInsetMoved = lastLegendWidth.map { $0 != legendWidth } ?? false
+        lastLegendWidth = legendWidth
 
         // ── Grid (spec 03 §9, TimelineView.swift:4895-4926) ──────────────
         // Live-vs-frozen slot asymmetry during pinch (spec 03 §9):
@@ -4726,15 +5017,17 @@ final class DayLayerHostView: UIView {
                 hourPath.addRect(CGRect(x: lineInsetX, y: y, width: eventAreaWidth, height: 1))
             }
         }
+        let gridWasHidden = chrome.hourGrid.isHidden
         chrome.hourGrid.isHidden = false
         chrome.hourGrid.frame = bounds
-        chrome.hourGrid.path = hourPath
+        carry(chrome.hourGrid, toPath: hourPath, when: legendInsetMoved && !gridWasHidden)
         chrome.hourGrid.fillColor = gridColor.cgColor
 
         if isHalfHourGrid {
+            let wasHidden = chrome.halfHourGrid.isHidden
             chrome.halfHourGrid.isHidden = false
             chrome.halfHourGrid.frame = bounds
-            chrome.halfHourGrid.path = halfHourPath
+            carry(chrome.halfHourGrid, toPath: halfHourPath, when: legendInsetMoved && !wasHidden)
             chrome.halfHourGrid.strokeColor = gridColor.cgColor
             chrome.halfHourGrid.lineWidth = 1.5
             chrome.halfHourGrid.lineDashPattern = [3, 4]
@@ -4742,6 +5035,9 @@ final class DayLayerHostView: UIView {
             chrome.halfHourGrid.isHidden = true
             chrome.halfHourGrid.path = nil
         }
+
+        // ── In-column hour legend (gh#285 S2) ─────────────────────────────
+        renderLegend(model: model, slotHeight: slotHeight, insetMoved: legendInsetMoved)
 
         // ── Not this day (gh#285) ─────────────────────────────────────────
         // A longer day in reach makes the content taller than this day's
@@ -4754,9 +5050,12 @@ final class DayLayerHostView: UIView {
         )
         let tailHeight = CGFloat(max(0, model.canvasLength - model.dayClock.length) / 3600) * model.hourHeight
         if tailHeight > 0.5 {
+            let wasHidden = chrome.notThisDay.isHidden
             chrome.notThisDay.isHidden = false
-            chrome.notThisDay.frame = CGRect(
-                x: lineInsetX, y: columnBottom, width: eventAreaWidth, height: tailHeight
+            carry(
+                chrome.notThisDay,
+                toFrame: CGRect(x: lineInsetX, y: columnBottom, width: eventAreaWidth, height: tailHeight),
+                when: legendInsetMoved && !wasHidden
             )
             chrome.notThisDay.backgroundColor = UIColor.secondaryLabel.withAlphaComponent(0.06).cgColor
         } else {
@@ -4843,9 +5142,10 @@ final class DayLayerHostView: UIView {
             chrome.deadlineLines.isHidden = true
             chrome.deadlineLines.path = nil
         } else {
+            let wasHidden = chrome.deadlineLines.isHidden
             chrome.deadlineLines.isHidden = false
             chrome.deadlineLines.frame = bounds
-            chrome.deadlineLines.path = deadlinePath
+            carry(chrome.deadlineLines, toPath: deadlinePath, when: legendInsetMoved && !wasHidden)
             chrome.deadlineLines.fillColor = UIColor.systemRed.withAlphaComponent(0.9).cgColor
         }
 
@@ -4867,25 +5167,30 @@ final class DayLayerHostView: UIView {
             let dotSize: CGFloat = 7
             let indicatorColor = Self.currentTimeIndicatorColor()
 
+            let nowLineWasHidden = chrome.nowLine.isHidden
             chrome.nowLine.isHidden = false
             chrome.nowLine.frame = bounds
 
-            chrome.nowLineFill.frame = CGRect(
-                x: model.eventHorizontalInset,
-                y: y - lineHeight / 2,
-                width: max(0, eventAreaWidth),
-                height: lineHeight
+            carry(
+                chrome.nowLineFill,
+                toFrame: CGRect(
+                    x: model.eventAreaLeadingInset,
+                    y: y - lineHeight / 2,
+                    width: max(0, eventAreaWidth),
+                    height: lineHeight
+                ),
+                when: legendInsetMoved && !nowLineWasHidden
             )
             chrome.nowLineFill.backgroundColor = indicatorColor.withAlphaComponent(0.92).cgColor
 
             let dotRect = CGRect(
-                x: model.eventHorizontalInset - dotSize / 2,
+                x: model.eventAreaLeadingInset - dotSize / 2,
                 y: y - dotSize / 2,
                 width: dotSize,
                 height: dotSize
             )
             chrome.nowDot.frame = bounds
-            chrome.nowDot.path = UIBezierPath(ovalIn: dotRect).cgPath
+            carry(chrome.nowDot, toPath: UIBezierPath(ovalIn: dotRect).cgPath, when: legendInsetMoved && !nowLineWasHidden)
             chrome.nowDot.fillColor = indicatorColor.cgColor
 
             // Shadow: black 0.18, radius 1.5, y 0.5 (matches SwiftUI).

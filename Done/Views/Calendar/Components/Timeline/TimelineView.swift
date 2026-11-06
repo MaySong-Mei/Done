@@ -1385,9 +1385,57 @@ struct TimelinePagerView: View {
     /// threshold.  Outside pinch, returns the live value.
     private var effectiveSlotMinutes: Int { rangePinchFrozenSlotMinutes ?? slotMinutes }
     private var slotHeight: CGFloat { hourHeight * CGFloat(effectiveSlotMinutes) / 60 }
-    /// The selected day's clock: what the fixed axis is drawn for.
+    /// The selected day's clock: what the canvas is anchored on.
     private var selectedDayClock: DayClock {
         zoneClock.day(containing: dayDate(forOffset: selectedDayOffset, calendar: zoneClock.calendar))
+    }
+    /// The window the legends are drawn for (gh#285 S2): the fixed axis
+    /// shows its leftmost column's clock, a later column that starts a
+    /// group draws its own, and the now-legend shows only while today is in
+    /// it. Taken when paging rests with no pinch or drag, and kept through
+    /// the next swipe, so nothing regroups under a moving finger.
+    private var legendWindow: CalendarLegendWindow {
+        settledLegendWindow ?? liveLegendWindow()
+    }
+    private func liveLegendWindow() -> CalendarLegendWindow {
+        let leading = calendarLeadingDayOffsetFromCentered(
+            centeredDayOffset: selectedDayOffset,
+            daysCount: daysCount,
+            leadingRange: leadingOffsetsRange()
+        )
+        return CalendarLegendWindow(
+            leadingOffset: leading,
+            leadingClock: zoneClock.day(containing: dayDate(forOffset: leading, calendar: zoneClock.calendar)),
+            daysCount: daysCount,
+            zoneClock: zoneClock
+        )
+    }
+    private func reconcileLegendWindow() {
+        let canSettle = calendarLegendWindowCanSettle(
+            isPinchActive: isRangePinchActive,
+            isScrollInteracting: horizontalScrollIsInteracting,
+            draggingEventID: dragState.draggingEventID
+        )
+        let settled = calendarSettledLegendWindow(
+            previous: settledLegendWindow, live: liveLegendWindow(), canSettle: canSettle
+        )
+        if settledLegendWindow != settled {
+            settledLegendWindow = settled
+            calendarDebugLog(
+                "timeline.legendWindow.settled",
+                fields: [
+                    "leadingOffset": "\(settled.leadingOffset)",
+                    "groups": "\(settled.groups.groupCount)"
+                ]
+            )
+        }
+    }
+    /// The legend the column at `offset` draws: its own clock, when it
+    /// starts a group of the settled window that the fixed axis does not
+    /// serve; the narrow form in the week view.
+    private func columnLegend(forOffset offset: Int) -> CalendarColumnLegend? {
+        guard legendWindow.drawsLegend(atOffset: offset) else { return nil }
+        return rangeMode == .week ? .narrow(zoneClock: zoneClock) : .standard(zoneClock: zoneClock)
     }
     /// The day the scroll content is sized for: the selected day's start,
     /// stretched to `canvasLength` when the page holds a longer one, so a
@@ -1681,6 +1729,9 @@ struct TimelinePagerView: View {
     @State private var previousHorizontalAutoScrolling: Bool = false
     @State private var pendingSnapAfterAutoScrollStop: Bool = false
     @State private var horizontalScrollIsInteracting = false
+    /// The window the legends were last settled on (gh#285 S2); nil until
+    /// the first settle, when the live window stands in.
+    @State private var settledLegendWindow: CalendarLegendWindow? = nil
 
     /// Extension hours frozen at drag start, used for occurrences fetching.
     /// This keeps the EventBlock tree stable while the visible timeline expands.
@@ -1885,6 +1936,14 @@ struct TimelinePagerView: View {
         .onChange(of: rawBoundaryExtensionState) { _, newValue in
             onBoundaryExtensionStateChange?(newValue)
         }
+        // gh#285 S2: the legends take a new window only once paging rests
+        // with no pinch and no drag; each of these is a way to get there,
+        // and `reconcileLegendWindow` keeps the old window otherwise.
+        .onAppear { reconcileLegendWindow() }
+        .onChange(of: selectedDayOffset) { _, _ in reconcileLegendWindow() }
+        .onChange(of: horizontalScrollIsInteracting) { _, _ in reconcileLegendWindow() }
+        .onChange(of: isRangePinchActive) { _, _ in reconcileLegendWindow() }
+        .onChange(of: dragState.draggingEventID) { _, _ in reconcileLegendWindow() }
         // Spec 07 §5 row S4 — recentlyAbsorbed channel migration to coordinator.
         // While `dayLayerCoordinator` is nil (S4), this is inert; S5 wires it.
         .onChange(of: calayerRecentlyAbsorbedParents) { _, newValue in
@@ -1973,7 +2032,7 @@ struct TimelinePagerView: View {
             useCALayerAxisMarkers: useCALayerAxisMarkers,
             allDayHeight: effectiveAllDayHeight,
             timelineHeight: timelineHeight,
-            clock: selectedDayClock,
+            clock: legendWindow.axisClock,
             zoneClock: zoneClock,
             headerHeight: headerHeight,
             hourHeight: hourHeight,
@@ -1985,7 +2044,7 @@ struct TimelinePagerView: View {
             mode: mode,
             leadingFadeProgress: leadingFadeProgress,
             trailingFadeProgress: trailingFadeProgress,
-            isSingleDay: isSingleDay,
+            nowLegendWindow: legendWindow.interval,
             dragState: dragState,
             resolvedCreationEditMapping: resolvedCreationEditMapping,
             resolvedFocusedEditMapping: resolvedFocusedEditMapping,
@@ -2961,6 +3020,7 @@ struct TimelinePagerView: View {
             headerHeight: headerHeight,
             hourHeight: hourHeight,
             eventHorizontalInset: eventHorizontalInset,
+            legend: columnLegend(forOffset: offset),
             leadingExtendedHours: renderBoundaryExtensionHours.leading,
             trailingExtendedHours: renderBoundaryExtensionHours.trailing,
             drawableLeadingHours: drawableExtensionHours.leading,
@@ -3228,7 +3288,8 @@ private struct TimelineAxisDragOverlay: View {
     let mode: PageMode
     let leadingFadeProgress: CGFloat
     let trailingFadeProgress: CGFloat
-    let isSingleDay: Bool
+    /// The instants the now-legend shows for (gh#285 S2).
+    let nowLegendWindow: DateInterval
 
     // Mapping inputs. `dragState` is read for `dragOffset` etc. inside this
     // sub-view's body — that's the whole point of the extraction. The
@@ -3316,7 +3377,7 @@ private struct TimelineAxisDragOverlay: View {
                         editMappingPresentation: editMappingPresentation,
                         leadingFadeProgress: leadingFadeProgress,
                         trailingFadeProgress: trailingFadeProgress,
-                        isSingleDay: isSingleDay
+                        nowLegendWindow: nowLegendWindow
                     )
                     .id(effectiveSlotMinutes)
                     .transition(.opacity)
@@ -3336,7 +3397,7 @@ private struct TimelineAxisDragOverlay: View {
                         editMappingPresentation: editMappingPresentation,
                         leadingFadeProgress: leadingFadeProgress,
                         trailingFadeProgress: trailingFadeProgress,
-                        isSingleDay: isSingleDay
+                        nowLegendWindow: nowLegendWindow
                     )
                     .id(effectiveSlotMinutes)
                     .transition(.opacity)
@@ -3371,16 +3432,14 @@ struct TimeAxisLabels: View {
     /// legend stay fully opaque. Leading/trailing independent.
     var leadingFadeProgress: CGFloat = 0
     var trailingFadeProgress: CGFloat = 0
-    /// Single-day-only: gates the current-time legend Text + the hour-label
-    /// collision-hide. In single-day view, `clock` is the displayed day;
+    /// The instants the current-time legend Text (and the hour-label
+    /// collision-hide) show for: the displayed day on a single-day page —
     /// on non-today pages the now-line itself is already suppressed in the
-    /// day column (CALayer `showsNow` check), but the axis kept showing the
-    /// now-legend AND hiding the colliding hour label — leaving the user
-    /// with a missing hour label and a stray "now" Text on yesterday /
-    /// tomorrow. Multi-day shares one axis across N day columns where
-    /// today is usually visible somewhere, so it keeps the legend on
-    /// unconditionally (default false here preserves that).
-    var isSingleDay: Bool = false
+    /// day column (CALayer `showsNow` check), and a stray "now" Text on
+    /// yesterday / tomorrow would hide an hour label for nothing — and the
+    /// settled window in multi-day (gh#285 S2). Nil means the axis's own
+    /// day.
+    var nowLegendWindow: DateInterval? = nil
 
     private var slotHeight: CGFloat {
         hourHeight * CGFloat(slotMinutes) / 60
@@ -3400,14 +3459,14 @@ struct TimeAxisLabels: View {
     var body: some View {
         SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
             let now = context.date
-            // Single-day axis only shows the now-legend (and only hides the
-            // colliding hour label) when this page IS today. Multi-day
-            // always shows it — the legend points at today's row in the
-            // shared 24h axis and today is usually within the visible
-            // column range. Re-evaluated each tick so a midnight crossover
-            // flips the gate naturally.
-            let showsCurrentTime = !isSingleDay
-                || clock.contains(now)
+            // The now-legend (and the colliding hour label's yield) only
+            // while now is inside the window the axis is drawn for: this
+            // page's day, or the settled multi-day window (gh#285 S2).
+            // Re-evaluated each tick so a midnight crossover flips the gate
+            // naturally.
+            let showsCurrentTime = calendarNowLegendIsShown(
+                now: now, window: nowLegendWindow ?? DateInterval(start: clock.start, end: clock.end)
+            )
             // Single-source legend position (gh#80): nil = culled, either
             // because the page gate above is off OR because the now-pointer
             // falls outside the visible hour window. Every consumer below

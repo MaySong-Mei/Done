@@ -25,8 +25,8 @@ import UIKit
 /// SwiftUI `TimeAxisLabels` view — same input surface so the call site at
 /// `timeAxis()` can swap the two behind the experimental flag.
 struct TimeAxisLayerHost: UIViewRepresentable {
-    /// The day the axis is drawn for: the selected day in single-day mode.
-    /// (Multi-day: the leftmost column of the settled window, pending S2.)
+    /// The day the axis is drawn for: the leftmost column of the settled
+    /// window (the selected day in single-day mode).
     let clock: DayClock
     /// The zone, for the day `now` is in when it is not `clock`'s.
     let zoneClock: CalendarZoneClock
@@ -43,7 +43,9 @@ struct TimeAxisLayerHost: UIViewRepresentable {
     var editMappingPresentation: TimelineAxisMarkerPresentation? = nil
     var leadingFadeProgress: CGFloat = 0
     var trailingFadeProgress: CGFloat = 0
-    var isSingleDay: Bool = false
+    /// The instants the now-legend shows for: the axis day on a single-day
+    /// page, the settled window in multi-day (gh#285 S2).
+    let nowLegendWindow: DateInterval
 
     func makeUIView(context: Context) -> TimeAxisLayerView {
         let view = TimeAxisLayerView()
@@ -66,7 +68,7 @@ struct TimeAxisLayerHost: UIViewRepresentable {
             editMappingPresentation: editMappingPresentation,
             leadingFadeProgress: leadingFadeProgress,
             trailingFadeProgress: trailingFadeProgress,
-            isSingleDay: isSingleDay
+            nowLegendWindow: nowLegendWindow
         )
     }
 }
@@ -92,9 +94,17 @@ final class TimeAxisLayerView: UIView {
         var editMappingPresentation: TimelineAxisMarkerPresentation?
         var leadingFadeProgress: CGFloat
         var trailingFadeProgress: CGFloat
-        var isSingleDay: Bool
+        var nowLegendWindow: DateInterval
     }
     private var inputs: Inputs?
+    // The labels the pool was last built for, so a clock change can tell
+    // whether the rows it brings differ from the rows on screen.
+    private var hourLabelTexts: [CalendarAxisHourLabel] = []
+    #if DEBUG
+    /// TEST-ONLY: how many times a settled clock change brought different
+    /// rows, which is what the label container crossfades for.
+    private(set) var debugAxisCrossfadeCount = 0
+    #endif
 
     // Hour-label pool. Each non-empty slot (i.e. on the hour) gets one
     // UILabel; empty slots (half-hour ticks when slotMinutes == 30) are
@@ -276,7 +286,7 @@ final class TimeAxisLayerView: UIView {
         editMappingPresentation: TimelineAxisMarkerPresentation?,
         leadingFadeProgress: CGFloat,
         trailingFadeProgress: CGFloat,
-        isSingleDay: Bool
+        nowLegendWindow: DateInterval
     ) {
         let next = Inputs(
             clock: clock,
@@ -291,7 +301,7 @@ final class TimeAxisLayerView: UIView {
             editMappingPresentation: editMappingPresentation,
             leadingFadeProgress: leadingFadeProgress,
             trailingFadeProgress: trailingFadeProgress,
-            isSingleDay: isSingleDay
+            nowLegendWindow: nowLegendWindow
         )
         if inputs == next { return }
         // Hour-label rebuild is required when the structural inputs change
@@ -307,9 +317,45 @@ final class TimeAxisLayerView: UIView {
             || inputs!.trailingExtendedHours != next.trailingExtendedHours
             || inputs!.drawableLeadingHours != next.drawableLeadingHours
             || inputs!.drawableTrailingHours != next.drawableTrailingHours
+        let previous = inputs
         inputs = next
         if structuralChanged {
-            rebuildHourLabels(inputs: next)
+            let wanted = Self.wantedLabels(inputs: next)
+            // The settled window moved the axis onto another day's clock
+            // (gh#285 S2). When that alone changes what the rows say, the
+            // label container crossfades instead of snapping — the axis's
+            // half of the split / merge transition. A pinch or a band also
+            // rebuilds the pool, but keeps every row's text, and never
+            // crossfades.
+            let clockAloneChangedTheRows = previous.map { before in
+                before.clock != next.clock
+                    && before.headerHeight == next.headerHeight
+                    && before.hourHeight == next.hourHeight
+                    && before.slotMinutes == next.slotMinutes
+                    && before.leadingExtendedHours == next.leadingExtendedHours
+                    && before.trailingExtendedHours == next.trailingExtendedHours
+                    && before.drawableLeadingHours == next.drawableLeadingHours
+                    && before.drawableTrailingHours == next.drawableTrailingHours
+                    && wanted.labels != hourLabelTexts
+            } ?? false
+            if clockAloneChangedTheRows {
+                #if DEBUG
+                debugAxisCrossfadeCount += 1
+                #endif
+            }
+            if clockAloneChangedTheRows, window != nil, !calendarReduceMotionEnabled {
+                UIView.transition(
+                    with: hourLabelContainer,
+                    duration: DayLayerHostView.legendTransitionDuration,
+                    options: [.transitionCrossDissolve, .beginFromCurrentState],
+                    animations: { [self] in
+                        rebuildHourLabels(wanted: wanted)
+                        layoutHourLabels(inputs: next)
+                    }
+                )
+            } else {
+                rebuildHourLabels(wanted: wanted)
+            }
         }
         layoutHourLabels(inputs: next)
         let now = Date()
@@ -321,7 +367,8 @@ final class TimeAxisLayerView: UIView {
 
     // MARK: - Hour labels (parity with TimeAxisLabels.body's slot ForEach)
 
-    private func rebuildHourLabels(inputs: Inputs) {
+    /// The slots that carry a label and what each says, for `inputs`.
+    private static func wantedLabels(inputs: Inputs) -> (slots: [Int], labels: [CalendarAxisHourLabel]) {
         // Compute slot count + which slots carry text (on-the-hour only,
         // matching `label(forSlot:)` in `TimeAxisLabels`).
         let slotCount = Self.slotCount(
@@ -361,6 +408,13 @@ final class TimeAxisLayerView: UIView {
                 wantedLabels.append(label)
             }
         }
+        return (wantedSlots, wantedLabels)
+    }
+
+    private func rebuildHourLabels(wanted: (slots: [Int], labels: [CalendarAxisHourLabel])) {
+        let wantedSlots = wanted.slots
+        let wantedLabels = wanted.labels
+        hourLabelTexts = wantedLabels
         // Grow / shrink the pool.
         while hourLabels.count < wantedSlots.count {
             let label = UILabel()
@@ -456,10 +510,10 @@ final class TimeAxisLayerView: UIView {
     /// collision yield can key off the SAME predicate (gh#80: a culled
     /// legend must not dim any hour label).
     private func updateNowLegend(inputs: Inputs, now: Date) -> Bool {
-        // Single-day axis only shows the now-legend when this page IS today.
-        // Multi-day always shows it (parity with the SwiftUI gate).
-        let showsCurrentTime = !inputs.isSingleDay
-            || inputs.clock.contains(now)
+        // The legend shows only while now is inside the window the axis is
+        // drawn for: the page's day, or the settled multi-day window
+        // (gh#285 S2; parity with the SwiftUI gate).
+        let showsCurrentTime = calendarNowLegendIsShown(now: now, window: inputs.nowLegendWindow)
         nowLegendLabel.text = Self.currentTimeText(for: now)
         nowLegendLabel.textColor = Self.currentTimeIndicatorColor()
         let labelHeight = calendarTimelineNowLegendLabelHeight

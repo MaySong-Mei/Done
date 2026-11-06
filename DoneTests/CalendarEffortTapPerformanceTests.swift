@@ -742,6 +742,7 @@ final class CalendarDayLayerApplyKeyTests: XCTestCase {
             ("headerHeight", { $0.headerHeight += 1 }),
             ("hourHeight", { $0.hourHeight += 1 }),
             ("eventHorizontalInset", { $0.eventHorizontalInset += 1 }),
+            ("legend", { $0.legend = CalendarColumnLegend.standard(zoneClock: .current) }),
             ("leadingExtendedHours", { $0.leadingExtendedHours += 1 }),
             ("trailingExtendedHours", { $0.trailingExtendedHours += 1 }),
             ("drawableLeadingHours", { $0.drawableLeadingHours += 1 }),

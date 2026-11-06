@@ -288,6 +288,9 @@ func calendarTimelineElapsedMinutes(
 /// abbreviation, which is what tells the passes apart.
 struct CalendarAxisHourLabel: Equatable {
     let text: String
+    /// The hour number alone, for a legend too narrow for the full text
+    /// (the week view's in-column legends).
+    let narrowText: String
     let zoneAbbreviation: String?
 }
 
@@ -304,14 +307,16 @@ func calendarTimelineAxisHourLabel(
     let instant = clock.start.addingTimeInterval(TimeInterval(slotMinute * 60))
     let hour = zoneClock.calendar.component(.hour, from: instant)
     let text = calendarHourAxisLabel(hour24: hour, is24: is24)
+    let narrowText = calendarHourAxisNarrowLabel(hour24: hour, is24: is24)
     // A band slot belongs to a neighbouring day, whose own clock knows
     // whether that hour is a repeated one.
     let dayOfInstant = clock.contains(instant) ? clock : zoneClock.day(containing: instant)
     guard dayOfInstant.repeatedPass(of: instant) != nil else {
-        return CalendarAxisHourLabel(text: text, zoneAbbreviation: nil)
+        return CalendarAxisHourLabel(text: text, narrowText: narrowText, zoneAbbreviation: nil)
     }
     return CalendarAxisHourLabel(
         text: text,
+        narrowText: narrowText,
         zoneAbbreviation: calendarZoneAbbreviation(for: instant, calendar: zoneClock.calendar)
     )
 }

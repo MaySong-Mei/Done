@@ -116,3 +116,13 @@ func calendarHourAxisLabel(hour24: Int, is24: Bool) -> String {
         return "\(hour12) \(meridiem)"
     }
 }
+
+/// The hour number alone — "9" in 24h, "9" in 12h, "13" in 24h — for a
+/// legend too narrow for `calendarHourAxisLabel`'s text.
+func calendarHourAxisNarrowLabel(hour24: Int, is24: Bool) -> String {
+    if is24 {
+        return String(hour24)
+    } else {
+        return String((hour24 % 12 == 0) ? 12 : (hour24 % 12))
+    }
+}

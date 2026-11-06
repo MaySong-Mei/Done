@@ -210,3 +210,122 @@ nonisolated enum CalendarWallTime {
         DayClock.actual(containing: date, calendar: calendar).repeatedPass(of: date) != nil
     }
 }
+
+// MARK: - Legend groups (gh#285 S2)
+
+/// Which columns of a multi-day window start an hour legend. Consecutive
+/// standard days share one legend; a day whose clock is not standard has
+/// one of its own, and the standard days after it start afresh. The first
+/// column always starts a group, and its legend is the timeline's fixed
+/// axis — only later group starts draw a legend inside their column.
+nonisolated struct LegendGroups: Equatable {
+    /// Per column, whether it starts a group.
+    let startsGroup: [Bool]
+
+    init(clocks: [DayClock]) {
+        var starts: [Bool] = []
+        starts.reserveCapacity(clocks.count)
+        for (index, clock) in clocks.enumerated() {
+            let previousIsStandard = index > 0 && clocks[index - 1].isStandard
+            starts.append(index == 0 || !clock.isStandard || !previousIsStandard)
+        }
+        startsGroup = starts
+    }
+
+    var columnCount: Int { startsGroup.count }
+    var groupCount: Int { startsGroup.filter { $0 }.count }
+    var groupStartIndices: [Int] { startsGroup.indices.filter { startsGroup[$0] } }
+
+    /// The columns of each group, in order.
+    var groups: [Range<Int>] {
+        let starts = groupStartIndices
+        return starts.indices.map { index in
+            let end = index + 1 < starts.count ? starts[index + 1] : columnCount
+            return starts[index]..<end
+        }
+    }
+
+    func startsGroup(at index: Int) -> Bool {
+        startsGroup.indices.contains(index) && startsGroup[index]
+    }
+
+    /// The column whose legend column `index` reads: itself when it starts
+    /// a group, else the nearest group start before it.
+    func legendColumn(for index: Int) -> Int {
+        guard !startsGroup.isEmpty else { return 0 }
+        var column = min(max(index, 0), columnCount - 1)
+        while column > 0, !startsGroup[column] { column -= 1 }
+        return column
+    }
+}
+
+/// The settled visible window of the timeline as its legends see it: the
+/// clocks of its columns in order, grouped. The fixed axis draws the first
+/// column's clock; every later column that starts a group draws its own
+/// legend; the now-legend shows only while now is inside the window.
+nonisolated struct CalendarLegendWindow: Equatable {
+    /// The day offset of the first column.
+    let leadingOffset: Int
+    let clocks: [DayClock]
+    let groups: LegendGroups
+
+    init(leadingOffset: Int, leadingClock: DayClock, daysCount: Int, zoneClock: CalendarZoneClock) {
+        self.leadingOffset = leadingOffset
+        var clocks = [leadingClock]
+        if daysCount > 1 {
+            for offset in 1..<daysCount {
+                clocks.append(zoneClock.day(offset, from: leadingClock))
+            }
+        }
+        self.clocks = clocks
+        groups = LegendGroups(clocks: clocks)
+    }
+
+    /// The clock the fixed axis is drawn for.
+    var axisClock: DayClock { clocks[0] }
+
+    /// The instants the window covers, half-open at its end.
+    var interval: DateInterval {
+        DateInterval(start: clocks[0].start, end: clocks[clocks.count - 1].end)
+    }
+
+    /// Whether the column at `offset` draws its own legend: it starts a
+    /// group and is not the first column, whose legend is the fixed axis.
+    func drawsLegend(atOffset offset: Int) -> Bool {
+        let index = offset - leadingOffset
+        return index > 0 && groups.startsGroup(at: index)
+    }
+
+    /// Whether the column at `offset` is one of the window's.
+    func contains(offset: Int) -> Bool {
+        (leadingOffset..<(leadingOffset + clocks.count)).contains(offset)
+    }
+}
+
+/// Whether the legends may take a new window: only once paging rests, with
+/// no pinch and no drag in progress. Until then the previous window stays.
+nonisolated func calendarLegendWindowCanSettle(
+    isPinchActive: Bool,
+    isScrollInteracting: Bool,
+    draggingEventID: UUID?
+) -> Bool {
+    !isPinchActive && !isScrollInteracting && draggingEventID == nil
+}
+
+/// The window the legends draw after this pass: the live one once settled,
+/// else whatever they were drawing (the live one when nothing was yet).
+nonisolated func calendarSettledLegendWindow(
+    previous: CalendarLegendWindow?,
+    live: CalendarLegendWindow,
+    canSettle: Bool
+) -> CalendarLegendWindow {
+    guard let previous, !canSettle else { return live }
+    return previous
+}
+
+/// Whether the axis shows the now-legend: only while `now` is inside the
+/// window the legend is drawn for. A single day's window is the day itself,
+/// so a page that is not today shows none, as before.
+nonisolated func calendarNowLegendIsShown(now: Date, window: DateInterval) -> Bool {
+    now >= window.start && now < window.end
+}

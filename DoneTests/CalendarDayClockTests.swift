@@ -21,6 +21,29 @@ final class CalendarDayClockTests: XCTestCase {
         calendar.date(from: DateComponents(year: year, month: month, day: day, hour: 12))!
     }
 
+    // MARK: Africa/Cairo (a mid-week special day for the week view's QA)
+
+    func testCairoHasATwentyFiveHourThursdayInOctoberAndATwentyThreeHourFridayInApril() {
+        let cairo = calendar("Africa/Cairo")
+        let zone = CalendarZoneClock(calendar: cairo, usesActualDayLength: true)
+
+        let fallBack = zone.day(containing: noon(cairo, 2026, 10, 29))
+        XCTAssertEqual(cairo.component(.weekday, from: fallBack.start), 5, "a Thursday")
+        XCTAssertEqual(fallBack.length, 25 * 3600)
+        XCTAssertFalse(fallBack.isStandard)
+        XCTAssertEqual(fallBack.offsetChange, -3600)
+
+        let springForward = zone.day(containing: noon(cairo, 2026, 4, 24))
+        XCTAssertEqual(cairo.component(.weekday, from: springForward.start), 6, "a Friday")
+        XCTAssertEqual(springForward.length, 23 * 3600)
+        XCTAssertFalse(springForward.isStandard)
+        XCTAssertEqual(springForward.offsetChange, 3600)
+
+        for day in [28, 30] {
+            XCTAssertTrue(zone.day(containing: noon(cairo, 2026, 10, day)).isStandard, "October \(day) is plain")
+        }
+    }
+
     // MARK: America/New_York
 
     func testNewYorkFallBackDayIsTwentyFiveHoursAndVisitsOneHourTwice() {
