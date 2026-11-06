@@ -737,7 +737,7 @@ final class CalendarDayLayerApplyKeyTests: XCTestCase {
         let mutations: [(String, (inout DayLayerHostView.Model) -> Void)] = [
             ("date", { $0.date = $0.date.addingTimeInterval(86_400) }),
             ("dayClock", { $0.dayClock = CalendarZoneClock.current.day(1, from: $0.dayClock) }),
-            ("canvasLength", { $0.canvasLength += 3600 }),
+            ("canvasLength", { $0.canvasLength = $0.drawnCanvasLength + 3600 }),
             ("contentWidth", { $0.contentWidth += 1 }),
             ("headerHeight", { $0.headerHeight += 1 }),
             ("hourHeight", { $0.hourHeight += 1 }),

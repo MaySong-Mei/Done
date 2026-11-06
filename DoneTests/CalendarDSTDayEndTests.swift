@@ -147,6 +147,47 @@ final class CalendarDSTDayEndTests: XCTestCase {
         XCTAssertEqual(container?.frame.height ?? -1, hourHeight - 3, accuracy: 0.01)
     }
 
+    // MARK: A model built without a page (review round 3, F7)
+
+    func testAModelBuiltWithoutAPageIsItsOwnLengthAndHasNoTail() {
+        // The coordinator builds its model without a page's canvas. A 23h
+        // day built that way is sized to itself: the stretch a standard
+        // day would still have below its end is the bottom inset, which a
+        // column sized to itself always took a touch in, and no tail is
+        // drawn there. With a page's standard-day canvas that stretch is
+        // the tail: drawn, and refusing the touch.
+        let host = DayLayerHostView(frame: CGRect(x: 0, y: 0, width: 360, height: 3000))
+        var model = self.model([], clock: springForward)
+        host.apply(model)
+        host.layoutIfNeeded()
+        XCTAssertTrue(host.acceptsTouch(atY: y(elapsedHours: 22.5)), "the day's own last half hour")
+        XCTAssertTrue(host.acceptsTouch(atY: y(elapsedHours: 23.5)), "below its end, a column sized to itself takes the touch as it always did")
+        XCTAssertNil(host.debugNotThisDayTail(), "no tail without a page")
+        XCTAssertEqual(model.drawnCanvasLength, springForward.length)
+
+        model.canvasLength = 24 * 3600
+        host.apply(model)
+        host.layoutIfNeeded()
+        XCTAssertTrue(host.acceptsTouch(atY: y(elapsedHours: 22.5)))
+        XCTAssertFalse(host.acceptsTouch(atY: y(elapsedHours: 23.5)), "with a page's standard-day canvas the hour below the end is the tail")
+        let tail = host.debugNotThisDayTail()
+        XCTAssertEqual(tail?.minY ?? -1, y(elapsedHours: 23), accuracy: 0.01, "the tail starts at the day's end")
+        XCTAssertEqual(tail?.height ?? -1, hourHeight, accuracy: 0.01, "and is the hour the canvas has past it")
+
+        // The 25h day is never shorter than a standard-day canvas: no tail
+        // either way, and its last hour is touched.
+        var long = self.model([], clock: fallBack)
+        host.apply(long)
+        host.layoutIfNeeded()
+        XCTAssertNil(host.debugNotThisDayTail())
+        XCTAssertTrue(host.acceptsTouch(atY: y(elapsedHours: 24.5)))
+        long.canvasLength = 24 * 3600
+        host.apply(long)
+        host.layoutIfNeeded()
+        XCTAssertNil(host.debugNotThisDayTail())
+        XCTAssertTrue(host.acceptsTouch(atY: y(elapsedHours: 24.5)))
+    }
+
     // MARK: The band split at the day's end (QA mutation c1)
 
     func testBlocksSplitAtTheTwentyFiveHourDaysEndWhenTheBandBelowIsOpen() {

@@ -322,10 +322,14 @@ final class DayLayerHostView: UIView {
         /// `repaintVertical`, `cullViewport`) and the chrome all read the
         /// window from this one field.
         var dayClock: DayClock
-        /// The length the page's content is sized for; the tail past this
-        /// day's own length is drawn as not this day. Defaults to the day
-        /// itself, so a model built without a page has no tail.
-        var canvasLength: TimeInterval = DayClock.standardLength
+        /// The length the page's content is sized for, when a page sizes
+        /// it; the tail past this day's own length is drawn as not this
+        /// day. Nil — a model built without a page — is the day itself,
+        /// so there is no tail.
+        var canvasLength: TimeInterval? = nil
+        /// The length the column is drawn for: the page's canvas, else the
+        /// day's own.
+        var drawnCanvasLength: TimeInterval { canvasLength ?? dayClock.length }
         var occurrences: [CalendarLayout.EventOccurrence]
         var contentWidth: CGFloat
         var headerHeight: CGFloat
@@ -3631,6 +3635,11 @@ final class DayLayerHostView: UIView {
 
     /// TEST-ONLY: the frame gestures hit-test an occurrence against.
     func debugHitFrame(of occurrenceID: String) -> CGRect? { renderedFrames[occurrenceID]?.frame }
+
+    /// TEST-ONLY: the not-this-day tail as drawn; nil when none is drawn.
+    func debugNotThisDayTail() -> CGRect? {
+        chrome.notThisDay.isHidden ? nil : chrome.notThisDay.frame
+    }
     #endif
 
     /// The time span a piece's layers lay out against (interrupt cut-outs).
@@ -4746,7 +4755,7 @@ final class DayLayerHostView: UIView {
     /// content keeps accepting its whole height, as it always did.
     func acceptsTouch(atY y: CGFloat) -> Bool {
         guard let model = currentModel else { return false }
-        guard model.canvasLength > model.dayClock.length + 1 else { return true }
+        guard model.drawnCanvasLength > model.dayClock.length + 1 else { return true }
         let instant = calendarTimelineDateFromYPosition(
             y,
             clock: model.dayClock,
@@ -5069,7 +5078,7 @@ final class DayLayerHostView: UIView {
             leadingExtendedHours: model.leadingExtendedHours,
             trailingExtendedHours: model.trailingExtendedHours
         )
-        let tailHeight = CGFloat(max(0, model.canvasLength - model.dayClock.length) / 3600) * model.hourHeight
+        let tailHeight = CGFloat(max(0, model.drawnCanvasLength - model.dayClock.length) / 3600) * model.hourHeight
         if tailHeight > 0.5 {
             let wasHidden = chrome.notThisDay.isHidden
             chrome.notThisDay.isHidden = false
