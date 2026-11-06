@@ -3474,7 +3474,7 @@ struct TimeAxisLabels: View {
             // flips the gate naturally.
             let placement = calendarNowLegendPlacement(
                 now: now,
-                window: nowLegendWindow ?? CalendarNowLegendWindow(day: clock),
+                window: nowLegendWindow ?? CalendarNowLegendWindow(day: clock, hourHeight: hourHeight),
                 axisClock: clock,
                 zoneClock: zoneClock
             )
@@ -3483,13 +3483,14 @@ struct TimeAxisLabels: View {
             // falls outside the visible hour window. Every consumer below
             // (legend Text, hour-label collision yield, crossfade trigger)
             // derives visibility from this one optional — no second
-            // hand-derived condition.
+            // hand-derived condition. Positioned at the hour height of the
+            // column the legend sits on (gh#285 S1.5), as the layer axis does.
             let legendY: CGFloat? = placement.flatMap { placement in
                 calendarTimelineNowLegendY(
                     for: placement.instant,
                     clock: placement.clock,
                     headerHeight: headerHeight,
-                    hourHeight: hourHeight,
+                    hourHeight: placement.hourHeight,
                     leadingExtendedHours: leadingExtendedHours,
                     trailingExtendedHours: trailingExtendedHours
                 )
@@ -3499,9 +3500,9 @@ struct TimeAxisLabels: View {
             // both fixed for this 1Hz body pass), so read/compute them ONCE
             // here instead of per slot.
             let is24 = AppTimeFormat.current.is24
-            // The same elapsed measure the slots are laid out in, against
-            // the day the legend was positioned on.
-            let nowTotalMinutes = placement.map { calendarTimelineElapsedMinutes(of: $0.instant, clock: $0.clock) } ?? 0
+            // The legend's position read in the slots' own minutes: the day
+            // the legend was positioned on, at the axis's hour height.
+            let nowTotalMinutes = placement.map { calendarNowLegendAxisMinutes(placement: $0, axisHourHeight: hourHeight) } ?? 0
             let showsZones = hourHeight >= TimeAxisLayerView.zoneSublabelMinimumHourHeight
             ZStack(alignment: .topTrailing) {
                 VStack(spacing: 0) {

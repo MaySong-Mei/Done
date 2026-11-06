@@ -367,25 +367,41 @@ nonisolated struct CalendarLegendWindowKeeper: Equatable {
 // MARK: - The now-legend (gh#285 S2, round 2)
 
 /// The settled window as the now-legend reads it: the instants its columns
-/// cover, and whether the page is a single day.
+/// cover, whether the page is a single day, and how the columns' hour
+/// heights follow their days — so the legend can take the hour height of
+/// the column it sits on.
 nonisolated struct CalendarNowLegendWindow: Equatable {
     let interval: DateInterval
     let isSingleDay: Bool
+    /// The timeline's own hour height and the day-length mode: a column's
+    /// hour height is derived from them, as the pager derives it.
+    let hourHeight: CGFloat
+    let mode: DayLengthMode
 
-    init(window: CalendarLegendWindow) {
+    init(window: CalendarLegendWindow, hourHeight: CGFloat, mode: DayLengthMode) {
         interval = window.interval
         isSingleDay = window.isSingleDay
+        self.hourHeight = hourHeight
+        self.mode = mode
     }
 
-    /// A single-day page drawn for `day` alone.
-    init(day: DayClock) {
+    /// A single-day page drawn for `day` alone at `hourHeight`, the hour
+    /// height its one column is drawn with.
+    init(day: DayClock, hourHeight: CGFloat) {
         interval = DateInterval(start: day.start, end: day.end)
         isSingleDay = true
+        self.hourHeight = hourHeight
+        mode = .actual
     }
 
     /// Whether `now` falls on one of the window's days (half-open at the end).
     func contains(_ now: Date) -> Bool {
         now >= interval.start && now < interval.end
+    }
+
+    /// The hour height a column of `clock` is drawn with.
+    func columnHourHeight(for clock: DayClock) -> CGFloat {
+        calendarColumnHourHeight(hourHeight, clock: clock, mode: mode)
     }
 }
 
@@ -398,11 +414,14 @@ nonisolated func calendarNowLegendIsShown(now: Date, window: CalendarNowLegendWi
     !window.isSingleDay || window.contains(now)
 }
 
-/// Where the now-legend sits: the instant it marks and the day clock that
-/// instant is positioned on.
+/// Where the now-legend sits: the instant it marks, the day clock that
+/// instant is positioned on, and the hour height that clock's column is
+/// drawn with — the legend is level with that column's now-line, so it is
+/// positioned at that column's hour height, not the axis column's.
 nonisolated struct CalendarNowLegendPlacement: Equatable {
     let instant: Date
     let clock: DayClock
+    let hourHeight: CGFloat
 }
 
 /// The now-legend's placement for both axis render paths (gh#80: every
@@ -424,7 +443,7 @@ nonisolated func calendarNowLegendPlacement(
     guard calendarNowLegendIsShown(now: now, window: window) else { return nil }
     if window.contains(now) {
         let clock = axisClock.contains(now) ? axisClock : zoneClock.day(containing: now)
-        return CalendarNowLegendPlacement(instant: now, clock: clock)
+        return CalendarNowLegendPlacement(instant: now, clock: clock, hourHeight: window.columnHourHeight(for: clock))
     }
     let calendar = zoneClock.calendar
     let wall = calendar.dateComponents([.hour, .minute, .second], from: now)
@@ -436,7 +455,7 @@ nonisolated func calendarNowLegendPlacement(
         keepingOffsetOf: nil,
         calendar: calendar
     ) ?? axisClock.start
-    return CalendarNowLegendPlacement(instant: instant, clock: axisClock)
+    return CalendarNowLegendPlacement(instant: instant, clock: axisClock, hourHeight: window.columnHourHeight(for: axisClock))
 }
 
 // MARK: - Day length mode (gh#285 S1.5)
@@ -506,7 +525,9 @@ nonisolated struct CalendarTimelineGeometry: Equatable {
     /// hour height, so a scaled special day's rows line up with its column.
     var axisHourHeight: CGFloat { columnHourHeight(for: axisClock) }
 
-    var nowLegendWindow: CalendarNowLegendWindow { CalendarNowLegendWindow(window: window) }
+    var nowLegendWindow: CalendarNowLegendWindow {
+        CalendarNowLegendWindow(window: window, hourHeight: hourHeight, mode: mode)
+    }
 
     /// The day the scroll content is sized for: the selected day's start,
     /// stretched to the longest day in reach when the page holds a longer

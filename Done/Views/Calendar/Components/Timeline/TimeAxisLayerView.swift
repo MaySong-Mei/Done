@@ -121,10 +121,11 @@ final class TimeAxisLayerView: UIView {
     private var zoneLabels: [UILabel] = []
 
     #if DEBUG
-    /// TEST-ONLY: the hour labels as laid out, by slot.
-    func debugHourLabels() -> [(slotIndex: Int, text: String, frame: CGRect)] {
+    /// TEST-ONLY: the hour labels as laid out, by slot, with the opacity
+    /// each is settling to.
+    func debugHourLabels() -> [(slotIndex: Int, text: String, frame: CGRect, alpha: CGFloat)] {
         hourLabelSlotIndices.enumerated().map { poolIndex, slotIndex in
-            (slotIndex, hourLabels[poolIndex].text ?? "", hourLabels[poolIndex].frame)
+            (slotIndex, hourLabels[poolIndex].text ?? "", hourLabels[poolIndex].frame, hourLabels[poolIndex].alpha)
         }
     }
 
@@ -571,12 +572,15 @@ final class TimeAxisLayerView: UIView {
         // nil = culled, either because the page gate above is off OR
         // because the now-pointer falls outside the visible hour window
         // (never edge-pinned into the axis frame).
+        // At the hour height of the column the legend sits on (gh#285
+        // S1.5): the axis's own on a single-day page or with today outside
+        // the window, today's column's when today is another column.
         let legendY: CGFloat? = placement.flatMap { placement in
             calendarTimelineNowLegendY(
                 for: placement.instant,
                 clock: placement.clock,
                 headerHeight: inputs.headerHeight,
-                hourHeight: inputs.hourHeight,
+                hourHeight: placement.hourHeight,
                 leadingExtendedHours: inputs.leadingExtendedHours,
                 trailingExtendedHours: inputs.trailingExtendedHours
             )
@@ -622,9 +626,9 @@ final class TimeAxisLayerView: UIView {
     /// 1-Hz tick + a crossfade animation so the page-switch transition
     /// blends back in step. Mirrors `TimeAxisLabels.hourLabelOpacity`.
     private func updateHourLabelOpacities(inputs: Inputs, placement: CalendarNowLegendPlacement?, legendVisible: Bool) {
-        // The same elapsed measure the slots are laid out in, against the
-        // day the legend was positioned on.
-        let nowTotalMinutes = placement.map { calendarTimelineElapsedMinutes(of: $0.instant, clock: $0.clock) } ?? 0
+        // The legend's position read in the slots' own minutes: the day the
+        // legend was positioned on, at the axis's hour height.
+        let nowTotalMinutes = placement.map { calendarNowLegendAxisMinutes(placement: $0, axisHourHeight: inputs.hourHeight) } ?? 0
         for (poolIndex, slotIndex) in hourLabelSlotIndices.enumerated() {
             let label = hourLabels[poolIndex]
             let totalMinutes = -inputs.leadingExtendedHours * 60

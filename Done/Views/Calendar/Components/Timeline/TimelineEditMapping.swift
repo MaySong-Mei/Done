@@ -281,6 +281,19 @@ func calendarTimelineElapsedMinutes(
     return CGFloat(instant.timeIntervalSince(visibleStart) / 60)
 }
 
+/// The now-legend's position in the axis's own minutes, for the hour-label
+/// yield: the labels are laid out in the axis column's elapsed minutes at
+/// the axis's hour height, while the legend sits on its own column's clock
+/// at that column's hour height. On a plain day, and in the actual mode,
+/// the two are the same measure; in the normalized mode with the legend on
+/// another column its points are read back at the axis's hour height, so
+/// the label that yields is the one the legend covers.
+func calendarNowLegendAxisMinutes(placement: CalendarNowLegendPlacement, axisHourHeight: CGFloat) -> CGFloat {
+    let minutes = calendarTimelineElapsedMinutes(of: placement.instant, clock: placement.clock)
+    guard axisHourHeight > 0 else { return minutes }
+    return minutes * placement.hourHeight / axisHourHeight
+}
+
 /// The hour label of one axis slot (gh#285): the wall clock hour of the
 /// instant the slot stands for, read off the calendar, so a day whose clock
 /// skips or revisits an hour labels what is really there. The two labels of

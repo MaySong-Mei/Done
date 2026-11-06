@@ -153,9 +153,14 @@ final class CalendarDSTLegendTests: XCTestCase {
         newYork.date(from: DateComponents(year: 2026, month: month, day: dayOfMonth, hour: hour, minute: minute, second: second))!
     }
 
-    private func placement(now: Date, window: CalendarLegendWindow) -> CalendarNowLegendPlacement? {
+    private func placement(
+        now: Date, window: CalendarLegendWindow, hourHeight: CGFloat = 56, mode: DayLengthMode = .actual
+    ) -> CalendarNowLegendPlacement? {
         calendarNowLegendPlacement(
-            now: now, window: CalendarNowLegendWindow(window: window), axisClock: window.axisClock, zoneClock: zone(newYork)
+            now: now,
+            window: CalendarNowLegendWindow(window: window, hourHeight: hourHeight, mode: mode),
+            axisClock: window.axisClock,
+            zoneClock: zone(newYork)
         )
     }
 
@@ -166,7 +171,7 @@ final class CalendarDSTLegendTests: XCTestCase {
         let lastEveningOfTheWindow = Date(timeIntervalSince1970: 1_793_593_800)   // Nov 1 23:30 EST
         let firstInstantAfter = Date(timeIntervalSince1970: 1_793_595_600)        // Nov 2 00:00 EST
         let theDayBefore = Date(timeIntervalSince1970: 1_793_332_800 - 60)        // Oct 29 23:59 EDT
-        let multi = CalendarNowLegendWindow(window: window)
+        let multi = CalendarNowLegendWindow(window: window, hourHeight: 56, mode: .actual)
         XCTAssertFalse(multi.isSingleDay)
         for now in [today, lastEveningOfTheWindow, firstInstantAfter, theDayBefore, window.interval.start] {
             XCTAssertTrue(calendarNowLegendIsShown(now: now, window: multi), "multi-day shows it at \(now)")
@@ -176,9 +181,9 @@ final class CalendarDSTLegendTests: XCTestCase {
         XCTAssertFalse(multi.contains(firstInstantAfter), "half-open at the end")
 
         // A single-day page: only today's page shows it (the old gate).
-        let single = CalendarNowLegendWindow(window: newYorkWindow(2026, 11, 1, daysCount: 1))
+        let single = CalendarNowLegendWindow(window: newYorkWindow(2026, 11, 1, daysCount: 1), hourHeight: 56, mode: .actual)
         XCTAssertTrue(single.isSingleDay)
-        XCTAssertEqual(single, CalendarNowLegendWindow(day: day(newYork, 2026, 11, 1)), "the axis's own day is the same window")
+        XCTAssertEqual(single, CalendarNowLegendWindow(day: day(newYork, 2026, 11, 1), hourHeight: 56), "the axis's own day is the same window")
         XCTAssertTrue(calendarNowLegendIsShown(now: lastEveningOfTheWindow, window: single))
         XCTAssertFalse(calendarNowLegendIsShown(now: firstInstantAfter, window: single))
         XCTAssertFalse(calendarNowLegendIsShown(now: today, window: single))
@@ -285,7 +290,7 @@ final class CalendarDSTLegendTests: XCTestCase {
 
         // Oct 30–Nov 1, today outside: shown, at 12:35 read on Oct 30.
         let octWindow = newYorkWindow(2026, 10, 30, daysCount: 3)
-        applyAxis(axis, clock: octWindow.axisClock, nowLegendWindow: CalendarNowLegendWindow(window: octWindow))
+        applyAxis(axis, clock: octWindow.axisClock, nowLegendWindow: CalendarNowLegendWindow(window: octWindow, hourHeight: 56, mode: .actual))
         axis.debugRefreshNowDependentState(now: now)
         var legend = axis.debugNowLegend()
         XCTAssertTrue(legend.isVisible, "a multi-day window shows the legend without today in it")
@@ -296,7 +301,7 @@ final class CalendarDSTLegendTests: XCTestCase {
         // Nov 1–3, today outside: on the 25h axis the same wall time is a
         // row lower, and the 12:00 label yields to it.
         let novWindow = newYorkWindow(2026, 11, 1, daysCount: 3)
-        applyAxis(axis, clock: novWindow.axisClock, nowLegendWindow: CalendarNowLegendWindow(window: novWindow))
+        applyAxis(axis, clock: novWindow.axisClock, nowLegendWindow: CalendarNowLegendWindow(window: novWindow, hourHeight: 56, mode: .actual))
         axis.debugRefreshNowDependentState(now: now)
         legend = axis.debugNowLegend()
         XCTAssertTrue(legend.isVisible)
@@ -307,22 +312,107 @@ final class CalendarDSTLegendTests: XCTestCase {
 
         // Nov 5–7, today inside but not on the axis: today's own clock.
         let thisWindow = newYorkWindow(2026, 11, 5, daysCount: 3)
-        applyAxis(axis, clock: thisWindow.axisClock, nowLegendWindow: CalendarNowLegendWindow(window: thisWindow))
+        applyAxis(axis, clock: thisWindow.axisClock, nowLegendWindow: CalendarNowLegendWindow(window: thisWindow, hourHeight: 56, mode: .actual))
         axis.debugRefreshNowDependentState(now: now)
         legend = axis.debugNowLegend()
         XCTAssertTrue(legend.isVisible)
         XCTAssertEqual(legend.frame.minY, header + 12.5833 * hourHeight - labelTop, accuracy: 0.1)
 
         // A single-day page that is not today: hidden.
-        applyAxis(axis, clock: day(newYork, 2026, 10, 30), nowLegendWindow: CalendarNowLegendWindow(day: day(newYork, 2026, 10, 30)))
+        applyAxis(axis, clock: day(newYork, 2026, 10, 30), nowLegendWindow: CalendarNowLegendWindow(day: day(newYork, 2026, 10, 30), hourHeight: 56))
         axis.debugRefreshNowDependentState(now: now)
         XCTAssertFalse(axis.debugNowLegend().isVisible, "another day's single page shows no legend")
         // Today's single page: shown again.
-        applyAxis(axis, clock: day(newYork, 2026, 11, 6), nowLegendWindow: CalendarNowLegendWindow(day: day(newYork, 2026, 11, 6)))
+        applyAxis(axis, clock: day(newYork, 2026, 11, 6), nowLegendWindow: CalendarNowLegendWindow(day: day(newYork, 2026, 11, 6), hourHeight: 56))
         axis.debugRefreshNowDependentState(now: now)
         legend = axis.debugNowLegend()
         XCTAssertTrue(legend.isVisible)
         XCTAssertEqual(legend.frame.minY, header + 12.5833 * hourHeight - labelTop, accuracy: 0.1)
+    }
+
+    func testInTheNormalizedModeTheLegendOnAnotherColumnSitsAtThatColumnsHourHeight() throws {
+        // Nov 1–3 drawn normalized: the axis is the 25h day at hh × 24/25;
+        // today is Nov 2, a plain column at hh. The legend sits level with
+        // today's now-line — twenty hours down at hh, not at the axis's
+        // scaled hour height — and the axis label it covers is the one at
+        // that height: the 25h axis's "20:00" row, an elapsed hour lower
+        // than a plain axis's. (review round 3, F6)
+        let axis = TimeAxisLayerView(frame: CGRect(x: 0, y: 0, width: 26, height: 3000))
+        let window = newYorkWindow(2026, 11, 1, daysCount: 3)
+        let hourHeight: CGFloat = 56
+        let axisHourHeight = calendarColumnHourHeight(hourHeight, clock: window.axisClock, mode: .normalized)
+        XCTAssertEqual(axisHourHeight, 56 * 24 / 25, accuracy: 0.0001, "fixture: the axis column is scaled")
+        applyAxis(
+            axis, clock: window.axisClock, hourHeight: axisHourHeight,
+            nowLegendWindow: CalendarNowLegendWindow(window: window, hourHeight: hourHeight, mode: .normalized)
+        )
+        let now = newYorkInstant(11, 2, 20, 0)
+        axis.debugRefreshNowDependentState(now: now)
+        let legend = axis.debugNowLegend()
+        XCTAssertTrue(legend.isVisible)
+        XCTAssertEqual(
+            legend.frame.minY, 16 + 20 * hourHeight - calendarTimelineNowLegendLabelHeight / 2, accuracy: 0.1,
+            "level with today's now-line, at today's column hour height"
+        )
+        let labels = axis.debugHourLabels()
+        let twenty = try XCTUnwrap(labels.first { $0.text == "20:00" })
+        XCTAssertEqual(twenty.slotIndex, 21, "fixture: on the 25h axis the 20:00 row is an elapsed hour lower")
+        XCTAssertEqual(twenty.frame.minY, 16 + 21 * axisHourHeight - 2, accuracy: 0.1, "fixture: drawn at the axis's scaled hour height")
+        XCTAssertLessThan(abs(twenty.frame.minY + 2 - (legend.frame.minY + calendarTimelineNowLegendLabelHeight / 2)), 10, "fixture: the row the legend covers")
+        XCTAssertEqual(twenty.alpha, 0, "the row the legend covers yields")
+        XCTAssertEqual(labels.first { $0.text == "19:00" }?.alpha, 1, "the row an elapsed hour above, which the unscaled reading would have hidden, does not")
+        XCTAssertEqual(labels.first { $0.text == "21:00" }?.alpha, 1)
+
+        // Control: the same window in the actual mode, every column at hh —
+        // the legend and the yielding row are where round 2 left them.
+        applyAxis(
+            axis, clock: window.axisClock, hourHeight: hourHeight,
+            nowLegendWindow: CalendarNowLegendWindow(window: window, hourHeight: hourHeight, mode: .actual)
+        )
+        axis.debugRefreshNowDependentState(now: now)
+        XCTAssertEqual(axis.debugNowLegend().frame.minY, 16 + 20 * hourHeight - calendarTimelineNowLegendLabelHeight / 2, accuracy: 0.1)
+        XCTAssertEqual(axis.debugHourLabels().first { $0.text == "19:00" }?.alpha, 0, "actual: twenty hours down is the 19:00 row of the 25h axis")
+        XCTAssertEqual(axis.debugHourLabels().first { $0.text == "20:00" }?.alpha, 1)
+    }
+
+    func testThePlacementCarriesTheHourHeightOfTheColumnItSitsOn() throws {
+        // Normalized, Nov 1–3, today Nov 2 20:00: the legend is on today's
+        // plain column, at the timeline's hour height, while the axis
+        // column is scaled; its Y is today's now-line, and read back in the
+        // axis's minutes it is past the axis's twenty-first hour.
+        let window = newYorkWindow(2026, 11, 1, daysCount: 3)
+        let hourHeight: CGFloat = 56
+        let axisHourHeight = calendarColumnHourHeight(hourHeight, clock: window.axisClock, mode: .normalized)
+        let now = newYorkInstant(11, 2, 20, 0)
+        let onToday = try XCTUnwrap(placement(now: now, window: window, hourHeight: hourHeight, mode: .normalized))
+        XCTAssertEqual(onToday.clock, day(newYork, 2026, 11, 2))
+        XCTAssertEqual(onToday.hourHeight, hourHeight, "a plain column is unscaled")
+        XCTAssertNotEqual(onToday.hourHeight, axisHourHeight)
+        let legendY = try XCTUnwrap(calendarTimelineNowLegendY(for: onToday.instant, clock: onToday.clock, headerHeight: 16, hourHeight: onToday.hourHeight))
+        XCTAssertEqual(legendY, 16 + 20 * hourHeight - calendarTimelineNowLegendLabelHeight / 2, accuracy: 0.001)
+        let axisMinutes = calendarNowLegendAxisMinutes(placement: onToday, axisHourHeight: axisHourHeight)
+        XCTAssertEqual(axisMinutes, 20 * 60 * 25 / 24, accuracy: 0.001)
+        XCTAssertTrue(calendarShouldHideLegendHourLabel(legendTotalMinutes: 21 * 60, nowTotalMinutes: axisMinutes, hourHeight: axisHourHeight), "the 20:00 row of the 25h axis")
+        XCTAssertFalse(calendarShouldHideLegendHourLabel(legendTotalMinutes: 20 * 60, nowTotalMinutes: axisMinutes, hourHeight: axisHourHeight), "not the 19:00 row")
+
+        // Today on the axis column itself: the axis's scaled hour height.
+        let onAxis = try XCTUnwrap(placement(now: newYorkInstant(11, 1, 20, 0), window: window, hourHeight: hourHeight, mode: .normalized))
+        XCTAssertEqual(onAxis.clock, window.axisClock)
+        XCTAssertEqual(onAxis.hourHeight, axisHourHeight, accuracy: 0.0001)
+        XCTAssertEqual(calendarNowLegendAxisMinutes(placement: onAxis, axisHourHeight: axisHourHeight), 21 * 60, accuracy: 0.001, "20:00 EST is the twenty-first elapsed hour")
+        // Today outside the window: read on the axis, at the axis's.
+        let outside = try XCTUnwrap(placement(now: newYorkInstant(11, 6, 12, 35), window: window, hourHeight: hourHeight, mode: .normalized))
+        XCTAssertEqual(outside.clock, window.axisClock)
+        XCTAssertEqual(outside.hourHeight, axisHourHeight, accuracy: 0.0001)
+        // The actual mode: the timeline's hour height everywhere, and the
+        // axis minutes are the plain elapsed minutes.
+        let actual = try XCTUnwrap(placement(now: now, window: window, hourHeight: hourHeight, mode: .actual))
+        XCTAssertEqual(actual.hourHeight, hourHeight)
+        XCTAssertEqual(calendarNowLegendAxisMinutes(placement: actual, axisHourHeight: hourHeight), 20 * 60, accuracy: 0.001)
+        // A single-day page: the one column's hour height, as given.
+        let single = CalendarNowLegendWindow(day: window.axisClock, hourHeight: axisHourHeight)
+        let onPage = try XCTUnwrap(calendarNowLegendPlacement(now: newYorkInstant(11, 1, 20, 0), window: single, axisClock: window.axisClock, zoneClock: zone(newYork)))
+        XCTAssertEqual(onPage.hourHeight, axisHourHeight, accuracy: 0.0001)
     }
 
     // MARK: Settle gating (A5)
@@ -388,7 +478,7 @@ final class CalendarDSTLegendTests: XCTestCase {
             XCTAssertEqual(geometry.axisClock, day(newYork, 2026, 10, 30), "\(mode)")
             XCTAssertNotEqual(geometry.axisClock, selected, "\(mode): not the selected day")
             XCTAssertEqual(geometry.axisHourHeight, 56, "\(mode): a plain axis day keeps the hour height")
-            XCTAssertEqual(geometry.nowLegendWindow, CalendarNowLegendWindow(window: window), "\(mode)")
+            XCTAssertEqual(geometry.nowLegendWindow, CalendarNowLegendWindow(window: window, hourHeight: 56, mode: mode), "\(mode)")
         }
 
         // Nov 1–3 with Nov 2 selected: the axis is the 25h day. Actual
@@ -703,7 +793,7 @@ final class CalendarDSTLegendTests: XCTestCase {
             editMappingPresentation: nil,
             leadingFadeProgress: 0,
             trailingFadeProgress: 0,
-            nowLegendWindow: nowLegendWindow ?? CalendarNowLegendWindow(day: clock)
+            nowLegendWindow: nowLegendWindow ?? CalendarNowLegendWindow(day: clock, hourHeight: hourHeight)
         )
     }
 
