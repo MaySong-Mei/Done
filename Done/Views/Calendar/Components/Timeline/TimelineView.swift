@@ -1296,6 +1296,10 @@ struct TimelinePagerView: View {
     /// longest day of the window and its neighbours, held until the cut
     /// tail is off screen (gh#285). Nil sizes to the selected day.
     var canvasLength: TimeInterval? = nil
+    /// How column heights follow day length (gh#285 S1.5): in the
+    /// normalized mode every column is a standard day tall and a special
+    /// day's hour height is scaled; the canvas is always a standard day.
+    var dayLengthMode: DayLengthMode = .actual
     let daysCount: Int
     let mode: PageMode
     let showEventText: Bool
@@ -1443,13 +1447,28 @@ struct TimelinePagerView: View {
     /// is drawn as not this day.
     private var canvasClock: DayClock {
         let selected = selectedDayClock
-        guard let canvasLength, canvasLength > selected.length else { return selected }
+        let length: TimeInterval
+        switch dayLengthMode {
+        case .actual: length = max(selected.length, canvasLength ?? 0)
+        case .normalized: length = DayClock.standardLength
+        }
+        guard abs(length - selected.length) > 1 else { return selected }
         return DayClock(
             start: selected.start,
-            end: selected.start.addingTimeInterval(canvasLength),
+            end: selected.start.addingTimeInterval(length),
             transition: nil,
             offsetChange: 0
         )
+    }
+    /// The hour height a column of `clock` is drawn with (gh#285 S1.5).
+    private func columnHourHeight(for clock: DayClock) -> CGFloat {
+        calendarColumnHourHeight(hourHeight, clock: clock, mode: dayLengthMode)
+    }
+    /// What a column of `clock` is sized for: the canvas in the actual mode
+    /// (a shorter day draws its tail as not this day), itself in the
+    /// normalized mode (every column fills the canvas).
+    private func columnCanvasLength(for clock: DayClock) -> TimeInterval {
+        dayLengthMode == .normalized ? clock.length : canvasClock.length
     }
 
     /// Dynamic min hourHeight for the live pinch gesture: the value at which
@@ -2035,7 +2054,7 @@ struct TimelinePagerView: View {
             clock: legendWindow.axisClock,
             zoneClock: zoneClock,
             headerHeight: headerHeight,
-            hourHeight: hourHeight,
+            hourHeight: columnHourHeight(for: legendWindow.axisClock),
             effectiveSlotMinutes: effectiveSlotMinutes,
             leadingExtendedHours: renderBoundaryExtensionHours.leading,
             trailingExtendedHours: renderBoundaryExtensionHours.trailing,
@@ -3014,11 +3033,11 @@ struct TimelinePagerView: View {
         CalendarDayLayerView(
             date: date,
             dayClock: dayClock,
-            canvasLength: canvasClock.length,
+            canvasLength: columnCanvasLength(for: dayClock),
             occurrenceSource: dayOccurrenceSource,
             contentWidth: dayWidth,
             headerHeight: headerHeight,
-            hourHeight: hourHeight,
+            hourHeight: columnHourHeight(for: dayClock),
             eventHorizontalInset: eventHorizontalInset,
             legend: columnLegend(forOffset: offset),
             leadingExtendedHours: renderBoundaryExtensionHours.leading,
@@ -3073,7 +3092,7 @@ struct TimelinePagerView: View {
             ) ? onVisibleTimelineFrameChange : nil
         )
         .frame(width: dayWidth, height: timelineHeight, alignment: .top)
-        .mask { extensionFadeMask(clock: dayClock) }
+        .mask { extensionFadeMask(clock: dayClock, hourHeight: columnHourHeight(for: dayClock)) }
     }
 
     /// Alpha mask for the follow-event band fade: header + base 24h fully
@@ -3083,7 +3102,7 @@ struct TimelinePagerView: View {
     /// segment overhangs `calendarBandFadeSeamOverhang` into each band side
     /// to keep the midnight line fully opaque while the band fades.
     @ViewBuilder
-    private func extensionFadeMask(clock: DayClock) -> some View {
+    private func extensionFadeMask(clock: DayClock, hourHeight: CGFloat) -> some View {
         // Spec 07: in the 48h-constant model the band content is ALWAYS present
         // (geometry uses `renderBoundaryExtensionHours` = 12/12), so the mask
         // must carve the fade region over it — otherwise there is no band frame

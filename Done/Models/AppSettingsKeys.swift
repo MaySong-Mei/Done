@@ -111,6 +111,12 @@ enum AppSettingsKeys {
     /// from its start, whatever the zone does on that day. Read through
     /// `CalendarZoneClock.dayClockEnabled`, which also holds the default.
     static let calendarDayClockEnabled = "calendarDayClockEnabled"
+    /// How a timeline column's height follows its day's length (gh#285):
+    /// `DayLengthMode.actual` (every hour the same height, so a 23h day is
+    /// short and a 25h day tall) or `.normalized` (every column a standard
+    /// day tall, a special day's hours scaled). Read through
+    /// `DayLengthMode.current`.
+    static let calendarDayLengthMode = "calendarDayLengthMode"
     /// Experimental: when true, the event-detail mini-day timeline
     /// (`miniDayTimelineVisual` in `CalendarEventDetailView`) is rendered
     /// through a CALayer-backed UIView instead of the SwiftUI tree. Same
@@ -425,6 +431,7 @@ enum AppSettingsKeys {
         holidaysShowGregorianHolidays,
         calendarUseCALayerAxisMarkers,
         calendarDayClockEnabled,
+        calendarDayLengthMode,
         tokenInferenceLLMEnabled,
         calendarShareStyle,
         // Declared in `AppSettingsLocale`, not here, which is the only

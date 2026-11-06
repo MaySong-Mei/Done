@@ -1177,6 +1177,10 @@ struct CalendarPageView: View {
     /// lives in `Event.colorOpacityMultiplier` and reads UserDefaults
     /// directly; this @AppStorage exists purely for SwiftUI reactivity.
     @AppStorage(AppSettingsKeys.effortOpacityEnabled) private var effortOpacityEnabled = true
+    /// How column heights follow day length (gh#285 S1.5); the pager is
+    /// rebuilt when it changes, like the other geometry settings.
+    @AppStorage(AppSettingsKeys.calendarDayLengthMode) private var dayLengthModeRaw = DayLengthMode.standard.rawValue
+    var dayLengthMode: DayLengthMode { DayLengthMode(stored: dayLengthModeRaw) }
     /// Same source `TimelinePagerView` feeds the day layer — the Todo-stack
     /// chip needs it to predict whether the preview block will have room for
     /// its own time row.
@@ -2127,15 +2131,18 @@ private extension CalendarPageView {
         for offset in -reach...reach where offset != 0 {
             longest = max(longest, zone.day(offset, from: selected).length)
         }
-        return longest
+        return calendarTimelineCanvasLength(longestInReach: longest, mode: dayLengthMode)
     }
 
     /// The day the content is sized for: the selected day's start stretched
-    /// to the held canvas length. Never shorter than the selected day.
+    /// to the held canvas length, never shorter than the selected day — or,
+    /// in the normalized mode, a standard day whatever the selected day is.
     var timelineCanvasClock: DayClock {
         let selected = selectedDayClock
-        let length = max(selected.length, timelineCanvasLength)
-        guard length > selected.length else { return selected }
+        let length = dayLengthMode == .normalized
+            ? DayClock.standardLength
+            : max(selected.length, timelineCanvasLength)
+        guard abs(length - selected.length) > 1 else { return selected }
         return DayClock(
             start: selected.start,
             end: selected.start.addingTimeInterval(length),
@@ -4118,7 +4125,7 @@ private extension CalendarPageView {
                     // entire timeline force-rebuilds when the user toggles
                     // effort-based opacity in settings — the new opacity
                     // values then propagate through every event block.
-                    rebuildKey: "timeline-\(calendarState.rangeMode)-effortOpacity\(effortOpacityEnabled)",
+                    rebuildKey: "timeline-\(calendarState.rangeMode)-effortOpacity\(effortOpacityEnabled)-dayLength\(dayLengthModeRaw)",
                     topOverlayInset: topOverlayInset,
                     bottomInset: pinchBottomInset(metrics: metrics)
                 )
@@ -4304,7 +4311,7 @@ private extension CalendarPageView {
         ) {
             VStack(alignment: .leading, spacing: 12) {
                 timelineLayer(
-                    rebuildKey: "timeline-\(calendarState.rangeMode)-effortOpacity\(effortOpacityEnabled)",
+                    rebuildKey: "timeline-\(calendarState.rangeMode)-effortOpacity\(effortOpacityEnabled)-dayLength\(dayLengthModeRaw)",
                     topOverlayInset: topOverlayInset,
                     bottomInset: pinchBottomInset(metrics: metrics)
                 )
@@ -4586,6 +4593,7 @@ private extension CalendarPageView {
             trailingFadeProgress: timelineTrailingFadeProgress,
             isDayOffsetFrozen: calendarState.isDayOffsetFrozen,
             canvasLength: timelineCanvasClock.length,
+            dayLengthMode: dayLengthMode,
             daysCount: timelineDaysCount(for: calendarState.rangeMode),
             mode: .preview,
             showEventText: timelineShowEventText(for: calendarState.rangeMode),

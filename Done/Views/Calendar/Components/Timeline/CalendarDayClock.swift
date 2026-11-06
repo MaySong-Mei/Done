@@ -329,3 +329,44 @@ nonisolated func calendarSettledLegendWindow(
 nonisolated func calendarNowLegendIsShown(now: Date, window: DateInterval) -> Bool {
     now >= window.start && now < window.end
 }
+
+// MARK: - Day length mode (gh#285 S1.5)
+
+/// How a column's height follows its day's length. `actual` draws every
+/// hour at one height, so a 23h day is short, a 25h day tall, and the
+/// content grows to the longest day in reach; `normalized` draws every
+/// column a standard day tall, a special day's hours scaled by
+/// standard / length. Both place an instant at elapsed / length and draw
+/// the same legends; only the column height differs.
+nonisolated enum DayLengthMode: String, CaseIterable, Identifiable {
+    case actual
+    case normalized
+
+    var id: String { rawValue }
+
+    static let standard: DayLengthMode = .actual
+
+    /// Tolerant of a value nothing wrote or nothing recognises: the default.
+    init(stored: String?) {
+        self = stored.flatMap(DayLengthMode.init(rawValue:)) ?? .standard
+    }
+
+    /// The mode as set in `UserDefaults`.
+    static var current: DayLengthMode {
+        DayLengthMode(stored: UserDefaults.standard.string(forKey: AppSettingsKeys.calendarDayLengthMode))
+    }
+}
+
+/// The hour height a column of `clock` is drawn with: the timeline's own in
+/// `actual`; in `normalized`, scaled by standard / length so the column is
+/// a standard day tall whatever its length.
+nonisolated func calendarColumnHourHeight(_ hourHeight: CGFloat, clock: DayClock, mode: DayLengthMode) -> CGFloat {
+    guard mode == .normalized, clock.length > 0 else { return hourHeight }
+    return hourHeight * CGFloat(DayClock.standardLength / clock.length)
+}
+
+/// The length the content is sized for: the longest day in reach in
+/// `actual`, a standard day always in `normalized`.
+nonisolated func calendarTimelineCanvasLength(longestInReach: TimeInterval, mode: DayLengthMode) -> TimeInterval {
+    mode == .normalized ? DayClock.standardLength : longestInReach
+}

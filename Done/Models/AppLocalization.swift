@@ -251,6 +251,7 @@ enum LKey {
     case headerTools, dragToCreate, eventBlock, focusMode, titleFontSize
     case rememberViewMode, returnToTodayOnTabSwitch, snapToAdjacentEvents
     case showTimeBelowTitle, confirmBeforeTracking
+    case dayLengthMode, dayLengthActual, dayLengthNormalized
     // Detail header settings
     case eventDetailPage, detailTools
     // Connections
@@ -607,6 +608,9 @@ enum LKey {
         case .returnToTodayOnTabSwitch: return "Return to Today on Tab Switch"
         case .snapToAdjacentEvents: return "Snap to Adjacent Events"
         case .showTimeBelowTitle: return "Show Time Below Title"
+        case .dayLengthMode: return "Day Length"
+        case .dayLengthActual: return "Actual (23h / 25h days)"
+        case .dayLengthNormalized: return "Equal height"
         case .confirmBeforeTracking: return "Confirm Before Tracking"
         case .eventDetailPage: return "Event Detail"
         case .detailTools: return "Detail Tools"
@@ -1339,6 +1343,9 @@ enum LKey {
         case .returnToTodayOnTabSwitch: return "切换标签时返回今天"
         case .snapToAdjacentEvents: return "吸附相邻事件"
         case .showTimeBelowTitle: return "标题下方显示时间"
+        case .dayLengthMode: return "日长显示"
+        case .dayLengthActual: return "真实时长(23 / 25 小时的天)"
+        case .dayLengthNormalized: return "每天等高"
         case .confirmBeforeTracking: return "开始追踪前确认"
         case .eventDetailPage: return "事件详情"
         case .detailTools: return "详情工具"

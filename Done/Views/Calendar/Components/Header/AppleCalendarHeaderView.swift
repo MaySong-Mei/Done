@@ -464,6 +464,7 @@ struct CalendarHeaderSettingsView: View {
     @AppStorage(AppSettingsKeys.detailHeaderExposedTools) private var detailExposedToolsRaw = "add"
     @AppStorage(AppSettingsKeys.calendarRememberViewMode) private var rememberViewMode = false
     @AppStorage(AppSettingsKeys.calendarAutoReturnToToday) private var autoReturnToToday = false
+    @AppStorage(AppSettingsKeys.calendarDayLengthMode) private var dayLengthModeRaw = DayLengthMode.standard.rawValue
     @AppStorage(AppSettingsKeys.calendarAdjacentEventSnapEnabled) private var adjacentEventSnapEnabled = true
     @AppStorage(AppSettingsKeys.calendarEventFontSize) private var eventFontSize: Double = 12
     @AppStorage(AppSettingsKeys.calendarEventShowTimeBelowTitle) private var eventShowTimeBelowTitle = true
@@ -528,6 +529,13 @@ struct CalendarHeaderSettingsView: View {
             settingsCard(L(.behavior)) {
                 Toggle(L(.rememberViewMode), isOn: $rememberViewMode)
                 Toggle(L(.returnToTodayOnTabSwitch), isOn: $autoReturnToToday)
+                settingsPickerRow(
+                    L(.dayLengthMode),
+                    selection: $dayLengthModeRaw,
+                    options: DayLengthMode.allCases.map { mode in
+                        (value: mode.rawValue, title: L(mode == .actual ? .dayLengthActual : .dayLengthNormalized))
+                    }
+                )
 
                 settingsHintText(L(.hintCalendarBehavior))
             }
