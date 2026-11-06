@@ -453,6 +453,7 @@
 		DA7C10C40003000000000003 /* CalendarDayClockTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA7C10C40004000000000004 /* CalendarDayClockTests.swift */; };
 		DA7C10C40005000000000005 /* CalendarDSTTimelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA7C10C40006000000000006 /* CalendarDSTTimelineTests.swift */; };
 		DA7C10C40007000000000007 /* CalendarDSTLegendTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA7C10C40008000000000008 /* CalendarDSTLegendTests.swift */; };
+		DA7C10C6001100000000001B /* CalendarDSTDayEndTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA7C10C6001200000000001C /* CalendarDSTDayEndTests.swift */; };
 		DA7C10C40009000000000009 /* CalendarDayLengthModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA7C10C4000A00000000000A /* CalendarDayLengthModeTests.swift */; };
 		WATCH000000000000000EMB1 /* DoneWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = WATCH000000000000000PRD1 /* DoneWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		WOVL00000000000000000B01 /* WristOverlap.swift in Sources */ = {isa = PBXBuildFile; fileRef = WOVL00000000000000000F01 /* WristOverlap.swift */; };
@@ -948,6 +949,7 @@
 		DA7C10C40004000000000004 /* CalendarDayClockTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDayClockTests.swift; sourceTree = "<group>"; };
 		DA7C10C40006000000000006 /* CalendarDSTTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDSTTimelineTests.swift; sourceTree = "<group>"; };
 		DA7C10C40008000000000008 /* CalendarDSTLegendTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDSTLegendTests.swift; sourceTree = "<group>"; };
+		DA7C10C6001200000000001C /* CalendarDSTDayEndTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDSTDayEndTests.swift; sourceTree = "<group>"; };
 		DA7C10C4000A00000000000A /* CalendarDayLengthModeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDayLengthModeTests.swift; sourceTree = "<group>"; };
 		WATCH000000000000000F011 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		WATCH000000000000000PRD1 /* DoneWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DoneWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -1044,6 +1046,7 @@
 				DA7C10C40004000000000004 /* CalendarDayClockTests.swift */,
 				DA7C10C40006000000000006 /* CalendarDSTTimelineTests.swift */,
 				DA7C10C40008000000000008 /* CalendarDSTLegendTests.swift */,
+				DA7C10C6001200000000001C /* CalendarDSTDayEndTests.swift */,
 				DA7C10C4000A00000000000A /* CalendarDayLengthModeTests.swift */,
 				CSTA00000000000000000010 /* CategoryStatsWidgetTests.swift */,
 				CGAU00000000000000000003 /* CategoryGaugeWidgetTests.swift */,
@@ -1969,6 +1972,7 @@
 				DA7C10C40003000000000003 /* CalendarDayClockTests.swift in Sources */,
 				DA7C10C40005000000000005 /* CalendarDSTTimelineTests.swift in Sources */,
 				DA7C10C40007000000000007 /* CalendarDSTLegendTests.swift in Sources */,
+				DA7C10C6001100000000001B /* CalendarDSTDayEndTests.swift in Sources */,
 				DA7C10C40009000000000009 /* CalendarDayLengthModeTests.swift in Sources */,
 				SSCN10012FE8000000000261 /* SyncSettingsCanonicalTests.swift in Sources */,
 				ACEN10012FE8000000000262 /* AgentConversationEncodingTests.swift in Sources */,
