@@ -120,6 +120,30 @@ final class TimeAxisLayerView: UIView {
     // Zone sublabel pool, one per non-nil entry of `hourLabelZones`.
     private var zoneLabels: [UILabel] = []
 
+    #if DEBUG
+    /// TEST-ONLY: the hour labels as laid out, by slot.
+    func debugHourLabels() -> [(slotIndex: Int, text: String, frame: CGRect)] {
+        hourLabelSlotIndices.enumerated().map { poolIndex, slotIndex in
+            (slotIndex, hourLabels[poolIndex].text ?? "", hourLabels[poolIndex].frame)
+        }
+    }
+
+    /// TEST-ONLY: the zone sublabels as laid out, each with the slot of the
+    /// hour label it sits under.
+    func debugZoneLabels() -> [(slotIndex: Int, text: String, frame: CGRect, isHidden: Bool)] {
+        var zoneIndex = 0
+        var result: [(slotIndex: Int, text: String, frame: CGRect, isHidden: Bool)] = []
+        for (poolIndex, slotIndex) in hourLabelSlotIndices.enumerated() {
+            guard poolIndex < hourLabelZones.count, hourLabelZones[poolIndex] != nil,
+                  zoneIndex < zoneLabels.count else { continue }
+            let label = zoneLabels[zoneIndex]
+            zoneIndex += 1
+            result.append((slotIndex, label.text ?? "", label.frame, label.isHidden))
+        }
+        return result
+    }
+    #endif
+
     // Hour labels live in this container so the band-fade mask (#55
     // follow-on) applies ONLY to them — markers + now-legend stay fully
     // opaque, parity with the SwiftUI `.mask(...)` modifier scoping at
@@ -456,9 +480,13 @@ final class TimeAxisLayerView: UIView {
         }
     }
 
-    /// The zone sublabel needs its own line under the hour; below this
-    /// hour height the lines would collide with the next hour's label.
-    static let zoneSublabelMinimumHourHeight: CGFloat = 28
+    /// The zone sublabel needs its own line under the hour. This bound is
+    /// the smallest hour height that keeps the two lines clear of the next
+    /// hour's label, and it lies below the pinch floor of a 25h canvas on
+    /// every phone, so the sublabel — the one thing telling the two 1:00
+    /// rows apart — shows at every zoom the page allows on such a day; see
+    /// `CalendarDSTLegendTests`.
+    static let zoneSublabelMinimumHourHeight: CGFloat = 20
 
     private func layoutHourLabels(inputs: Inputs) {
         guard !hourLabelSlotIndices.isEmpty else { return }

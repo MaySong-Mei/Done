@@ -1857,6 +1857,20 @@ final class DayLayerHostView: UIView {
         )
     }
 
+    /// TEST-ONLY: the in-column legend's zone sublabels as drawn, each with
+    /// the slot of the hour label it sits under.
+    func debugLegendZoneLayers() -> [(slotIndex: Int, text: String, frame: CGRect, isHidden: Bool)] {
+        var zoneIndex = 0
+        var result: [(slotIndex: Int, text: String, frame: CGRect, isHidden: Bool)] = []
+        for row in legendRows where row.label.zoneAbbreviation != nil {
+            guard zoneIndex < legendZoneLayers.count else { break }
+            let layer = legendZoneLayers[zoneIndex]
+            zoneIndex += 1
+            result.append((row.slotIndex, layer.string as? String ?? "", layer.frame, layer.isHidden))
+        }
+        return result
+    }
+
     /// TEST-ONLY: the hour grid's left edge and width, as drawn.
     func debugGridSpan() -> (x: CGFloat, width: CGFloat)? {
         guard let path = chrome.hourGrid.path else { return nil }
