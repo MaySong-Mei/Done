@@ -81,6 +81,72 @@ final class CalendarDSTDayEndTests: XCTestCase {
         header + CGFloat(elapsedHours) * hourHeight
     }
 
+    // MARK: The visible end and the touch gate (QA mutation c2)
+
+    func testTheVisibleEndOfADayIsItsRealEndNotAStandardDayOn() {
+        // 25h: the window ends 25h after the start; a band below adds to that.
+        XCTAssertEqual(calendarTimelineVisibleEnd(clock: fallBack), fallBack.start.addingTimeInterval(25 * 3600))
+        XCTAssertEqual(calendarTimelineVisibleEnd(clock: fallBack), fallBack.end)
+        XCTAssertEqual(
+            calendarTimelineVisibleEnd(clock: fallBack, trailingExtendedHours: 12),
+            fallBack.start.addingTimeInterval(37 * 3600)
+        )
+        // 23h, and for symmetry a plain day.
+        XCTAssertEqual(calendarTimelineVisibleEnd(clock: springForward), springForward.start.addingTimeInterval(23 * 3600))
+        XCTAssertEqual(
+            calendarTimelineVisibleEnd(clock: springForward, trailingExtendedHours: 12),
+            springForward.start.addingTimeInterval(35 * 3600)
+        )
+        let plain = day(2026, 11, 2)
+        XCTAssertEqual(calendarTimelineVisibleEnd(clock: plain), plain.start.addingTimeInterval(24 * 3600))
+    }
+
+    func testTheLastHourOfTheFallBackDayTakesATouchAndTheHourAfterTheSpringDayDoesNot() {
+        // 24h30m into the 25h day is 23:30 EST, the day's own: accepted.
+        // 25h in is the next day's first instant: not this day, unless the
+        // band below is open.
+        let lastHalfHour = fallBack.start.addingTimeInterval(24.5 * 3600)
+        XCTAssertEqual(newYork.component(.hour, from: lastHalfHour), 23, "fixture: 23:30 on the wall")
+        XCTAssertTrue(calendarTimelineColumnAccepts(instant: lastHalfHour, clock: fallBack))
+        XCTAssertFalse(calendarTimelineColumnAccepts(instant: fallBack.end, clock: fallBack))
+        XCTAssertTrue(calendarTimelineColumnAccepts(instant: fallBack.end, clock: fallBack, trailingExtendedHours: 1))
+        // The same through the Y mapping a touch goes through, unclamped as
+        // the host maps it.
+        let touched = calendarTimelineDateFromYPosition(
+            y(elapsedHours: 24.5), clock: fallBack, headerHeight: header, hourHeight: hourHeight,
+            snapMinutes: 1, clampToExtension: false
+        )
+        XCTAssertEqual(touched, lastHalfHour)
+        XCTAssertTrue(calendarTimelineColumnAccepts(instant: touched, clock: fallBack))
+
+        // 23h: 22h30m in is the day's last half hour; 23h in is the next day.
+        let springLast = springForward.start.addingTimeInterval(22.5 * 3600)
+        XCTAssertEqual(newYork.component(.hour, from: springLast), 23, "fixture: 23:30 on the wall")
+        XCTAssertTrue(calendarTimelineColumnAccepts(instant: springLast, clock: springForward))
+        XCTAssertFalse(calendarTimelineColumnAccepts(instant: springForward.end, clock: springForward))
+        XCTAssertFalse(
+            calendarTimelineColumnAccepts(instant: springForward.start.addingTimeInterval(23.5 * 3600), clock: springForward),
+            "the hour a standard day would still have is the next day's"
+        )
+    }
+
+    func testTheLastHourOfTheFallBackDayIsDrawnWhole() {
+        // 23:00–00:00 EST on Nov 1, elapsed 24h–25h: a full hour's block,
+        // clipped by the day's real end and so not clipped at all.
+        let last = occurrence("Last", elapsedHours: 24, of: fallBack, hours: 1)
+        XCTAssertEqual(newYork.component(.hour, from: last.range.start), 23, "fixture: 23:00 on the wall")
+        let host = DayLayerHostView(frame: CGRect(x: 0, y: 0, width: 360, height: 3000))
+        host.apply(model([last], clock: fallBack))
+        host.layoutIfNeeded()
+        let hit = host.debugHitFrame(of: last.id)
+        XCTAssertEqual(hit?.minY ?? -1, y(elapsedHours: 24) + 1.5, accuracy: 0.01)
+        XCTAssertEqual(hit?.height ?? -1, hourHeight - 3, accuracy: 0.01, "the whole hour, not clipped at a standard day's end")
+        let container = host.debugPieceContainers(of: last.id)[last.id]
+        XCTAssertNotNil(container, "the block is drawn")
+        XCTAssertEqual(container?.frame.minY ?? -1, y(elapsedHours: 24) + 1.5, accuracy: 0.01)
+        XCTAssertEqual(container?.frame.height ?? -1, hourHeight - 3, accuracy: 0.01)
+    }
+
     // MARK: The band split at the day's end (QA mutation c1)
 
     func testBlocksSplitAtTheTwentyFiveHourDaysEndWhenTheBandBelowIsOpen() {
