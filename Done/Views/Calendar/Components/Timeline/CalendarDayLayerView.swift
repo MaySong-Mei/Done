@@ -65,11 +65,11 @@ struct CalendarColumnLegend: Equatable {
         isNarrow ? label.narrowText : label.text
     }
 
-    /// The zone a row shows under its hour: the axis's abbreviation, or in
-    /// the narrow form a nameless zone's offset alone ("GMT+3" → "+3").
+    /// The zone a row shows under its hour: a named zone as the axis shows
+    /// it, a nameless one by its offset alone ("GMT+3" → "+3"), which is
+    /// what fits the inset in either form.
     func zoneText(of label: CalendarAxisHourLabel) -> String? {
-        guard let zone = label.zoneAbbreviation else { return nil }
-        return isNarrow ? calendarNarrowZoneAbbreviation(zone) : zone
+        label.zoneAbbreviation.map(calendarNarrowZoneAbbreviation)
     }
 }
 

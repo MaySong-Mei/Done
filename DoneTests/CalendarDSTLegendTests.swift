@@ -330,7 +330,10 @@ final class CalendarDSTLegendTests: XCTestCase {
         XCTAssertEqual(calendarNarrowZoneAbbreviation("GMT"), "GMT")
         let cairo = CalendarAxisHourLabel(text: "23:00", narrowText: "23", zoneAbbreviation: "GMT+3")
         XCTAssertEqual(narrow.zoneText(of: cairo), "+3")
-        XCTAssertEqual(standard.zoneText(of: cairo), "GMT+3", "the wide form keeps the axis's text")
+        XCTAssertEqual(standard.zoneText(of: cairo), "+3", "the wide form folds too; only the fixed axis has room for the prefix")
+        let named = CalendarAxisHourLabel(text: "1:00", narrowText: "1", zoneAbbreviation: "EDT")
+        XCTAssertEqual(standard.zoneText(of: named), "EDT")
+        XCTAssertEqual(narrow.zoneText(of: named), "EDT")
         XCTAssertNil(narrow.zoneText(of: CalendarAxisHourLabel(text: "2:00", narrowText: "2", zoneAbbreviation: nil)))
     }
 
