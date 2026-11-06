@@ -4835,42 +4835,14 @@ private extension CalendarEventDetailView {
     }
 
     func timeSummary(for event: Event, range: Event.TimeRange) -> String {
-        let calendar = Calendar.current
-        let dateFormatter = DateFormatter()
-        let timeFormatter = DateFormatter()
-        dateFormatter.dateStyle = .medium
-        if AppTimeFormat.current.is24 {
-            timeFormatter.dateFormat = "H:mm"
-        } else {
-            timeFormatter.locale = Locale(identifier: "en_US_POSIX")
-            timeFormatter.dateFormat = "h:mm a"
-            timeFormatter.amSymbol = "am"
-            timeFormatter.pmSymbol = "pm"
-        }
-        if event.isAllDay {
-            if calendar.isDate(range.start, inSameDayAs: range.end) {
-                return "\(dateFormatter.string(from: range.start)) • All-day"
-            }
-            return "\(dateFormatter.string(from: range.start)) - \(dateFormatter.string(from: range.end)) • All-day"
-        }
-        if calendar.isDate(range.start, inSameDayAs: range.end) {
-            return "\(dateFormatter.string(from: range.start)) • \(timeFormatter.string(from: range.start)) - \(timeFormatter.string(from: range.end))"
-        }
-        return "\(dateFormatter.string(from: range.start)) \(timeFormatter.string(from: range.start)) - \(dateFormatter.string(from: range.end)) \(timeFormatter.string(from: range.end))"
+        calendarEventDetailTimeSummary(
+            for: event, range: range, is24: AppTimeFormat.current.is24, calendar: .current
+        )
     }
 
 
     func timelineTimeLabel(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        if AppTimeFormat.current.is24 {
-            formatter.dateFormat = "H:mm"
-        } else {
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.dateFormat = "h:mm a"
-            formatter.amSymbol = "am"
-            formatter.pmSymbol = "pm"
-        }
-        return formatter.string(from: date)
+        calendarEventDetailTimeLabel(date, is24: AppTimeFormat.current.is24, calendar: .current)
     }
 
     func isNoteNearSlider(note: EventLogTimelineNote, at selectedDate: Date, range: Event.TimeRange) -> Bool {
@@ -6107,4 +6079,53 @@ struct CalendarAwaitingNamePrompt: View {
         focused = false
         onName(typed)
     }
+}
+
+// MARK: - Time text (gh#285)
+
+/// The detail view's time formatter: the app's 12h / 24h setting, in the
+/// calendar's zone.
+private func calendarEventDetailTimeFormatter(is24: Bool, calendar: Calendar) -> DateFormatter {
+    let formatter = DateFormatter()
+    formatter.timeZone = calendar.timeZone
+    if is24 {
+        formatter.dateFormat = "H:mm"
+    } else {
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "h:mm a"
+        formatter.amSymbol = "am"
+        formatter.pmSymbol = "pm"
+    }
+    return formatter
+}
+
+/// One wall time as the detail view writes it. A time the day visits
+/// twice carries its zone, the rule the form applies, so the second 01:15
+/// reads apart from the first here too.
+func calendarEventDetailTimeLabel(_ date: Date, is24: Bool, calendar: Calendar) -> String {
+    calendarWallTimeText(
+        date, formatter: calendarEventDetailTimeFormatter(is24: is24, calendar: calendar), calendar: calendar
+    )
+}
+
+/// The detail view's one-line summary of `range`: the date, then the
+/// times through `calendarEventDetailTimeLabel`'s rule.
+func calendarEventDetailTimeSummary(
+    for event: Event, range: Event.TimeRange, is24: Bool, calendar: Calendar
+) -> String {
+    let dateFormatter = DateFormatter()
+    dateFormatter.dateStyle = .medium
+    dateFormatter.timeZone = calendar.timeZone
+    if event.isAllDay {
+        if calendar.isDate(range.start, inSameDayAs: range.end) {
+            return "\(dateFormatter.string(from: range.start)) • All-day"
+        }
+        return "\(dateFormatter.string(from: range.start)) - \(dateFormatter.string(from: range.end)) • All-day"
+    }
+    let startText = calendarEventDetailTimeLabel(range.start, is24: is24, calendar: calendar)
+    let endText = calendarEventDetailTimeLabel(range.end, is24: is24, calendar: calendar)
+    if calendar.isDate(range.start, inSameDayAs: range.end) {
+        return "\(dateFormatter.string(from: range.start)) • \(startText) - \(endText)"
+    }
+    return "\(dateFormatter.string(from: range.start)) \(startText) - \(dateFormatter.string(from: range.end)) \(endText)"
 }

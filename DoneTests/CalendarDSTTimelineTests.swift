@@ -534,6 +534,69 @@ final class CalendarDSTTimelineTests: XCTestCase {
         XCTAssertEqual(replacement.renderTimeRanges(calendar: ny).first?.start, firstOneFifteen, "renderTimeRanges, first pass")
     }
 
+    func testTheDetailViewNamesTheZoneBesideAnAmbiguousTimeAsTheFormDoes() {
+        // The detail view's summary line and its time labels apply the
+        // form's rule: a wall time the day visits twice carries its zone, a
+        // unique one is bare.
+        let ny = newYork
+        func event(_ start: Date, seconds: TimeInterval) -> (Event, Event.TimeRange) {
+            let range = Event.TimeRange(start: start, end: start.addingTimeInterval(seconds))
+            return (Event(title: "Night", timeRanges: [range], type: "Work"), range)
+        }
+        let (c1, c1Range) = event(secondOneFifteen, seconds: 1800)
+        let (b1, b1Range) = event(firstOneFifteen, seconds: 1800)
+        let nineEST = Date(timeIntervalSince1970: 1_793_541_600)
+        let (a9, a9Range) = event(nineEST, seconds: 3600)
+        let dateText: (Date) -> String = { date in
+            let formatter = DateFormatter()
+            formatter.dateStyle = .medium
+            formatter.timeZone = ny.timeZone
+            return formatter.string(from: date)
+        }
+
+        XCTAssertEqual(
+            calendarEventDetailTimeSummary(for: c1, range: c1Range, is24: true, calendar: ny),
+            "\(dateText(secondOneFifteen)) • 1:15 EST - 1:45 EST"
+        )
+        XCTAssertEqual(
+            calendarEventDetailTimeSummary(for: b1, range: b1Range, is24: true, calendar: ny),
+            "\(dateText(firstOneFifteen)) • 1:15 EDT - 1:45 EDT"
+        )
+        XCTAssertEqual(
+            calendarEventDetailTimeSummary(for: c1, range: c1Range, is24: false, calendar: ny),
+            "\(dateText(secondOneFifteen)) • 1:15 am EST - 1:45 am EST"
+        )
+        // Control: a unique wall time on the same day, and a plain day, stay bare.
+        XCTAssertEqual(
+            calendarEventDetailTimeSummary(for: a9, range: a9Range, is24: true, calendar: ny),
+            "\(dateText(nineEST)) • 9:00 - 10:00"
+        )
+        let plainStart = ny.date(from: DateComponents(year: 2026, month: 11, day: 3, hour: 1, minute: 15))!
+        let (plain, plainRange) = event(plainStart, seconds: 1800)
+        XCTAssertEqual(
+            calendarEventDetailTimeSummary(for: plain, range: plainRange, is24: true, calendar: ny),
+            "\(dateText(plainStart)) • 1:15 - 1:45"
+        )
+        // A range that leaves the repeated hour names the zone on the one
+        // end that is ambiguous.
+        let (leaving, leavingRange) = event(secondOneFifteen, seconds: 2 * 3600)
+        XCTAssertEqual(
+            calendarEventDetailTimeSummary(for: leaving, range: leavingRange, is24: true, calendar: ny),
+            "\(dateText(secondOneFifteen)) • 1:15 EST - 3:15"
+        )
+        // The single time label, as the mini timeline's ends and the
+        // interrupt rows read it.
+        XCTAssertEqual(calendarEventDetailTimeLabel(secondOneFifteen, is24: true, calendar: ny), "1:15 EST")
+        XCTAssertEqual(calendarEventDetailTimeLabel(firstOneFifteen, is24: false, calendar: ny), "1:15 am EDT")
+        XCTAssertEqual(calendarEventDetailTimeLabel(nineEST, is24: true, calendar: ny), "9:00")
+        // The form reads the same helper.
+        let formFormatter = DateFormatter()
+        formFormatter.timeZone = ny.timeZone
+        formFormatter.dateFormat = "H:mm"
+        XCTAssertEqual(calendarWallTimeText(secondOneFifteen, formatter: formFormatter, calendar: ny), "1:15 EST")
+        XCTAssertEqual(calendarWallTimeText(nineEST, formatter: formFormatter, calendar: ny), "9:00")
+    }
+
     func testTheLegacyClockPutsTheSecondOneFifteenOnTheWrongRow() {
         // Control for the test above: with the legacy clock the geometry is
         // the same elapsed mapping, so the blocks land on the same rows —

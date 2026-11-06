@@ -648,10 +648,7 @@ private extension CalendarEventFormView {
                         } label: {
                             // A wall time the day visits twice carries its
                             // zone, so the two 01:15s read apart (gh#285).
-                            Text(timeFormatter.string(from: date.wrappedValue)
-                                 + (CalendarWallTime.isAmbiguous(date.wrappedValue, calendar: .current)
-                                    ? " " + calendarZoneAbbreviation(for: date.wrappedValue, calendar: .current)
-                                    : ""))
+                            Text(calendarWallTimeText(date.wrappedValue, formatter: timeFormatter, calendar: .current))
                                 .font(.subheadline)
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 6)

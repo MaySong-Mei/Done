@@ -347,6 +347,16 @@ func calendarZoneAbbreviation(for instant: Date, calendar: Calendar) -> String {
 
 private var calendarZoneAbbreviationFormatters: [String: DateFormatter] = [:]
 
+/// `date`'s wall time as `formatter` writes it, followed by the zone's
+/// abbreviation when the day visits that wall time twice (gh#285), so the
+/// second 01:15 reads apart from the first wherever a time is shown. A
+/// unique wall time is written bare, so no other day changes.
+func calendarWallTimeText(_ date: Date, formatter: DateFormatter, calendar: Calendar) -> String {
+    let text = formatter.string(from: date)
+    guard CalendarWallTime.isAmbiguous(date, calendar: calendar) else { return text }
+    return text + " " + calendarZoneAbbreviation(for: date, calendar: calendar)
+}
+
 /// Single-source Y for the axis now-time legend label (gh#80). BOTH render
 /// paths — SwiftUI `TimeAxisLabels` and CALayer
 /// `TimeAxisLayerView.updateNowLegend` — must position the legend through
