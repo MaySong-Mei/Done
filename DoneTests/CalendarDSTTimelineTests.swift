@@ -46,22 +46,24 @@ final class CalendarDSTTimelineTests: XCTestCase {
 
     // MARK: Label rows (A1, A2)
 
-    func testFallBackDayHasTwentySixLabelRowsWithTheRepeatedHourMarked() {
+    func testFallBackDayHasTwentySixLabelRowsWithTheRepeatedHourZoned() {
         let rows = labels(clock: fallBack)
         XCTAssertEqual(rows.count, 26)
         XCTAssertEqual(
             rows.map { $0?.text },
-            ["0:00", "1:00①", "1:00②"] + (2...23).map { "\($0):00" } + ["0:00"]
+            ["0:00", "1:00", "1:00"] + (2...23).map { "\($0):00" } + ["0:00"]
         )
         XCTAssertEqual(rows[1]?.zoneAbbreviation, "EDT")
         XCTAssertEqual(rows[2]?.zoneAbbreviation, "EST")
         XCTAssertEqual(rows.compactMap { $0?.zoneAbbreviation }.count, 2, "only the repeated hour carries the zone")
     }
 
-    func testFallBackDayTwelveHourLabelsCarryTheSameMarks() {
+    func testFallBackDayTwelveHourLabelsRepeatOneAmWithTheZone() {
         let rows = labels(clock: fallBack, is24: false)
-        XCTAssertEqual(rows[1]?.text, "1 am①")
-        XCTAssertEqual(rows[2]?.text, "1 am②")
+        XCTAssertEqual(rows[1]?.text, "1 am")
+        XCTAssertEqual(rows[2]?.text, "1 am")
+        XCTAssertEqual(rows[1]?.zoneAbbreviation, "EDT")
+        XCTAssertEqual(rows[2]?.zoneAbbreviation, "EST")
         XCTAssertEqual(rows[10]?.text, "9 am", "09:00 EST sits on the tenth row")
     }
 
@@ -91,8 +93,10 @@ final class CalendarDSTTimelineTests: XCTestCase {
                 XCTAssertNil(row, "slot \(index)")
             }
         }
-        XCTAssertEqual(rows[2]?.text, "1:00①")
-        XCTAssertEqual(rows[4]?.text, "1:00②")
+        XCTAssertEqual(rows[2]?.text, "1:00")
+        XCTAssertEqual(rows[4]?.text, "1:00")
+        XCTAssertEqual(rows[2]?.zoneAbbreviation, "EDT")
+        XCTAssertEqual(rows[4]?.zoneAbbreviation, "EST")
     }
 
     func testTheBandBelowAPlainDayLabelsTheNextDaysRepeatedHour() {
@@ -101,8 +105,9 @@ final class CalendarDSTTimelineTests: XCTestCase {
         let rows = labels(clock: day(2026, 10, 31), trailing: 12)
         XCTAssertEqual(rows.count, 37)
         XCTAssertEqual(rows[24]?.text, "0:00")
-        XCTAssertEqual(rows[25]?.text, "1:00①")
-        XCTAssertEqual(rows[26]?.text, "1:00②")
+        XCTAssertEqual(rows[25]?.text, "1:00")
+        XCTAssertEqual(rows[26]?.text, "1:00")
+        XCTAssertEqual(rows[25]?.zoneAbbreviation, "EDT")
         XCTAssertEqual(rows[26]?.zoneAbbreviation, "EST")
         XCTAssertEqual(rows[36]?.text, "11:00")
     }
@@ -113,7 +118,8 @@ final class CalendarDSTTimelineTests: XCTestCase {
         XCTAssertEqual(rows[0]?.text, "12:00")
         XCTAssertEqual(rows[11]?.text, "23:00")
         XCTAssertEqual(rows[12]?.text, "0:00")
-        XCTAssertEqual(rows[13]?.text, "1:00①")
+        XCTAssertEqual(rows[13]?.text, "1:00")
+        XCTAssertEqual(rows[13]?.zoneAbbreviation, "EDT")
     }
 
     func testTheSwiftUIAxisReadsTheSameLabelsAsTheLayerAxis() {

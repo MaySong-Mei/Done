@@ -283,9 +283,9 @@ func calendarTimelineElapsedMinutes(
 
 /// The hour label of one axis slot (gh#285): the wall clock hour of the
 /// instant the slot stands for, read off the calendar, so a day whose clock
-/// skips or revisits an hour labels what is really there. A twice-visited
-/// hour is marked ① on the first pass and ② on the second, and only those
-/// labels carry the zone's abbreviation.
+/// skips or revisits an hour labels what is really there. The two labels of
+/// a twice-visited hour read the same; only they carry the zone's
+/// abbreviation, which is what tells the passes apart.
 struct CalendarAxisHourLabel: Equatable {
     let text: String
     let zoneAbbreviation: String?
@@ -303,14 +303,13 @@ func calendarTimelineAxisHourLabel(
     guard slotMinute % 60 == 0 else { return nil }
     let instant = clock.start.addingTimeInterval(TimeInterval(slotMinute * 60))
     let hour = zoneClock.calendar.component(.hour, from: instant)
-    var text = calendarHourAxisLabel(hour24: hour, is24: is24)
+    let text = calendarHourAxisLabel(hour24: hour, is24: is24)
     // A band slot belongs to a neighbouring day, whose own clock knows
     // whether that hour is a repeated one.
     let dayOfInstant = clock.contains(instant) ? clock : zoneClock.day(containing: instant)
-    guard let pass = dayOfInstant.repeatedPass(of: instant) else {
+    guard dayOfInstant.repeatedPass(of: instant) != nil else {
         return CalendarAxisHourLabel(text: text, zoneAbbreviation: nil)
     }
-    text += pass == 1 ? "①" : "②"
     return CalendarAxisHourLabel(
         text: text,
         zoneAbbreviation: calendarZoneAbbreviation(for: instant, calendar: zoneClock.calendar)
