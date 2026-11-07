@@ -32,14 +32,34 @@ final class CalendarDSTLegendTests: XCTestCase {
         zone(calendar).day(containing: calendar.date(from: DateComponents(year: year, month: month, day: day, hour: 12))!)
     }
 
-    /// A window of `daysCount` columns starting on the given New York day.
-    private func newYorkWindow(_ year: Int, _ month: Int, _ dayOfMonth: Int, daysCount: Int, leadingOffset: Int = 0) -> CalendarLegendWindow {
+    /// A window of `daysCount` columns starting on the given New York day,
+    /// under the build's rule unless one is named.
+    private func newYorkWindow(
+        _ year: Int, _ month: Int, _ dayOfMonth: Int, daysCount: Int, leadingOffset: Int = 0,
+        rule: CalendarLegendRule = .standard
+    ) -> CalendarLegendWindow {
         CalendarLegendWindow(
             leadingOffset: leadingOffset,
             leadingClock: day(newYork, year, month, dayOfMonth),
             daysCount: daysCount,
-            zoneClock: zone(newYork)
+            zoneClock: zone(newYork),
+            rule: rule
         )
+    }
+
+    /// A window over clocks made by hand.
+    private func window(_ clocks: [DayClock], rule: CalendarLegendRule, leadingOffset: Int = 0) -> CalendarLegendWindow {
+        CalendarLegendWindow(leadingOffset: leadingOffset, clocks: clocks, rule: rule)
+    }
+
+    /// The day offsets of the columns that draw their own legend.
+    private func legendOffsets(_ window: CalendarLegendWindow) -> [Int] {
+        (window.leadingOffset..<(window.leadingOffset + window.clocks.count)).filter { window.drawsLegend(atOffset: $0) }
+    }
+
+    /// Per column, the day offset of the column whose legend it reads.
+    private func legendSources(_ window: CalendarLegendWindow) -> [Int?] {
+        (window.leadingOffset..<(window.leadingOffset + window.clocks.count)).map { window.legendColumn(atOffset: $0) }
     }
 
     /// A standard day and a special one made by hand, for windows the real
@@ -55,53 +75,151 @@ final class CalendarDSTLegendTests: XCTestCase {
         )
     }
 
-    // MARK: Grouping (A4)
+    // MARK: The rule (A4)
 
-    func testTheFiveThreeDayWindowsAroundTheFallBackDayGroupAsDecided() {
-        // 24-24-24, then the 25h day walks through: [24-24][25],
-        // [24][25][24], [25][24-24], and 24-24-24 again.
-        XCTAssertEqual(newYorkWindow(2026, 10, 29, daysCount: 3).groups.groups, [0..<3])
-        XCTAssertEqual(newYorkWindow(2026, 10, 30, daysCount: 3).groups.groups, [0..<2, 2..<3])
-        XCTAssertEqual(newYorkWindow(2026, 10, 31, daysCount: 3).groups.groups, [0..<1, 1..<2, 2..<3])
-        XCTAssertEqual(newYorkWindow(2026, 11, 1, daysCount: 3).groups.groups, [0..<1, 1..<3])
-        XCTAssertEqual(newYorkWindow(2026, 11, 2, daysCount: 3).groups.groups, [0..<3])
+    func testTheBuildsRuleIsSharedAxisAndTheStoredValueIsReadTolerantly() {
+        XCTAssertEqual(CalendarLegendRule.standard, .sharedAxis)
+        XCTAssertEqual(CalendarLegendRule(stored: nil), .sharedAxis)
+        XCTAssertEqual(CalendarLegendRule(stored: "nonsense"), .sharedAxis)
+        XCTAssertEqual(CalendarLegendRule(stored: "grouped"), .grouped)
+        XCTAssertEqual(CalendarLegendRule(stored: "sharedAxis"), .sharedAxis)
+        XCTAssertEqual(Set(CalendarLegendRule.allCases), [.sharedAxis, .grouped])
+        // Not a setting: the key is nowhere in the resettable or synced lists.
+        XCTAssertFalse(AppSettingsKeys.resettableUserDefaultsKeys.contains(CalendarLegendRule.debugDefaultsKey))
+        XCTAssertFalse(SyncedSettings.allKeys.contains(CalendarLegendRule.debugDefaultsKey))
+        // The DEBUG switch: the launch argument lands in the standard
+        // defaults through the argument domain, and this is where it is read.
+        let defaults = UserDefaults.standard
+        XCTAssertNil(defaults.string(forKey: CalendarLegendRule.debugDefaultsKey), "fixture: nothing set")
+        XCTAssertEqual(CalendarLegendRule.current, .sharedAxis)
+        defaults.set("grouped", forKey: CalendarLegendRule.debugDefaultsKey)
+        defer { defaults.removeObject(forKey: CalendarLegendRule.debugDefaultsKey) }
+        XCTAssertEqual(CalendarLegendRule.current, .grouped)
+        defaults.set("nonsense", forKey: CalendarLegendRule.debugDefaultsKey)
+        XCTAssertEqual(CalendarLegendRule.current, .sharedAxis)
     }
 
-    func testTheSpringForwardDayGroupsTheSameWay() {
-        XCTAssertEqual(newYorkWindow(2026, 3, 5, daysCount: 3).groups.groups, [0..<3])
-        XCTAssertEqual(newYorkWindow(2026, 3, 6, daysCount: 3).groups.groups, [0..<2, 2..<3])
-        XCTAssertEqual(newYorkWindow(2026, 3, 7, daysCount: 3).groups.groups, [0..<1, 1..<2, 2..<3])
-        XCTAssertEqual(newYorkWindow(2026, 3, 8, daysCount: 3).groups.groups, [0..<1, 1..<3])
-        XCTAssertEqual(newYorkWindow(2026, 3, 9, daysCount: 3).groups.groups, [0..<3])
+    func testTheFiveThreeDayWindowsAroundTheFallBackDayDrawTheirLegendsAsDecided() {
+        // Under the shared axis the fixed axis is the leftmost standard day
+        // and only the long day draws a legend, wherever it sits: axis +
+        // Nov 1 when Nov 1 is the third, second or first column, and no
+        // legend at all in the plain windows either side.
+        let octTwentyNine = newYorkWindow(2026, 10, 29, daysCount: 3, leadingOffset: -3)
+        XCTAssertEqual(octTwentyNine.axisClock, day(newYork, 2026, 10, 29))
+        XCTAssertEqual(legendOffsets(octTwentyNine), [])
+        XCTAssertEqual(octTwentyNine.legendCount, 1)
+
+        let octThirty = newYorkWindow(2026, 10, 30, daysCount: 3, leadingOffset: -2)
+        XCTAssertEqual(octThirty.axisClock, day(newYork, 2026, 10, 30))
+        XCTAssertEqual(legendOffsets(octThirty), [0], "Nov 1 is the third column")
+        XCTAssertEqual(octThirty.legendCount, 2)
+
+        let octThirtyOne = newYorkWindow(2026, 10, 31, daysCount: 3, leadingOffset: -1)
+        XCTAssertEqual(octThirtyOne.axisClock, day(newYork, 2026, 10, 31))
+        XCTAssertEqual(legendOffsets(octThirtyOne), [0], "Nov 1 is the middle column; Nov 2 reads the axis")
+        XCTAssertEqual(octThirtyOne.legendCount, 2)
+
+        let novOne = newYorkWindow(2026, 11, 1, daysCount: 3)
+        XCTAssertEqual(novOne.axisClock, day(newYork, 2026, 11, 2), "the axis is the next standard day")
+        XCTAssertEqual(novOne.axisOffset, 1)
+        XCTAssertEqual(legendOffsets(novOne), [0], "the long day draws its own legend in the leftmost column")
+        XCTAssertEqual(novOne.legendCount, 2)
+
+        let novTwo = newYorkWindow(2026, 11, 2, daysCount: 3, leadingOffset: 1)
+        XCTAssertEqual(novTwo.axisClock, day(newYork, 2026, 11, 2))
+        XCTAssertEqual(legendOffsets(novTwo), [])
+        XCTAssertEqual(novTwo.legendCount, 1)
+
+        // The grouped rule, as it was: the axis is the leftmost column, and
+        // a later column that starts a group draws its own.
+        let grouped = [(10, 29), (10, 30), (10, 31), (11, 1), (11, 2)].map {
+            newYorkWindow(2026, $0.0, $0.1, daysCount: 3, rule: .grouped)
+        }
+        XCTAssertEqual(grouped.map { LegendGroups(clocks: $0.clocks).groups }, [
+            [0..<3], [0..<2, 2..<3], [0..<1, 1..<2, 2..<3], [0..<1, 1..<3], [0..<3]
+        ])
+        XCTAssertEqual(grouped.map(legendOffsets), [[], [2], [1, 2], [1], []])
+        XCTAssertEqual(grouped.map(\.legendCount), [1, 2, 3, 2, 1])
+        XCTAssertEqual(grouped.map(\.axisIndex), [0, 0, 0, 0, 0])
+        XCTAssertEqual(grouped[3].axisClock.length, 25 * 3600, "grouped: the long day leads, so the axis is the long one")
     }
 
-    func testACairoWeekWithAMidWeekTwentyFiveHourThursdayHasThreeGroups() {
+    func testTheSpringForwardDayDrawsItsLegendTheSameWay() {
+        let windows = (5...9).map { newYorkWindow(2026, 3, $0, daysCount: 3) }
+        XCTAssertEqual(windows.map(\.axisClock), [5, 6, 7, 9, 9].map { day(newYork, 2026, 3, $0) })
+        XCTAssertEqual(windows.map(legendOffsets), [[], [2], [1], [0], []])
+        XCTAssertEqual(windows.map(\.legendCount), [1, 2, 2, 2, 1])
+
+        let grouped = (5...9).map { newYorkWindow(2026, 3, $0, daysCount: 3, rule: .grouped) }
+        XCTAssertEqual(grouped.map { LegendGroups(clocks: $0.clocks).groups }, [
+            [0..<3], [0..<2, 2..<3], [0..<1, 1..<2, 2..<3], [0..<1, 1..<3], [0..<3]
+        ])
+        XCTAssertEqual(grouped.map(legendOffsets), [[], [2], [1, 2], [1], []])
+        XCTAssertEqual(grouped.map(\.axisClock), [5, 6, 7, 8, 9].map { day(newYork, 2026, 3, $0) })
+    }
+
+    func testACairoWeekWithAMidWeekTwentyFiveHourThursdayDrawsOneLegendBesideTheAxis() {
         // Monday 2026-10-26 … Sunday 2026-11-01; Thursday is the fourth column.
         let week = CalendarLegendWindow(
-            leadingOffset: 10, leadingClock: day(cairo, 2026, 10, 26), daysCount: 7, zoneClock: zone(cairo)
+            leadingOffset: 10, leadingClock: day(cairo, 2026, 10, 26), daysCount: 7, zoneClock: zone(cairo), rule: .sharedAxis
         )
         XCTAssertEqual(week.clocks.count, 7)
         XCTAssertEqual(week.clocks[3].length, 25 * 3600, "Thursday is the long day")
-        XCTAssertEqual(week.groups.groups, [0..<3, 3..<4, 4..<7])
-        XCTAssertEqual(week.groups.groupCount, 3)
-        XCTAssertEqual(week.axisClock, week.clocks[0])
-        XCTAssertEqual((10..<17).filter { week.drawsLegend(atOffset: $0) }, [13, 14],
-                       "Thursday and the Friday after it draw their own legends")
+        XCTAssertEqual(week.axisClock, week.clocks[0], "the axis is Monday")
+        XCTAssertEqual(legendOffsets(week), [13], "Thursday alone draws its own legend")
+        XCTAssertEqual(week.legendCount, 2)
+        XCTAssertEqual(legendSources(week), [10, 10, 10, 13, 10, 10, 10], "every standard column reads the axis")
+
+        let grouped = CalendarLegendWindow(
+            leadingOffset: 10, leadingClock: day(cairo, 2026, 10, 26), daysCount: 7, zoneClock: zone(cairo), rule: .grouped
+        )
+        let groups = LegendGroups(clocks: grouped.clocks)
+        XCTAssertEqual(groups.groups, [0..<3, 3..<4, 4..<7])
+        XCTAssertEqual(groups.groupCount, 3)
+        XCTAssertEqual(grouped.axisClock, grouped.clocks[0])
+        XCTAssertEqual(legendOffsets(grouped), [13, 14], "grouped: Thursday and the Friday after it draw their own legends")
+        XCTAssertEqual(grouped.legendCount, 3)
     }
 
-    func testAPlainWeekIsOneGroupWithNoInColumnLegend() {
-        let week = newYorkWindow(2026, 11, 9, daysCount: 7, leadingOffset: -3)
-        XCTAssertEqual(week.groups.groups, [0..<7])
-        XCTAssertTrue((-3..<4).allSatisfy { !week.drawsLegend(atOffset: $0) })
-        XCTAssertEqual(week.interval.start, week.clocks[0].start)
-        XCTAssertEqual(week.interval.end, week.clocks[6].end)
-        XCTAssertEqual(week.interval.duration, 7 * 24 * 3600)
-        XCTAssertTrue(week.contains(offset: -3))
-        XCTAssertTrue(week.contains(offset: 3))
-        XCTAssertFalse(week.contains(offset: 4))
+    func testANewYorkWeekWithTheLongDayLeftmostDrawsItsLegendInTheFirstColumnBesideAStandardAxis() {
+        // Sunday Nov 1 … Saturday Nov 7: the special column is the leftmost,
+        // so the fixed axis is Monday's clock and Sunday's legend sits
+        // beside it in the first column.
+        let week = newYorkWindow(2026, 11, 1, daysCount: 7, leadingOffset: -4)
+        XCTAssertEqual(week.clocks[0].length, 25 * 3600)
+        XCTAssertEqual(week.axisClock, day(newYork, 2026, 11, 2))
+        XCTAssertEqual(week.axisOffset, -3)
+        XCTAssertEqual(legendOffsets(week), [-4])
+        XCTAssertEqual(week.legendCount, 2)
+        XCTAssertEqual(legendSources(week), [-4, -3, -3, -3, -3, -3, -3])
+
+        let grouped = newYorkWindow(2026, 11, 1, daysCount: 7, leadingOffset: -4, rule: .grouped)
+        XCTAssertEqual(grouped.axisClock, day(newYork, 2026, 11, 1), "grouped: the long day is the axis")
+        XCTAssertEqual(legendOffsets(grouped), [-3], "grouped: Monday starts the standard group")
+        XCTAssertEqual(grouped.legendCount, 2)
+    }
+
+    func testAPlainWeekHasNoInColumnLegendUnderEitherRule() {
+        for rule in CalendarLegendRule.allCases {
+            let week = newYorkWindow(2026, 11, 9, daysCount: 7, leadingOffset: -3, rule: rule)
+            XCTAssertEqual(LegendGroups(clocks: week.clocks).groups, [0..<7], "\(rule)")
+            XCTAssertTrue((-3..<4).allSatisfy { !week.drawsLegend(atOffset: $0) }, "\(rule)")
+            XCTAssertEqual(week.legendCount, 1, "\(rule)")
+            XCTAssertEqual(week.axisClock, week.clocks[0], "\(rule)")
+            XCTAssertEqual(legendSources(week), Array(repeating: -3 as Int?, count: 7), "\(rule)")
+            XCTAssertEqual(week.interval.start, week.clocks[0].start, "\(rule)")
+            XCTAssertEqual(week.interval.end, week.clocks[6].end, "\(rule)")
+            XCTAssertEqual(week.interval.duration, 7 * 24 * 3600, "\(rule)")
+            XCTAssertTrue(week.contains(offset: -3), "\(rule)")
+            XCTAssertTrue(week.contains(offset: 3), "\(rule)")
+            XCTAssertFalse(week.contains(offset: 4), "\(rule)")
+            XCTAssertFalse(week.drawsLegend(atOffset: 4), "\(rule): outside the window draws nothing")
+            XCTAssertNil(week.legendColumn(atOffset: 4), "\(rule)")
+        }
     }
 
     func testASpecialDayFirstOrLastAndTwoSpecialsInOneWindow() {
+        // The grouped partition, as it was.
         XCTAssertEqual(LegendGroups(clocks: [special, standard, standard]).groups, [0..<1, 1..<3])
         XCTAssertEqual(LegendGroups(clocks: [standard, standard, special]).groups, [0..<2, 2..<3])
         XCTAssertEqual(LegendGroups(clocks: [standard, special, special, standard]).groups,
@@ -111,10 +229,46 @@ final class CalendarDSTLegendTests: XCTestCase {
         XCTAssertEqual(LegendGroups(clocks: [special]).groups, [0..<1])
         XCTAssertEqual(LegendGroups(clocks: []).groups, [])
         XCTAssertEqual(LegendGroups(clocks: []).groupCount, 0)
+
+        // Shared axis: every special column draws, the axis is the standard
+        // one if any; with no standard column the leftmost is the axis and
+        // draws nothing beside its own axis.
+        XCTAssertEqual(window([special, standard, standard], rule: .sharedAxis).axisIndex, 1)
+        XCTAssertEqual(legendOffsets(window([special, standard, standard], rule: .sharedAxis)), [0])
+        XCTAssertEqual(window([standard, standard, special], rule: .sharedAxis).axisIndex, 0)
+        XCTAssertEqual(legendOffsets(window([standard, standard, special], rule: .sharedAxis)), [2])
+        XCTAssertEqual(window([standard, special, special, standard], rule: .sharedAxis).axisIndex, 0)
+        XCTAssertEqual(legendOffsets(window([standard, special, special, standard], rule: .sharedAxis)), [1, 2], "both specials draw")
+        XCTAssertEqual(window([special, special], rule: .sharedAxis).axisIndex, 0)
+        XCTAssertEqual(legendOffsets(window([special, special], rule: .sharedAxis)), [1])
+        XCTAssertEqual(legendOffsets(window([standard], rule: .sharedAxis)), [])
+        XCTAssertEqual(legendOffsets(window([special], rule: .sharedAxis)), [])
+        XCTAssertEqual(window([special], rule: .sharedAxis).axisClock, special)
+        XCTAssertEqual(window([special], rule: .sharedAxis).legendCount, 1)
+
+        // Grouped: the axis is the leftmost, every later group start draws.
+        XCTAssertEqual(window([special, standard, standard], rule: .grouped).axisIndex, 0)
+        XCTAssertEqual(legendOffsets(window([special, standard, standard], rule: .grouped)), [1])
+        XCTAssertEqual(legendOffsets(window([standard, standard, special], rule: .grouped)), [2])
+        XCTAssertEqual(legendOffsets(window([standard, special, special, standard], rule: .grouped)), [1, 2, 3])
+        XCTAssertEqual(legendOffsets(window([special, special], rule: .grouped)), [1])
+        XCTAssertEqual(legendOffsets(window([standard], rule: .grouped)), [])
+        XCTAssertEqual(legendOffsets(window([special], rule: .grouped)), [])
     }
 
-    func testEveryColumnReadsTheLegendOfItsGroupStart() {
-        let groups = LegendGroups(clocks: [standard, standard, special, standard, standard])
+    func testEveryColumnReadsTheAxisOrItselfAndUnderGroupedItsGroupStart() {
+        let clocks = [standard, standard, special, standard, standard]
+        // Shared axis: every standard column reads the axis, every special
+        // column reads itself.
+        XCTAssertEqual(legendSources(window(clocks, rule: .sharedAxis)), [0, 0, 2, 0, 0])
+        XCTAssertEqual(legendSources(window([special, standard, special], rule: .sharedAxis)), [0, 1, 2])
+        XCTAssertEqual(window([special, standard, special], rule: .sharedAxis).axisIndex, 1)
+        XCTAssertEqual(legendSources(window([special, special], rule: .sharedAxis)), [0, 1])
+        XCTAssertEqual(legendSources(window(clocks, rule: .sharedAxis, leadingOffset: 7)), [7, 7, 9, 7, 7], "as day offsets")
+
+        // Grouped: its group's start.
+        XCTAssertEqual(legendSources(window(clocks, rule: .grouped)), [0, 0, 2, 3, 3])
+        let groups = LegendGroups(clocks: clocks)
         XCTAssertEqual(groups.groupStartIndices, [0, 2, 3])
         XCTAssertEqual((0..<5).map(groups.legendColumn(for:)), [0, 0, 2, 3, 3])
         XCTAssertTrue(groups.startsGroup(at: 0))
@@ -125,26 +279,36 @@ final class CalendarDSTLegendTests: XCTestCase {
 
     // MARK: The fixed axis and the now-legend (A4, A7)
 
-    func testTheFixedAxisReadsTheLeftmostColumnOfTheSettledWindow() {
-        let octThirty = newYorkWindow(2026, 10, 30, daysCount: 3)
-        XCTAssertEqual(octThirty.axisClock, day(newYork, 2026, 10, 30))
-        XCTAssertTrue(octThirty.axisClock.isStandard)
-        XCTAssertEqual(octThirty.clocks[2].length, 25 * 3600, "the long day is in the window but not on the axis")
+    func testTheFixedAxisReadsTheLeftmostStandardColumnAndUnderGroupedTheLeftmostColumn() {
+        for rule in CalendarLegendRule.allCases {
+            let octThirty = newYorkWindow(2026, 10, 30, daysCount: 3, rule: rule)
+            XCTAssertEqual(octThirty.axisClock, day(newYork, 2026, 10, 30), "\(rule)")
+            XCTAssertTrue(octThirty.axisClock.isStandard, "\(rule)")
+            XCTAssertEqual(octThirty.clocks[2].length, 25 * 3600, "\(rule): the long day is in the window but not on the axis")
 
-        let octThirtyOne = newYorkWindow(2026, 10, 31, daysCount: 3)
-        XCTAssertEqual(octThirtyOne.axisClock, day(newYork, 2026, 10, 31))
-        XCTAssertTrue(octThirtyOne.axisClock.isStandard)
+            let octThirtyOne = newYorkWindow(2026, 10, 31, daysCount: 3, rule: rule)
+            XCTAssertEqual(octThirtyOne.axisClock, day(newYork, 2026, 10, 31), "\(rule)")
+            XCTAssertTrue(octThirtyOne.axisClock.isStandard, "\(rule)")
 
+            // A single day's window is the day itself, with no in-column legend.
+            let single = newYorkWindow(2026, 11, 1, daysCount: 1, leadingOffset: 4, rule: rule)
+            XCTAssertEqual(single.axisClock, day(newYork, 2026, 11, 1), "\(rule)")
+            XCTAssertEqual(single.axisClock.length, 25 * 3600, "\(rule): the page's own long day")
+            XCTAssertEqual(single.clocks.count, 1, "\(rule)")
+            XCTAssertFalse(single.drawsLegend(atOffset: 4), "\(rule)")
+            XCTAssertEqual(single.legendCount, 1, "\(rule)")
+            XCTAssertEqual(single.interval, DateInterval(start: single.axisClock.start, end: single.axisClock.end), "\(rule)")
+        }
+
+        // Nov 1–3 is where the rules part: the long day leads the window.
         let novOne = newYorkWindow(2026, 11, 1, daysCount: 3)
-        XCTAssertEqual(novOne.axisClock, day(newYork, 2026, 11, 1))
-        XCTAssertEqual(novOne.axisClock.length, 25 * 3600, "the long day leads, so the axis is the long one")
-
-        // A single day's window is the day itself, with no in-column legend.
-        let single = newYorkWindow(2026, 11, 1, daysCount: 1, leadingOffset: 4)
-        XCTAssertEqual(single.axisClock, day(newYork, 2026, 11, 1))
-        XCTAssertEqual(single.clocks.count, 1)
-        XCTAssertFalse(single.drawsLegend(atOffset: 4))
-        XCTAssertEqual(single.interval, DateInterval(start: single.axisClock.start, end: single.axisClock.end))
+        XCTAssertEqual(novOne.axisClock, day(newYork, 2026, 11, 2), "shared axis: the leftmost standard day")
+        XCTAssertTrue(novOne.axisClock.isStandard)
+        XCTAssertEqual(novOne.axisIndex, 1)
+        let grouped = newYorkWindow(2026, 11, 1, daysCount: 3, rule: .grouped)
+        XCTAssertEqual(grouped.axisClock, day(newYork, 2026, 11, 1))
+        XCTAssertEqual(grouped.axisClock.length, 25 * 3600, "grouped: the long day leads, so the axis is the long one")
+        XCTAssertEqual(grouped.axisIndex, 0)
     }
 
     /// A New York instant by its wall clock; `pass` picks the second visit
@@ -153,13 +317,16 @@ final class CalendarDSTLegendTests: XCTestCase {
         newYork.date(from: DateComponents(year: 2026, month: month, day: dayOfMonth, hour: hour, minute: minute, second: second))!
     }
 
+    /// The placement for `window`, on its own axis unless another clock is
+    /// named as the axis.
     private func placement(
-        now: Date, window: CalendarLegendWindow, hourHeight: CGFloat = 56, mode: DayLengthMode = .actual
+        now: Date, window: CalendarLegendWindow, hourHeight: CGFloat = 56, mode: DayLengthMode = .actual,
+        axisClock: DayClock? = nil
     ) -> CalendarNowLegendPlacement? {
         calendarNowLegendPlacement(
             now: now,
             window: CalendarNowLegendWindow(window: window, hourHeight: hourHeight, mode: mode),
-            axisClock: window.axisClock,
+            axisClock: axisClock ?? window.axisClock,
             zoneClock: zone(newYork)
         )
     }
@@ -192,11 +359,12 @@ final class CalendarDSTLegendTests: XCTestCase {
     }
 
     func testWithTodayOutsideTheWindowTheLegendReadsNowsWallTimeOnTheAxisDay() throws {
-        // The axis is the 25h day; now is 12:35 on a plain day five days
-        // later. The legend sits on the row the axis labels 12:00 plus 35
-        // minutes — one hour lower than now's elapsed time since its own
-        // midnight, because the axis day has the repeated hour before it.
-        let window = newYorkWindow(2026, 11, 1, daysCount: 3)
+        // Under the grouped rule the Nov 1–3 window's axis is the 25h day;
+        // now is 12:35 on a plain day five days later. The legend sits on
+        // the row the axis labels 12:00 plus 35 minutes — one hour lower
+        // than now's elapsed time since its own midnight, because the axis
+        // day has the repeated hour before it.
+        let window = newYorkWindow(2026, 11, 1, daysCount: 3, rule: .grouped)
         XCTAssertEqual(window.axisClock.length, 25 * 3600, "fixture: the axis is the long day")
         let now = newYorkInstant(11, 6, 12, 35)
         XCTAssertEqual(now.timeIntervalSince1970, 1_793_986_500, "fixture: Nov 6 12:35 EST")
@@ -227,12 +395,28 @@ final class CalendarDSTLegendTests: XCTestCase {
             calendarTimelineNowLegendY(for: plainPlaced.instant, clock: plainPlaced.clock, headerHeight: header, hourHeight: hourHeight)!,
             onTodaysClock!, accuracy: 0.001, "a plain axis day: identical to the old position"
         )
+
+        // Shared axis: the same window's axis is Nov 2, a standard day, so
+        // the legend reads as on today's clock — king's number — and the
+        // long day's arithmetic above is reached only by naming it the axis.
+        let shared = newYorkWindow(2026, 11, 1, daysCount: 3)
+        XCTAssertEqual(shared.axisClock, day(newYork, 2026, 11, 2), "fixture: the axis is the standard day after the long one")
+        let sharedPlaced = try XCTUnwrap(placement(now: now, window: shared))
+        XCTAssertEqual(sharedPlaced.clock, shared.axisClock)
+        XCTAssertEqual(sharedPlaced.instant, newYorkInstant(11, 2, 12, 35))
+        XCTAssertEqual(
+            calendarTimelineNowLegendY(for: sharedPlaced.instant, clock: sharedPlaced.clock, headerHeight: header, hourHeight: hourHeight)!,
+            onTodaysClock!, accuracy: 0.001, "shared axis: a standard axis day reads as today's clock"
+        )
+        let namedLong = try XCTUnwrap(placement(now: now, window: shared, axisClock: fallBack))
+        XCTAssertEqual(namedLong.instant, placed.instant, "the long-day arithmetic is the axis clock's, whichever rule picked it")
     }
 
     func testAnAmbiguousWallTimeSitsOnTheFirstRepeatedRowOfTheAxisDay() throws {
-        // Now is 01:30 on a plain day; the axis is the fall-back day, which
-        // has two 1:00 rows. The legend takes the first (EDT) one.
-        let window = newYorkWindow(2026, 11, 1, daysCount: 3)
+        // Now is 01:30 on a plain day; the axis is the fall-back day (the
+        // grouped rule's axis for Nov 1–3), which has two 1:00 rows. The
+        // legend takes the first (EDT) one.
+        let window = newYorkWindow(2026, 11, 1, daysCount: 3, rule: .grouped)
         let now = newYorkInstant(11, 6, 1, 30)
         let placed = try XCTUnwrap(placement(now: now, window: window))
         XCTAssertEqual(placed.clock, window.axisClock)
@@ -247,10 +431,28 @@ final class CalendarDSTLegendTests: XCTestCase {
 
         // A skipped wall time lands on the first instant after the jump:
         // 02:30 on the spring-forward axis is the 3:00 row.
-        let spring = newYorkWindow(2026, 3, 8, daysCount: 3)
+        let spring = newYorkWindow(2026, 3, 8, daysCount: 3, rule: .grouped)
         let springPlaced = try XCTUnwrap(placement(now: newYorkInstant(11, 6, 2, 30), window: spring))
         XCTAssertEqual(springPlaced.instant, try XCTUnwrap(spring.axisClock.transition))
         XCTAssertEqual(springPlaced.instant.timeIntervalSince(spring.axisClock.start), 2 * 3600, accuracy: 0.001)
+
+        // Shared axis: both windows' axes are the standard day after the
+        // special one, so neither wall time is ambiguous or skipped there.
+        let sharedFall = newYorkWindow(2026, 11, 1, daysCount: 3)
+        let sharedFallPlaced = try XCTUnwrap(placement(now: now, window: sharedFall))
+        XCTAssertEqual(sharedFallPlaced.clock, day(newYork, 2026, 11, 2))
+        XCTAssertNil(sharedFall.axisClock.repeatedPass(of: sharedFallPlaced.instant))
+        XCTAssertEqual(sharedFallPlaced.instant.timeIntervalSince(sharedFall.axisClock.start), 1.5 * 3600, accuracy: 0.001)
+        let sharedSpring = newYorkWindow(2026, 3, 8, daysCount: 3)
+        let sharedSpringPlaced = try XCTUnwrap(placement(now: newYorkInstant(11, 6, 2, 30), window: sharedSpring))
+        XCTAssertEqual(sharedSpringPlaced.clock, day(newYork, 2026, 3, 9))
+        XCTAssertEqual(sharedSpringPlaced.instant.timeIntervalSince(sharedSpring.axisClock.start), 2.5 * 3600, accuracy: 0.001)
+        // The single-day page on the special day keeps the special axis
+        // under both rules, so the two rows above are still reachable there.
+        for rule in CalendarLegendRule.allCases {
+            let page = newYorkWindow(2026, 11, 1, daysCount: 1, rule: rule)
+            XCTAssertEqual(page.axisClock, fallBack, "\(rule)")
+        }
     }
 
     func testWithTodayInsideTheWindowTheLegendSitsOnTodaysOwnClock() throws {
@@ -298,9 +500,9 @@ final class CalendarDSTLegendTests: XCTestCase {
         XCTAssertEqual(legend.frame.height, calendarTimelineNowLegendLabelHeight)
         XCTAssertEqual(legend.text, TimeAxisLayerView.currentTimeText(for: now))
 
-        // Nov 1–3, today outside: on the 25h axis the same wall time is a
-        // row lower, and the 12:00 label yields to it.
-        let novWindow = newYorkWindow(2026, 11, 1, daysCount: 3)
+        // Nov 1–3, today outside, grouped: on the 25h axis the same wall
+        // time is a row lower, and the 12:00 label yields to it.
+        let novWindow = newYorkWindow(2026, 11, 1, daysCount: 3, rule: .grouped)
         applyAxis(axis, clock: novWindow.axisClock, nowLegendWindow: CalendarNowLegendWindow(window: novWindow, hourHeight: 56, mode: .actual))
         axis.debugRefreshNowDependentState(now: now)
         legend = axis.debugNowLegend()
@@ -309,6 +511,20 @@ final class CalendarDSTLegendTests: XCTestCase {
         let twelve = axis.debugHourLabels().first { $0.text == "12:00" }
         XCTAssertEqual(twelve?.slotIndex, 13)
         XCTAssertEqual(legend.frame.minY, (twelve?.frame.minY ?? 0) + 2 + 35.0 / 60 * hourHeight - labelTop, accuracy: 0.1)
+
+        // The same window under the shared axis: the axis is Nov 2, so the
+        // legend is where a plain axis puts it and the 12:00 label is the
+        // one that yields.
+        let sharedNov = newYorkWindow(2026, 11, 1, daysCount: 3)
+        XCTAssertEqual(sharedNov.axisClock, day(newYork, 2026, 11, 2), "fixture")
+        applyAxis(axis, clock: sharedNov.axisClock, nowLegendWindow: CalendarNowLegendWindow(window: sharedNov, hourHeight: 56, mode: .actual))
+        axis.debugRefreshNowDependentState(now: now)
+        legend = axis.debugNowLegend()
+        XCTAssertTrue(legend.isVisible)
+        XCTAssertEqual(legend.frame.minY, header + 12.5833 * hourHeight - labelTop, accuracy: 0.1)
+        let sharedTwelve = axis.debugHourLabels().first { $0.text == "12:00" }
+        XCTAssertEqual(sharedTwelve?.slotIndex, 12)
+        XCTAssertEqual(legend.frame.minY, (sharedTwelve?.frame.minY ?? 0) + 2 + 35.0 / 60 * hourHeight - labelTop, accuracy: 0.1)
 
         // Nov 5–7, today inside but not on the axis: today's own clock.
         let thisWindow = newYorkWindow(2026, 11, 5, daysCount: 3)
@@ -336,9 +552,10 @@ final class CalendarDSTLegendTests: XCTestCase {
         // today's now-line — twenty hours down at hh, not at the axis's
         // scaled hour height — and the axis label it covers is the one at
         // that height: the 25h axis's "20:00" row, an elapsed hour lower
-        // than a plain axis's. (review round 3, F6)
+        // than a plain axis's. (review round 3, F6) The 25h day is the
+        // axis of a multi-day window only under the grouped rule.
         let axis = TimeAxisLayerView(frame: CGRect(x: 0, y: 0, width: 26, height: 3000))
-        let window = newYorkWindow(2026, 11, 1, daysCount: 3)
+        let window = newYorkWindow(2026, 11, 1, daysCount: 3, rule: .grouped)
         let hourHeight: CGFloat = 56
         let axisHourHeight = calendarColumnHourHeight(hourHeight, clock: window.axisClock, mode: .normalized)
         XCTAssertEqual(axisHourHeight, 56 * 24 / 25, accuracy: 0.0001, "fixture: the axis column is scaled")
@@ -375,12 +592,60 @@ final class CalendarDSTLegendTests: XCTestCase {
         XCTAssertEqual(axis.debugHourLabels().first { $0.text == "20:00" }?.alpha, 1)
     }
 
-    func testThePlacementCarriesTheHourHeightOfTheColumnItSitsOn() throws {
-        // Normalized, Nov 1–3, today Nov 2 20:00: the legend is on today's
-        // plain column, at the timeline's hour height, while the axis
-        // column is scaled; its Y is today's now-line, and read back in the
-        // axis's minutes it is past the axis's twenty-first hour.
+    func testUnderTheSharedAxisTheLegendOnTheLongColumnSitsAtThatColumnsScaledHourHeight() throws {
+        // The shared axis turns F6 around: Nov 1–3 drawn normalized has a
+        // plain axis (Nov 2, unscaled) while today, Nov 1, is the long
+        // column drawn scaled. The legend sits level with today's now-line
+        // on the scaled column, and the plain axis label it covers is the
+        // "20:00" row, read back at the axis's hour height.
+        let axis = TimeAxisLayerView(frame: CGRect(x: 0, y: 0, width: 26, height: 3000))
         let window = newYorkWindow(2026, 11, 1, daysCount: 3)
+        let hourHeight: CGFloat = 56
+        XCTAssertEqual(window.axisClock, day(newYork, 2026, 11, 2), "fixture: a plain axis")
+        let geometry = CalendarTimelineGeometry(
+            window: window, selectedDayClock: day(newYork, 2026, 11, 2), longestInReach: nil, hourHeight: hourHeight, mode: .normalized
+        )
+        XCTAssertEqual(geometry.axisHourHeight, hourHeight, "fixture: the plain axis is unscaled in the normalized mode")
+        let longHourHeight = geometry.columnHourHeight(for: fallBack)
+        XCTAssertEqual(longHourHeight, 56 * 24 / 25, accuracy: 0.0001, "fixture: the long column is scaled")
+        applyAxis(axis, clock: window.axisClock, hourHeight: geometry.axisHourHeight, nowLegendWindow: geometry.nowLegendWindow)
+        let now = newYorkInstant(11, 1, 20, 0)
+        XCTAssertEqual(now.timeIntervalSince(fallBack.start), 21 * 3600, accuracy: 0.001, "fixture: the twenty-first elapsed hour of the long day")
+        axis.debugRefreshNowDependentState(now: now)
+        let legend = axis.debugNowLegend()
+        XCTAssertTrue(legend.isVisible)
+        XCTAssertEqual(
+            legend.frame.minY, 16 + 21 * longHourHeight - calendarTimelineNowLegendLabelHeight / 2, accuracy: 0.1,
+            "level with today's now-line on the scaled long column"
+        )
+        let labels = axis.debugHourLabels()
+        let twenty = try XCTUnwrap(labels.first { $0.text == "20:00" })
+        XCTAssertEqual(twenty.slotIndex, 20, "fixture: a plain axis row")
+        XCTAssertEqual(twenty.frame.minY, 16 + 20 * hourHeight - 2, accuracy: 0.1, "fixture: drawn at the axis's own hour height")
+        XCTAssertEqual(twenty.alpha, 0, "the row the legend covers yields")
+        XCTAssertEqual(labels.first { $0.text == "19:00" }?.alpha, 1)
+        XCTAssertEqual(labels.first { $0.text == "21:00" }?.alpha, 1, "the row the unscaled reading of the long column would have covered does not")
+
+        // Control: the actual mode, every column at the timeline's hour
+        // height — the legend a row lower on the long column's clock, and
+        // the plain axis's 21:00 row yields.
+        let actual = CalendarTimelineGeometry(
+            window: window, selectedDayClock: day(newYork, 2026, 11, 2), longestInReach: 25 * 3600, hourHeight: hourHeight, mode: .actual
+        )
+        applyAxis(axis, clock: window.axisClock, hourHeight: actual.axisHourHeight, nowLegendWindow: actual.nowLegendWindow)
+        axis.debugRefreshNowDependentState(now: now)
+        XCTAssertEqual(axis.debugNowLegend().frame.minY, 16 + 21 * hourHeight - calendarTimelineNowLegendLabelHeight / 2, accuracy: 0.1)
+        XCTAssertEqual(axis.debugHourLabels().first { $0.text == "21:00" }?.alpha, 0)
+        XCTAssertEqual(axis.debugHourLabels().first { $0.text == "20:00" }?.alpha, 1)
+    }
+
+    func testThePlacementCarriesTheHourHeightOfTheColumnItSitsOn() throws {
+        // Normalized, Nov 1–3 under the grouped rule (its axis is the long
+        // day), today Nov 2 20:00: the legend is on today's plain column,
+        // at the timeline's hour height, while the axis column is scaled;
+        // its Y is today's now-line, and read back in the axis's minutes it
+        // is past the axis's twenty-first hour.
+        let window = newYorkWindow(2026, 11, 1, daysCount: 3, rule: .grouped)
         let hourHeight: CGFloat = 56
         let axisHourHeight = calendarColumnHourHeight(hourHeight, clock: window.axisClock, mode: .normalized)
         let now = newYorkInstant(11, 2, 20, 0)
@@ -413,6 +678,22 @@ final class CalendarDSTLegendTests: XCTestCase {
         let single = CalendarNowLegendWindow(day: window.axisClock, hourHeight: axisHourHeight)
         let onPage = try XCTUnwrap(calendarNowLegendPlacement(now: newYorkInstant(11, 1, 20, 0), window: single, axisClock: window.axisClock, zoneClock: zone(newYork)))
         XCTAssertEqual(onPage.hourHeight, axisHourHeight, accuracy: 0.0001)
+
+        // Shared axis, the same window: the axis is the plain Nov 2, so
+        // today on the long column carries that column's scaled hour
+        // height and today outside carries the plain axis's.
+        let shared = newYorkWindow(2026, 11, 1, daysCount: 3)
+        let onLong = try XCTUnwrap(placement(now: newYorkInstant(11, 1, 20, 0), window: shared, hourHeight: hourHeight, mode: .normalized))
+        XCTAssertEqual(onLong.clock, fallBack)
+        XCTAssertNotEqual(onLong.clock, shared.axisClock)
+        XCTAssertEqual(onLong.hourHeight, axisHourHeight, accuracy: 0.0001, "the long column is scaled whichever rule draws the axis")
+        XCTAssertEqual(calendarNowLegendAxisMinutes(placement: onLong, axisHourHeight: hourHeight), 21 * 60 * 24 / 25, accuracy: 0.001)
+        let sharedOutside = try XCTUnwrap(placement(now: newYorkInstant(11, 6, 12, 35), window: shared, hourHeight: hourHeight, mode: .normalized))
+        XCTAssertEqual(sharedOutside.clock, shared.axisClock)
+        XCTAssertEqual(sharedOutside.hourHeight, hourHeight, "a plain axis is unscaled")
+        let sharedToday = try XCTUnwrap(placement(now: now, window: shared, hourHeight: hourHeight, mode: .normalized))
+        XCTAssertEqual(sharedToday.clock, shared.axisClock, "today on the axis column")
+        XCTAssertEqual(sharedToday.hourHeight, hourHeight)
     }
 
     // MARK: Settle gating (A5)
@@ -466,25 +747,42 @@ final class CalendarDSTLegendTests: XCTestCase {
     private var plain: DayClock { day(newYork, 2026, 11, 10) }
     private var springForward: DayClock { day(newYork, 2026, 3, 8) }
 
-    func testTheGeometryDrawsTheAxisForTheWindowsLeftmostDayAtItsColumnsHourHeight() {
-        // Oct 30–Nov 1 with Oct 31 selected: the axis is Oct 30, not the
-        // selected day, and a plain axis day is unscaled in both modes.
-        let window = newYorkWindow(2026, 10, 30, daysCount: 3, leadingOffset: -7)
+    func testTheGeometryDrawsTheAxisForTheWindowsAxisDayAtItsColumnsHourHeight() {
+        // Oct 30–Nov 1 with Oct 31 selected: the axis is Oct 30 under both
+        // rules, not the selected day, and a plain axis day is unscaled in
+        // both modes.
         let selected = day(newYork, 2026, 10, 31)
-        for mode in DayLengthMode.allCases {
-            let geometry = CalendarTimelineGeometry(
-                window: window, selectedDayClock: selected, longestInReach: 25 * 3600, hourHeight: 56, mode: mode
-            )
-            XCTAssertEqual(geometry.axisClock, day(newYork, 2026, 10, 30), "\(mode)")
-            XCTAssertNotEqual(geometry.axisClock, selected, "\(mode): not the selected day")
-            XCTAssertEqual(geometry.axisHourHeight, 56, "\(mode): a plain axis day keeps the hour height")
-            XCTAssertEqual(geometry.nowLegendWindow, CalendarNowLegendWindow(window: window, hourHeight: 56, mode: mode), "\(mode)")
+        for rule in CalendarLegendRule.allCases {
+            let window = newYorkWindow(2026, 10, 30, daysCount: 3, leadingOffset: -7, rule: rule)
+            for mode in DayLengthMode.allCases {
+                let geometry = CalendarTimelineGeometry(
+                    window: window, selectedDayClock: selected, longestInReach: 25 * 3600, hourHeight: 56, mode: mode
+                )
+                XCTAssertEqual(geometry.axisClock, day(newYork, 2026, 10, 30), "\(rule) \(mode)")
+                XCTAssertNotEqual(geometry.axisClock, selected, "\(rule) \(mode): not the selected day")
+                XCTAssertEqual(geometry.axisHourHeight, 56, "\(rule) \(mode): a plain axis day keeps the hour height")
+                XCTAssertEqual(geometry.nowLegendWindow, CalendarNowLegendWindow(window: window, hourHeight: 56, mode: mode), "\(rule) \(mode)")
+            }
         }
 
-        // Nov 1–3 with Nov 2 selected: the axis is the 25h day. Actual
-        // keeps its hour height; normalized scales the axis with its column.
-        let long = newYorkWindow(2026, 11, 1, daysCount: 3, leadingOffset: -5)
+        // Nov 1–3 with Nov 2 selected. Shared axis: the axis is Nov 2, the
+        // leftmost standard column, unscaled in both modes while the long
+        // column is still scaled in normalized. Grouped: the axis is the
+        // 25h day; actual keeps its hour height, normalized scales the axis
+        // with its column.
         let novTwo = day(newYork, 2026, 11, 2)
+        let shared = newYorkWindow(2026, 11, 1, daysCount: 3, leadingOffset: -5)
+        for mode in DayLengthMode.allCases {
+            let geometry = CalendarTimelineGeometry(window: shared, selectedDayClock: novTwo, longestInReach: 25 * 3600, hourHeight: 56, mode: mode)
+            XCTAssertEqual(geometry.axisClock, novTwo, "\(mode): the leftmost standard column, here the selected day")
+            XCTAssertEqual(geometry.axisHourHeight, 56, "\(mode): a standard axis is unscaled")
+            XCTAssertEqual(geometry.axisHourHeight, geometry.columnHourHeight(for: geometry.axisClock), "\(mode)")
+        }
+        let sharedNormalized = CalendarTimelineGeometry(window: shared, selectedDayClock: novTwo, longestInReach: 25 * 3600, hourHeight: 56, mode: .normalized)
+        XCTAssertEqual(sharedNormalized.columnHourHeight(for: fallBack), 56 * 24 / 25, accuracy: 0.0001, "the long column is scaled all the same")
+        XCTAssertNotEqual(sharedNormalized.axisHourHeight, sharedNormalized.columnHourHeight(for: fallBack))
+
+        let long = newYorkWindow(2026, 11, 1, daysCount: 3, leadingOffset: -5, rule: .grouped)
         let actual = CalendarTimelineGeometry(window: long, selectedDayClock: novTwo, longestInReach: 25 * 3600, hourHeight: 56, mode: .actual)
         XCTAssertEqual(actual.axisClock.length, 25 * 3600)
         XCTAssertEqual(actual.axisHourHeight, 56)
@@ -798,19 +1096,89 @@ final class CalendarDSTLegendTests: XCTestCase {
     }
 
     func testTheAxisCrossfadesWhenASettledClockChangesItsRowsAndNotForAPinchOrABand() {
+        // The settled windows Oct 30–Nov 1, Oct 31–Nov 2, Nov 1–3 as the
+        // grouped rule draws their axes: the long day reaches the axis.
+        let axes = [
+            newYorkWindow(2026, 10, 30, daysCount: 3, rule: .grouped),
+            newYorkWindow(2026, 10, 31, daysCount: 3, rule: .grouped),
+            newYorkWindow(2026, 11, 1, daysCount: 3, rule: .grouped),
+            newYorkWindow(2026, 11, 2, daysCount: 3, rule: .grouped),
+        ].map(\.axisClock)
+        XCTAssertEqual(axes, [day(newYork, 2026, 10, 30), day(newYork, 2026, 10, 31), fallBack, day(newYork, 2026, 11, 2)], "fixture")
         let axis = TimeAxisLayerView(frame: CGRect(x: 0, y: 0, width: 26, height: 3000))
-        applyAxis(axis, clock: day(newYork, 2026, 10, 30))
+        applyAxis(axis, clock: axes[0])
         XCTAssertEqual(axis.debugAxisCrossfadeCount, 0, "the first clock has nothing to crossfade from")
-        applyAxis(axis, clock: day(newYork, 2026, 10, 31))
+        applyAxis(axis, clock: axes[1])
         XCTAssertEqual(axis.debugAxisCrossfadeCount, 0, "a plain day after a plain day keeps every row")
-        applyAxis(axis, clock: day(newYork, 2026, 11, 1))
+        applyAxis(axis, clock: axes[2])
         XCTAssertEqual(axis.debugAxisCrossfadeCount, 1, "the 25h day brings a row and the zones")
-        applyAxis(axis, clock: day(newYork, 2026, 11, 1), hourHeight: 80)
+        applyAxis(axis, clock: axes[2], hourHeight: 80)
         XCTAssertEqual(axis.debugAxisCrossfadeCount, 1, "a pinch is not a crossfade")
-        applyAxis(axis, clock: day(newYork, 2026, 11, 1), hourHeight: 80, leading: 12)
+        applyAxis(axis, clock: axes[2], hourHeight: 80, leading: 12)
         XCTAssertEqual(axis.debugAxisCrossfadeCount, 1, "a band opening is not a crossfade")
-        applyAxis(axis, clock: day(newYork, 2026, 11, 2), hourHeight: 80, leading: 12)
+        applyAxis(axis, clock: axes[3], hourHeight: 80, leading: 12)
         XCTAssertEqual(axis.debugAxisCrossfadeCount, 2, "back to a plain day's rows")
+
+        // Under the shared axis the same four windows keep a standard axis
+        // throughout, so paging through the fall-back day never crossfades
+        // the fixed axis; only the single-day page on the long day does.
+        let sharedAxes = [
+            newYorkWindow(2026, 10, 30, daysCount: 3),
+            newYorkWindow(2026, 10, 31, daysCount: 3),
+            newYorkWindow(2026, 11, 1, daysCount: 3),
+            newYorkWindow(2026, 11, 2, daysCount: 3),
+        ].map(\.axisClock)
+        XCTAssertEqual(sharedAxes, [day(newYork, 2026, 10, 30), day(newYork, 2026, 10, 31), day(newYork, 2026, 11, 2), day(newYork, 2026, 11, 2)], "fixture")
+        let sharedAxis = TimeAxisLayerView(frame: CGRect(x: 0, y: 0, width: 26, height: 3000))
+        for clock in sharedAxes {
+            applyAxis(sharedAxis, clock: clock)
+            XCTAssertEqual(sharedAxis.debugAxisCrossfadeCount, 0, "a standard axis after a standard axis keeps every row")
+        }
+        XCTAssertEqual(sharedAxis.debugHourLabels().count, 25, "fixture: a plain day's rows")
+        applyAxis(sharedAxis, clock: newYorkWindow(2026, 11, 1, daysCount: 1).axisClock)
+        XCTAssertEqual(sharedAxis.debugAxisCrossfadeCount, 1, "the single-day page on the long day is the one route to its rows")
+    }
+
+    func testPagingFromThePlainWindowOntoTheFallBackWindowFadesTheLegendInWithoutAnAxisCrossfade() throws {
+        try XCTSkipIf(calendarReduceMotionEnabled, "the fade is substituted under Reduce Motion")
+        // The flick Oct 29–31 → Nov 1–3 under the shared axis: the axis
+        // goes from one standard day's clock to another's, so its text is
+        // identical and nothing crossfades, while Nov 1's column — painted
+        // without a legend before the settle — fades its legend in.
+        let before = newYorkWindow(2026, 10, 29, daysCount: 3, leadingOffset: -3)
+        let after = newYorkWindow(2026, 11, 1, daysCount: 3)
+        XCTAssertTrue(before.axisClock.isStandard)
+        XCTAssertEqual(after.axisClock, day(newYork, 2026, 11, 2))
+        XCTAssertEqual(legendOffsets(before), [])
+        XCTAssertEqual(legendOffsets(after), [0], "Nov 1 draws its own legend in the leftmost column")
+
+        let axis = TimeAxisLayerView(frame: CGRect(x: 0, y: 0, width: 26, height: 3000))
+        applyAxis(axis, clock: before.axisClock, nowLegendWindow: CalendarNowLegendWindow(window: before, hourHeight: 56, mode: .actual))
+        let rowsBefore = axis.debugHourLabels().map(\.text)
+        applyAxis(axis, clock: after.axisClock, nowLegendWindow: CalendarNowLegendWindow(window: after, hourHeight: 56, mode: .actual))
+        XCTAssertEqual(axis.debugAxisCrossfadeCount, 0, "the axis's rows read the same, so it does not crossfade")
+        XCTAssertEqual(axis.debugHourLabels().map(\.text), rowsBefore)
+
+        let a9 = occurrence("A9", epoch: 1_793_541_600, seconds: 3600)
+        let host = DayLayerHostView(frame: CGRect(x: 0, y: 0, width: 360, height: 3000))
+        host.apply(model([a9], clock: fallBack, hourHeight: 56, legend: nil))
+        host.layoutIfNeeded()
+        XCTAssertEqual(host.debugLegendState().opacity, 0, "mid-swipe the column is painted without a legend")
+        host.apply(model([a9], clock: fallBack, hourHeight: 56, legend: .standard(zoneClock: zone(newYork))))
+        host.layoutIfNeeded()
+        let settled = host.debugLegendState()
+        XCTAssertEqual(settled.opacity, 1)
+        XCTAssertTrue(settled.fading, "the legend fades in on the settle")
+        XCTAssertEqual(settled.rows.count, 26)
+
+        // Grouped, the same flick: the axis takes the long day's rows and
+        // crossfades.
+        let groupedAfter = newYorkWindow(2026, 11, 1, daysCount: 3, rule: .grouped)
+        XCTAssertEqual(groupedAfter.axisClock, fallBack, "fixture")
+        let groupedAxis = TimeAxisLayerView(frame: CGRect(x: 0, y: 0, width: 26, height: 3000))
+        applyAxis(groupedAxis, clock: before.axisClock)
+        applyAxis(groupedAxis, clock: groupedAfter.axisClock)
+        XCTAssertEqual(groupedAxis.debugAxisCrossfadeCount, 1)
     }
 
     // MARK: The zone sublabel at the smallest zoom (QA F4, mutation h)
@@ -876,14 +1244,16 @@ final class CalendarDSTLegendTests: XCTestCase {
             XCTAssertTrue(legendZones.allSatisfy { !$0.isHidden }, "\(phone.name): the legend shows both zones at the floor")
 
             // Normalized: the canvas is a standard day, so the floor is the
-            // 24h fit, and the 25h column (here the axis of Nov 1–3) is
-            // drawn at that floor scaled by 24/25 — which is the 25h fit
-            // again, so the sublabel clears its bound by the same margin.
+            // 24h fit, and the 25h column (here the axis of Nov 1's own
+            // single-day page, the one window whose axis it is under both
+            // rules) is drawn at that floor scaled by 24/25 — which is the
+            // 25h fit again, so the sublabel clears its bound by the same
+            // margin.
             let standardFloor = dayViewPinchFloor(
                 viewportHeight: phone.viewport, safeAreaTop: phone.safeTop, safeAreaBottom: phone.safeBottom, dayHours: 24
             )
             let normalized = CalendarTimelineGeometry(
-                window: newYorkWindow(2026, 11, 1, daysCount: 3), selectedDayClock: day(newYork, 2026, 11, 2),
+                window: newYorkWindow(2026, 11, 1, daysCount: 1), selectedDayClock: fallBack,
                 longestInReach: nil, hourHeight: standardFloor, mode: .normalized
             )
             let scaledFloor = normalized.axisHourHeight

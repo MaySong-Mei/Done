@@ -214,11 +214,12 @@ nonisolated enum CalendarWallTime {
 
 // MARK: - Legend groups (gh#285 S2)
 
-/// Which columns of a multi-day window start an hour legend. Consecutive
-/// standard days share one legend; a day whose clock is not standard has
-/// one of its own, and the standard days after it start afresh. The first
-/// column always starts a group, and its legend is the timeline's fixed
-/// axis — only later group starts draw a legend inside their column.
+/// Which columns of a multi-day window start an hour legend under the
+/// `grouped` rule. Consecutive standard days share one legend; a day whose
+/// clock is not standard has one of its own, and the standard days after
+/// it start afresh. The first column always starts a group, and its legend
+/// is the timeline's fixed axis — only later group starts draw a legend
+/// inside their column.
 nonisolated struct LegendGroups: Equatable {
     /// Per column, whether it starts a group.
     let startsGroup: [Bool]
@@ -260,41 +261,122 @@ nonisolated struct LegendGroups: Equatable {
     }
 }
 
+/// Which column's clock the fixed axis draws, and which columns draw a
+/// legend of their own beside it. Two rules are kept while the user
+/// compares them on the device; the loser is deleted afterwards.
+nonisolated enum CalendarLegendRule: String, CaseIterable {
+    /// The fixed axis draws a standard day's clock whenever the window has
+    /// one — the leftmost standard column's — and only the special columns
+    /// draw a legend, wherever they sit, the leftmost included. A standard
+    /// column's rows line up with a standard axis in either day-length
+    /// mode, so it never needs one. With no standard column (a single-day
+    /// page on a special day) the axis is the leftmost column, as today,
+    /// and that column draws no legend beside its own axis.
+    case sharedAxis
+    /// The fixed axis draws the leftmost column's clock; every later column
+    /// that starts a group (`LegendGroups`) draws its own legend.
+    case grouped
+
+    static let standard: CalendarLegendRule = .sharedAxis
+
+    /// The `UserDefaults` key the DEBUG launch argument `-dstLegendRule`
+    /// writes through the argument domain. Not a setting: never written by
+    /// the app, not synced, not reset, read by DEBUG builds only.
+    static let debugDefaultsKey = "dstLegendRule"
+
+    /// Tolerant of a value nothing wrote or nothing recognises: the default.
+    init(stored: String?) {
+        self = stored.flatMap(CalendarLegendRule.init(rawValue:)) ?? .standard
+    }
+
+    /// The rule this process draws with: in a DEBUG build the launch
+    /// argument's, when one is given; a release build is hard-wired to the
+    /// standard rule.
+    static var current: CalendarLegendRule {
+        #if DEBUG
+        return CalendarLegendRule(stored: UserDefaults.standard.string(forKey: debugDefaultsKey))
+        #else
+        return .standard
+        #endif
+    }
+}
+
 /// The settled visible window of the timeline as its legends see it: the
-/// clocks of its columns in order, grouped. The fixed axis draws the first
-/// column's clock; every later column that starts a group draws its own
-/// legend; the now-legend reads the window through `CalendarNowLegendWindow`.
+/// clocks of its columns in order, and under the window's rule which
+/// column the fixed axis draws and which columns draw a legend of their
+/// own; the now-legend reads the window through `CalendarNowLegendWindow`.
 nonisolated struct CalendarLegendWindow: Equatable {
+    let rule: CalendarLegendRule
     /// The day offset of the first column.
     let leadingOffset: Int
     let clocks: [DayClock]
-    let groups: LegendGroups
+    /// The index of the column whose clock the fixed axis draws.
+    let axisIndex: Int
+    /// Per column, the index of the column whose legend it reads: itself
+    /// when it draws one, else the column whose legend serves it.
+    private let legendColumns: [Int]
 
-    init(leadingOffset: Int, leadingClock: DayClock, daysCount: Int, zoneClock: CalendarZoneClock) {
+    init(leadingOffset: Int, clocks: [DayClock], rule: CalendarLegendRule) {
+        self.rule = rule
         self.leadingOffset = leadingOffset
+        self.clocks = clocks
+        switch rule {
+        case .sharedAxis:
+            let axis = clocks.firstIndex(where: \.isStandard) ?? 0
+            axisIndex = axis
+            legendColumns = clocks.indices.map { clocks[$0].isStandard ? axis : $0 }
+        case .grouped:
+            let groups = LegendGroups(clocks: clocks)
+            axisIndex = 0
+            legendColumns = clocks.indices.map(groups.legendColumn(for:))
+        }
+    }
+
+    init(leadingOffset: Int, leadingClock: DayClock, daysCount: Int, zoneClock: CalendarZoneClock, rule: CalendarLegendRule) {
         var clocks = [leadingClock]
         if daysCount > 1 {
             for offset in 1..<daysCount {
                 clocks.append(zoneClock.day(offset, from: leadingClock))
             }
         }
-        self.clocks = clocks
-        groups = LegendGroups(clocks: clocks)
+        self.init(leadingOffset: leadingOffset, clocks: clocks, rule: rule)
     }
 
     /// The clock the fixed axis is drawn for.
-    var axisClock: DayClock { clocks[0] }
+    var axisClock: DayClock { clocks[axisIndex] }
+
+    /// The day offset of the column the fixed axis draws.
+    var axisOffset: Int { leadingOffset + axisIndex }
 
     /// The instants the window covers, half-open at its end.
     var interval: DateInterval {
         DateInterval(start: clocks[0].start, end: clocks[clocks.count - 1].end)
     }
 
-    /// Whether the column at `offset` draws its own legend: it starts a
-    /// group and is not the first column, whose legend is the fixed axis.
-    func drawsLegend(atOffset offset: Int) -> Bool {
+    private func index(ofOffset offset: Int) -> Int? {
         let index = offset - leadingOffset
-        return index > 0 && groups.startsGroup(at: index)
+        return clocks.indices.contains(index) ? index : nil
+    }
+
+    /// Whether the column at `offset` draws its own legend: it reads
+    /// itself and is not the axis column, whose legend is the fixed axis.
+    func drawsLegend(atOffset offset: Int) -> Bool {
+        guard let index = index(ofOffset: offset) else { return false }
+        return index != axisIndex && legendColumns[index] == index
+    }
+
+    /// The day offset of the column whose legend the column at `offset`
+    /// reads — itself when it draws one, the axis column when the fixed
+    /// axis serves it, under `grouped` its group's start; nil outside the
+    /// window.
+    func legendColumn(atOffset offset: Int) -> Int? {
+        index(ofOffset: offset).map { leadingOffset + legendColumns[$0] }
+    }
+
+    /// How many legends the window shows: the fixed axis and every column
+    /// that draws its own.
+    var legendCount: Int {
+        1 + clocks.indices.filter { drawsLegend(atOffset: leadingOffset + $0) }.count
     }
 
     /// Whether the column at `offset` is one of the window's.

@@ -1230,6 +1230,10 @@ struct CalendarPageView: View {
     /// rebuilt when it changes, like the other geometry settings.
     @AppStorage(AppSettingsKeys.calendarDayLengthMode) private var dayLengthModeRaw = DayLengthMode.standard.rawValue
     var dayLengthMode: DayLengthMode { DayLengthMode(stored: dayLengthModeRaw) }
+    /// Which column the fixed axis draws and which columns draw their own
+    /// legend (gh#285): the build's rule, read once per pass like the
+    /// mode; a DEBUG launch argument can pick the other one for comparison.
+    var legendRule: CalendarLegendRule { .current }
     /// Same source `TimelinePagerView` feeds the day layer — the Todo-stack
     /// chip needs it to predict whether the preview block will have room for
     /// its own time row.
@@ -4646,6 +4650,7 @@ private extension CalendarPageView {
             isDayOffsetFrozen: calendarState.isDayOffsetFrozen,
             canvasLength: timelineGeometry.canvasClock.length,
             dayLengthMode: dayLengthMode,
+            legendRule: legendRule,
             daysCount: timelineDaysCount(for: calendarState.rangeMode),
             mode: .preview,
             showEventText: timelineShowEventText(for: calendarState.rangeMode),

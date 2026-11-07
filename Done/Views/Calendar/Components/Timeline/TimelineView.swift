@@ -1300,6 +1300,10 @@ struct TimelinePagerView: View {
     /// normalized mode every column is a standard day tall and a special
     /// day's hour height is scaled; the canvas is always a standard day.
     var dayLengthMode: DayLengthMode = .actual
+    /// Which column the fixed axis draws and which columns draw a legend
+    /// of their own (gh#285); the page reads it once per pass, like the
+    /// mode, and the settled window carries it.
+    var legendRule: CalendarLegendRule = .standard
     let daysCount: Int
     let mode: PageMode
     let showEventText: Bool
@@ -1394,8 +1398,8 @@ struct TimelinePagerView: View {
         zoneClock.day(containing: dayDate(forOffset: selectedDayOffset, calendar: zoneClock.calendar))
     }
     /// The window the legends are drawn for (gh#285 S2): the fixed axis
-    /// shows its leftmost column's clock, a later column that starts a
-    /// group draws its own, and the now-legend reads it to place itself.
+    /// shows its axis column's clock, the columns the rule picks draw
+    /// their own, and the now-legend reads it to place itself.
     /// Taken when paging rests with no pinch or drag, and kept through the
     /// next swipe, so nothing regroups under a moving finger.
     private var legendWindow: CalendarLegendWindow {
@@ -1411,7 +1415,8 @@ struct TimelinePagerView: View {
             leadingOffset: leading,
             leadingClock: zoneClock.day(containing: dayDate(forOffset: leading, calendar: zoneClock.calendar)),
             daysCount: daysCount,
-            zoneClock: zoneClock
+            zoneClock: zoneClock,
+            rule: legendRule
         )
     }
     /// Hands the keeper the live window and the gesture state; the keeper
@@ -1431,13 +1436,15 @@ struct TimelinePagerView: View {
             "timeline.legendWindow.settled",
             fields: [
                 "leadingOffset": "\(settled.leadingOffset)",
-                "groups": "\(settled.groups.groupCount)"
+                "axisOffset": "\(settled.axisOffset)",
+                "legends": "\(settled.legendCount)",
+                "rule": settled.rule.rawValue
             ]
         )
     }
-    /// The legend the column at `offset` draws: its own clock, when it
-    /// starts a group of the settled window that the fixed axis does not
-    /// serve; the narrow form in the week view.
+    /// The legend the column at `offset` draws: its own clock, when the
+    /// settled window's rule gives it one the fixed axis does not serve;
+    /// the narrow form in the week view.
     private func columnLegend(forOffset offset: Int) -> CalendarColumnLegend? {
         guard legendWindow.drawsLegend(atOffset: offset) else { return nil }
         return rangeMode == .week ? .narrow(zoneClock: zoneClock) : .standard(zoneClock: zoneClock)
