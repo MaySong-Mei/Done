@@ -37,6 +37,31 @@ nonisolated struct DayClock: Hashable {
         transition == nil && abs(length - Self.standardLength) < 1
     }
 
+    /// What a legend of this day would draw, as a value: two clocks whose
+    /// rows would read the same compare equal, two whose rows would not
+    /// compare unequal. Every standard day is one shape; a 25h day and a
+    /// 24h day are two, as are a 23h day and a 25h day, or two 25h days
+    /// whose clocks fall back at different hours. Compared, never rendered.
+    struct Shape: Hashable {
+        let isStandard: Bool
+        let length: TimeInterval
+        /// How far into the day the offset changes; nil without a change.
+        let transitionOffset: TimeInterval?
+        let offsetChange: TimeInterval
+    }
+
+    var shape: Shape {
+        guard !isStandard else {
+            return Shape(isStandard: true, length: Self.standardLength, transitionOffset: nil, offsetChange: 0)
+        }
+        return Shape(
+            isStandard: false,
+            length: length,
+            transitionOffset: transition?.timeIntervalSince(start),
+            offsetChange: offsetChange
+        )
+    }
+
     /// The instants whose wall clock time the day visits twice: the first
     /// half is the first pass, the second half the second. Nil unless the
     /// clock falls back inside this day.
@@ -265,19 +290,18 @@ nonisolated struct LegendGroups: Equatable {
 /// legend of their own beside it. Two rules are kept while the user
 /// compares them on the device; the loser is deleted afterwards.
 nonisolated enum CalendarLegendRule: String, CaseIterable {
-    /// The fixed axis draws a standard day's clock whenever the window has
-    /// one — the leftmost standard column's — and only the special columns
-    /// draw a legend, wherever they sit, the leftmost included. A standard
-    /// column's rows line up with a standard axis in either day-length
-    /// mode, so it never needs one. With no standard column (a single-day
-    /// page on a special day) the axis is the leftmost column, as today,
-    /// and that column draws no legend beside its own axis.
-    case sharedAxis
+    /// The fixed axis draws the leftmost column's clock, and every distinct
+    /// clock shape in the window gets exactly one legend, carried by the
+    /// first column that has it: a column draws a legend iff its rows
+    /// differ from the axis's and no earlier column has the same rows. A
+    /// column whose rows are the axis's never draws one, so the axis never
+    /// has a legend beside it and a neighbour always lines up with it.
+    case oneLegendPerClock
     /// The fixed axis draws the leftmost column's clock; every later column
     /// that starts a group (`LegendGroups`) draws its own legend.
     case grouped
 
-    static let standard: CalendarLegendRule = .sharedAxis
+    static let standard: CalendarLegendRule = .oneLegendPerClock
 
     /// The `UserDefaults` key the DEBUG launch argument `-dstLegendRule`
     /// writes through the argument domain. Not a setting: never written by
@@ -313,7 +337,8 @@ nonisolated struct CalendarLegendWindow: Equatable {
     /// The index of the column whose clock the fixed axis draws.
     let axisIndex: Int
     /// Per column, the index of the column whose legend it reads: itself
-    /// when it draws one, else the column whose legend serves it.
+    /// when it draws one, else the column whose legend serves it — the
+    /// first column of its shape, or under `grouped` its group's start.
     private let legendColumns: [Int]
 
     init(leadingOffset: Int, clocks: [DayClock], rule: CalendarLegendRule) {
@@ -321,10 +346,15 @@ nonisolated struct CalendarLegendWindow: Equatable {
         self.leadingOffset = leadingOffset
         self.clocks = clocks
         switch rule {
-        case .sharedAxis:
-            let axis = clocks.firstIndex(where: \.isStandard) ?? 0
-            axisIndex = axis
-            legendColumns = clocks.indices.map { clocks[$0].isStandard ? axis : $0 }
+        case .oneLegendPerClock:
+            axisIndex = 0
+            var firstColumnOfShape: [DayClock.Shape: Int] = [:]
+            legendColumns = clocks.indices.map { index in
+                let shape = clocks[index].shape
+                if let first = firstColumnOfShape[shape] { return first }
+                firstColumnOfShape[shape] = index
+                return index
+            }
         case .grouped:
             let groups = LegendGroups(clocks: clocks)
             axisIndex = 0
@@ -366,9 +396,9 @@ nonisolated struct CalendarLegendWindow: Equatable {
     }
 
     /// The day offset of the column whose legend the column at `offset`
-    /// reads — itself when it draws one, the axis column when the fixed
-    /// axis serves it, under `grouped` its group's start; nil outside the
-    /// window.
+    /// reads — itself when it draws one, else the first column of its
+    /// shape (the axis column, when that is the axis's shape), under
+    /// `grouped` its group's start; nil outside the window.
     func legendColumn(atOffset offset: Int) -> Int? {
         index(ofOffset: offset).map { leadingOffset + legendColumns[$0] }
     }
