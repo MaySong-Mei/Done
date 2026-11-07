@@ -16,6 +16,7 @@
 //  share one source of truth for label text, slot heights, and collision
 //  rules.
 
+import CoreText
 import SwiftUI
 import UIKit
 
@@ -466,7 +467,7 @@ final class TimeAxisLayerView: UIView {
         // Grow / shrink the pool.
         while hourLabels.count < wantedSlots.count {
             let label = UILabel()
-            label.font = .systemFont(ofSize: 9, weight: .semibold)
+            label.font = Self.hourLabelFont
             label.textColor = UIColor.secondaryLabel.withAlphaComponent(0.6)
             label.textAlignment = .right
             label.numberOfLines = 1
@@ -488,7 +489,7 @@ final class TimeAxisLayerView: UIView {
         let wantedZones = hourLabelZones.compactMap { $0 }
         while zoneLabels.count < wantedZones.count {
             let label = UILabel()
-            label.font = .systemFont(ofSize: 7, weight: .semibold)
+            label.font = Self.zoneLabelFont
             label.textColor = UIColor.secondaryLabel.withAlphaComponent(0.6)
             label.textAlignment = .right
             label.numberOfLines = 1
@@ -504,13 +505,23 @@ final class TimeAxisLayerView: UIView {
         }
     }
 
+    /// The axis's fonts: the hour label's, and the zone sublabel's under a
+    /// twice-visited hour.
+    static let hourLabelFont = UIFont.systemFont(ofSize: 9, weight: .semibold)
+    static let zoneLabelFont = UIFont.systemFont(ofSize: 7, weight: .semibold)
+
+    /// How the zone sublabel packs under its hour label on the axis — and
+    /// in the wide in-column legend, which draws the axis's fonts.
+    static let zoneSublabelPacking = CalendarZoneSublabelPacking(hourFont: hourLabelFont, zoneFont: zoneLabelFont)
+
     /// The zone sublabel needs its own line under the hour. This bound is
-    /// the smallest hour height that keeps the two lines clear of the next
-    /// hour's label, and it lies below the pinch floor of a 25h canvas on
-    /// every phone, so the sublabel — the one thing telling the two 1:00
-    /// rows apart — shows at every zoom the page allows on such a day; see
+    /// the smallest hour height that keeps it clear of the next hour's
+    /// label, derived from the two fonts, and it lies below the pinch floor
+    /// of a 25h canvas in every view on every phone, an all-day row
+    /// included, so the sublabel — the one thing telling the two 1:00 rows
+    /// apart — shows at every zoom the page allows on such a day; see
     /// `CalendarDSTLegendTests`.
-    static let zoneSublabelMinimumHourHeight: CGFloat = 20
+    static var zoneSublabelMinimumHourHeight: CGFloat { zoneSublabelPacking.minimumHourHeight }
 
     private func layoutHourLabels(inputs: Inputs) {
         guard !hourLabelSlotIndices.isEmpty else { return }
@@ -525,8 +536,11 @@ final class TimeAxisLayerView: UIView {
         // SwiftUI tree: each slot row is `frame(height: slotHeight, alignment: .top)`,
         // its overlay Text has `.offset(y: -2)`. Net: label top Y is
         // `headerHeight + slotIndex * slotHeight - 2`.
+        // The labels' frames are their line boxes; the zone sublabel packs
+        // under its hour label by the glyphs (`CalendarZoneSublabelPacking`).
+        let packing = Self.zoneSublabelPacking
         var zoneIndex = 0
-        let showsZones = inputs.hourHeight >= Self.zoneSublabelMinimumHourHeight
+        let showsZones = inputs.hourHeight >= packing.minimumHourHeight
         for (poolIndex, slotIndex) in hourLabelSlotIndices.enumerated() {
             let label = hourLabels[poolIndex]
             let fitSize = label.sizeThatFits(
@@ -537,7 +551,7 @@ final class TimeAxisLayerView: UIView {
                 x: rightEdge - fitSize.width,
                 y: topY,
                 width: fitSize.width,
-                height: fitSize.height
+                height: packing.hourLineHeight
             )
             if poolIndex < hourLabelZones.count, hourLabelZones[poolIndex] != nil, zoneIndex < zoneLabels.count {
                 let zoneLabel = zoneLabels[zoneIndex]
@@ -548,9 +562,9 @@ final class TimeAxisLayerView: UIView {
                 )
                 zoneLabel.frame = CGRect(
                     x: rightEdge - zoneSize.width,
-                    y: topY + fitSize.height - 1,
+                    y: topY + packing.zoneOffset(underHourText: label.text ?? ""),
                     width: zoneSize.width,
-                    height: zoneSize.height
+                    height: packing.zoneLineHeight
                 )
             }
         }
@@ -991,3 +1005,57 @@ private final class AxisMarkerPillView: UIView {
     }
 }
 
+// MARK: - The zone sublabel's packing (gh#285 S2, legend round 2)
+
+/// How a zone sublabel packs under its hour label, from the two fonts'
+/// metrics, and the smallest hour height that keeps it clear of the next
+/// row. One source for the fixed axis and both in-column legend forms;
+/// each form derives its own numbers from its own fonts.
+///
+/// The labels' frames are their line boxes, but the sublabel sits by the
+/// glyphs: an hour's digits end on its baseline, so the sublabel's
+/// capitals start a hair under that baseline rather than under the hour's
+/// whole line — and lower by the reach of an hour text that goes below its
+/// baseline, such as a twelve-hour "pm".
+struct CalendarZoneSublabelPacking: Equatable {
+    let hourFont: UIFont
+    let zoneFont: UIFont
+
+    /// Between the hour's glyphs and the sublabel's capitals. A glyph's
+    /// reach below the baseline within this gap — a round digit's
+    /// overshoot — is absorbed by it and counts as on the baseline.
+    static let glyphGap: CGFloat = 1
+
+    /// The hour label's frame height: its line box.
+    var hourLineHeight: CGFloat { ceil(hourFont.lineHeight) }
+    /// The sublabel's frame height: its line box.
+    var zoneLineHeight: CGFloat { ceil(zoneFont.lineHeight) }
+
+    /// The sublabel's frame top below the hour label's, under an hour text
+    /// whose glyphs end on the baseline.
+    var zoneOffset: CGFloat { zoneOffset(hourTextDescent: 0) }
+
+    /// The sublabel's frame top below the hour label's, under `text`.
+    func zoneOffset(underHourText text: String) -> CGFloat {
+        zoneOffset(hourTextDescent: hourTextDescent(text))
+    }
+
+    private func zoneOffset(hourTextDescent descent: CGFloat) -> CGFloat {
+        let hourGlyphsBottom = hourFont.ascender + descent
+        let zoneCapitalsTop = zoneFont.ascender - zoneFont.capHeight
+        return ceil(hourGlyphsBottom + Self.glyphGap - zoneCapitalsTop)
+    }
+
+    /// How far below the baseline the glyphs of `text` reach in the hour
+    /// font, when it is more than the gap absorbs: nothing for digits, the
+    /// descender of a "pm".
+    func hourTextDescent(_ text: String) -> CGFloat {
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [.font: hourFont]))
+        let reach = max(0, -CTLineGetBoundsWithOptions(line, .useGlyphPathBounds).minY)
+        return reach > Self.glyphGap ? reach : 0
+    }
+
+    /// The smallest hour height at which the sublabel, under an hour text
+    /// that ends on its baseline, stays clear of the next row's label.
+    var minimumHourHeight: CGFloat { zoneOffset + zoneLineHeight }
+}

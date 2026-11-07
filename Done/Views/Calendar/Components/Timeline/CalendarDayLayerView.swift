@@ -60,6 +60,17 @@ struct CalendarColumnLegend: Equatable {
     var hourFontSize: CGFloat { isNarrow ? 7 : 9 }
     var zoneFontSize: CGFloat { isNarrow ? 5 : 7 }
 
+    var hourFont: UIFont { .systemFont(ofSize: hourFontSize, weight: .semibold) }
+    var zoneFont: UIFont { .systemFont(ofSize: zoneFontSize, weight: .semibold) }
+
+    /// How this form packs its zone sublabel under its hour label, and the
+    /// smallest hour height that shows it: the wide form draws the axis's
+    /// fonts, so its bound is the axis's; the narrow form's is its own.
+    var zoneSublabelPacking: CalendarZoneSublabelPacking {
+        CalendarZoneSublabelPacking(hourFont: hourFont, zoneFont: zoneFont)
+    }
+    var zoneSublabelMinimumHourHeight: CGFloat { zoneSublabelPacking.minimumHourHeight }
+
     /// The text a row shows: the axis's text, or the hour number alone.
     func text(of label: CalendarAxisHourLabel) -> String {
         isNarrow ? label.narrowText : label.text
@@ -1734,8 +1745,8 @@ final class DayLayerHostView: UIView {
             drawableTrailingHours: model.drawableTrailingHours,
             is24: is24
         )
-        let hourFont = UIFont.systemFont(ofSize: legend.hourFontSize, weight: .semibold)
-        let zoneFont = UIFont.systemFont(ofSize: legend.zoneFontSize, weight: .semibold)
+        let hourFont = legend.hourFont
+        let zoneFont = legend.zoneFont
         if key != legendPoolKey {
             legendPoolKey = key
             legendRows = Self.legendRows(model: model, is24: is24)
@@ -1763,21 +1774,24 @@ final class DayLayerHostView: UIView {
             }
         }
         // Lay the rows out on every pass: the vertical scale may have moved.
-        // A label's top sits just above its hour line, as on the axis.
+        // A label's top sits just above its hour line, as on the axis, and
+        // the zone sublabel packs under it by the glyphs, as on the axis.
         let rightEdge = max(0, model.eventAreaLeadingInset - CalendarColumnLegend.trailingPadding)
-        let hourLineHeight = ceil(hourFont.lineHeight)
-        let zoneLineHeight = ceil(zoneFont.lineHeight)
-        let showsZones = model.hourHeight >= TimeAxisLayerView.zoneSublabelMinimumHourHeight
+        let packing = legend.zoneSublabelPacking
+        let showsZones = model.hourHeight >= packing.minimumHourHeight
         var zoneIndex = 0
         for (poolIndex, row) in legendRows.enumerated() {
             let topY = model.headerHeight + CGFloat(row.slotIndex) * slotHeight - 2
-            legendHourLayers[poolIndex].frame = CGRect(x: 0, y: topY, width: rightEdge, height: hourLineHeight)
+            legendHourLayers[poolIndex].frame = CGRect(x: 0, y: topY, width: rightEdge, height: packing.hourLineHeight)
             if row.label.zoneAbbreviation != nil, zoneIndex < legendZoneLayers.count {
                 let zoneText = legendZoneLayers[zoneIndex]
                 zoneIndex += 1
                 zoneText.isHidden = !showsZones
                 zoneText.frame = CGRect(
-                    x: 0, y: topY + hourLineHeight - 1, width: rightEdge, height: zoneLineHeight
+                    x: 0,
+                    y: topY + packing.zoneOffset(underHourText: legend.text(of: row.label)),
+                    width: rightEdge,
+                    height: packing.zoneLineHeight
                 )
             }
         }

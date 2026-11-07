@@ -1124,11 +1124,11 @@ final class CalendarDSTLegendTests: XCTestCase {
 
     private func applyAxis(
         _ axis: TimeAxisLayerView, clock: DayClock, hourHeight: CGFloat = 56, leading: Int = 0,
-        nowLegendWindow: CalendarNowLegendWindow? = nil
+        nowLegendWindow: CalendarNowLegendWindow? = nil, zoneClock: CalendarZoneClock? = nil
     ) {
         axis.apply(
             clock: clock,
-            zoneClock: zone(newYork),
+            zoneClock: zoneClock ?? zone(newYork),
             headerHeight: 16,
             hourHeight: hourHeight,
             slotMinutes: calendarLegendSlotMinutes(forHourHeight: hourHeight),
@@ -1254,99 +1254,145 @@ final class CalendarDSTLegendTests: XCTestCase {
         XCTAssertEqual(legendOffsets(grouped), [1])
     }
 
-    // MARK: The zone sublabel at the smallest zoom (QA F4, mutation h)
+    // MARK: The zone sublabel at the smallest zoom (QA F4, mutation h; legend round 2)
 
-    /// The day view's pinch floor for a canvas of `dayHours`, the way the
-    /// page computes it in `applyDynamicPinchMinIfNeeded`: its top overlay
-    /// inset for the day view, and the tab bar and a margin below the safe
-    /// area.
-    private func dayViewPinchFloor(
-        viewportHeight: CGFloat, safeAreaTop: CGFloat, safeAreaBottom: CGFloat, dayHours: CGFloat
-    ) -> CGFloat {
+    /// The phones the app runs on, from the smallest screen to the tallest:
+    /// the height the timeline's scroll view gets and the safe areas.
+    private struct Phone {
+        let name: String
+        let viewport: CGFloat
+        let safeTop: CGFloat
+        let safeBottom: CGFloat
+    }
+    private let phones = [
+        Phone(name: "4.7-inch", viewport: 667, safeTop: 20, safeBottom: 0),
+        Phone(name: "5.4-inch", viewport: 812, safeTop: 50, safeBottom: 34),
+        Phone(name: "6.1-inch", viewport: 852, safeTop: 59, safeBottom: 34),
+        Phone(name: "6.3-inch", viewport: 874, safeTop: 62, safeBottom: 34),
+        Phone(name: "6.9-inch", viewport: 956, safeTop: 62, safeBottom: 34),
+    ]
+
+    /// A view's smallest zoom: the day view, and the three-day and week
+    /// views with and without an all-day row, each with the in-column
+    /// legend form that view draws.
+    private struct ZoomProfile {
+        let name: String
+        let rangeMode: RangeMode
+        let allDayPills: Int
+        let legendIsNarrow: Bool
+    }
+    private let zoomProfiles = [
+        ZoomProfile(name: "day", rangeMode: .day, allDayPills: 0, legendIsNarrow: false),
+        ZoomProfile(name: "three-day", rangeMode: .threeDay, allDayPills: 0, legendIsNarrow: false),
+        ZoomProfile(name: "three-day with one all-day pill", rangeMode: .threeDay, allDayPills: 1, legendIsNarrow: false),
+        ZoomProfile(name: "week", rangeMode: .week, allDayPills: 0, legendIsNarrow: true),
+        ZoomProfile(name: "week with one all-day pill", rangeMode: .week, allDayPills: 1, legendIsNarrow: true),
+    ]
+
+    /// The pinch floor for a canvas of `dayHours` in `profile`'s view on
+    /// `phone`, the way the pager computes it in `effectiveMinHourHeight`:
+    /// the view's top overlay inset (its legend band, and the capsules when
+    /// the user keeps them visible), its all-day row, and the tab bar and a
+    /// margin below the safe area.
+    private func pinchFloor(_ phone: Phone, _ profile: ZoomProfile, dayHours: CGFloat) -> CGFloat {
         let topOverlayInset = calendarTopOverlayInset(
-            safeAreaTop: safeAreaTop,
-            isCapsuleVisible: calendarTopOverlayCapsulesVisible(rangeMode: .day, storedVisibility: true),
-            legendBandHeight: calendarTopOverlayLegendBandHeight(for: .day)
+            safeAreaTop: phone.safeTop,
+            isCapsuleVisible: calendarTopOverlayCapsulesVisible(rangeMode: profile.rangeMode, storedVisibility: true),
+            legendBandHeight: calendarTopOverlayLegendBandHeight(for: profile.rangeMode)
         )
         return calendarPinchEffectiveMinHourHeight(
-            viewportHeight: viewportHeight,
+            viewportHeight: phone.viewport,
             contentTopInset: topOverlayInset,
-            contentBottomInset: safeAreaBottom + 49 + 16,
-            allDayHeight: 0,
+            contentBottomInset: phone.safeBottom + 49 + 16,
+            allDayHeight: calendarTimelineAllDayRowHeight(pillCount: profile.allDayPills),
             safetyFloor: calendarTimelineHourHeightMin,
             dayHours: dayHours
         )
     }
 
-    /// The phones the app runs on, from the smallest screen to the tallest:
-    /// the height the timeline's scroll view gets and the safe areas.
-    private let phones: [(name: String, viewport: CGFloat, safeTop: CGFloat, safeBottom: CGFloat)] = [
-        ("4.7-inch", 667, 20, 0),
-        ("5.4-inch", 812, 50, 34),
-        ("6.1-inch", 852, 59, 34),
-        ("6.3-inch", 874, 62, 34),
-        ("6.9-inch", 956, 62, 34),
-    ]
+    private func legend(_ profile: ZoomProfile) -> CalendarColumnLegend {
+        profile.legendIsNarrow ? .narrow(zoneClock: zone(newYork)) : .standard(zoneClock: zone(newYork))
+    }
 
-    func testTheZoneSublabelShowsAtTheSmallestZoomOfATwentyFiveHourCanvas() {
+    func testTheZoneSublabelShowsAtTheSmallestZoomOfATwentyFiveHourCanvasInEveryViewOnEveryPhone() {
         // Pinched all the way in on a 25h canvas, the two 1:00 rows are told
-        // apart by the sublabel alone, so it has to show at the floor —
-        // on the fixed axis and in an in-column legend — on every phone.
-        let legend = CalendarColumnLegend.standard(zoneClock: zone(newYork))
+        // apart by the sublabel alone, so it has to show at the floor — on
+        // the fixed axis and in the in-column legend form the view draws —
+        // on every phone: in the day view, and in the three-day and week
+        // views under their legend band, with and without an all-day row.
         for phone in phones {
-            let floor = dayViewPinchFloor(
-                viewportHeight: phone.viewport, safeAreaTop: phone.safeTop, safeAreaBottom: phone.safeBottom, dayHours: 25
-            )
-            XCTAssertGreaterThan(floor, calendarTimelineHourHeightMin, "\(phone.name): fixture — the fit, not the safety floor")
-            XCTAssertGreaterThanOrEqual(
-                floor, TimeAxisLayerView.zoneSublabelMinimumHourHeight,
-                "\(phone.name): the floor (\(floor)) is not below the sublabel's bound"
-            )
+            for profile in zoomProfiles {
+                let name = "\(phone.name), \(profile.name)"
+                let legend = legend(profile)
+                let floor = pinchFloor(phone, profile, dayHours: 25)
+                XCTAssertGreaterThan(floor, calendarTimelineHourHeightMin, "\(name): fixture — the fit, not the safety floor")
+                XCTAssertGreaterThanOrEqual(
+                    floor, TimeAxisLayerView.zoneSublabelMinimumHourHeight,
+                    "\(name): the floor (\(floor)) is not below the axis sublabel's bound"
+                )
+                XCTAssertGreaterThanOrEqual(
+                    floor, legend.zoneSublabelMinimumHourHeight,
+                    "\(name): the floor (\(floor)) is not below the legend sublabel's bound"
+                )
 
-            let axis = TimeAxisLayerView(frame: CGRect(x: 0, y: 0, width: 26, height: 3000))
-            applyAxis(axis, clock: fallBack, hourHeight: floor)
-            let zones = axis.debugZoneLabels()
-            XCTAssertEqual(zones.map(\.text), ["EDT", "EST"], phone.name)
-            XCTAssertTrue(zones.allSatisfy { !$0.isHidden }, "\(phone.name): the axis shows both zones at the floor")
+                let axis = TimeAxisLayerView(frame: CGRect(x: 0, y: 0, width: 26, height: 3000))
+                applyAxis(axis, clock: fallBack, hourHeight: floor)
+                let zones = axis.debugZoneLabels()
+                XCTAssertEqual(zones.map(\.text), ["EDT", "EST"], name)
+                XCTAssertTrue(zones.allSatisfy { !$0.isHidden }, "\(name): the axis shows both zones at the floor")
 
-            let host = DayLayerHostView(frame: CGRect(x: 0, y: 0, width: 360, height: 3000))
-            host.apply(model([], clock: fallBack, hourHeight: floor, legend: legend))
-            host.layoutIfNeeded()
-            let legendZones = host.debugLegendZoneLayers()
-            XCTAssertEqual(legendZones.map(\.text), ["EDT", "EST"], phone.name)
-            XCTAssertTrue(legendZones.allSatisfy { !$0.isHidden }, "\(phone.name): the legend shows both zones at the floor")
+                let host = DayLayerHostView(frame: CGRect(x: 0, y: 0, width: 360, height: 3000))
+                host.apply(model([], clock: fallBack, hourHeight: floor, legend: legend))
+                host.layoutIfNeeded()
+                let legendZones = host.debugLegendZoneLayers()
+                XCTAssertEqual(legendZones.map(\.text), ["EDT", "EST"], name)
+                XCTAssertTrue(legendZones.allSatisfy { !$0.isHidden }, "\(name): the legend shows both zones at the floor")
 
-            // Normalized: the canvas is a standard day, so the floor is the
-            // 24h fit, and the 25h column (here the axis of Nov 1's own
-            // single-day page, the one window whose axis it is under both
-            // rules) is drawn at that floor scaled by 24/25 — which is the
-            // 25h fit again, so the sublabel clears its bound by the same
-            // margin.
-            let standardFloor = dayViewPinchFloor(
-                viewportHeight: phone.viewport, safeAreaTop: phone.safeTop, safeAreaBottom: phone.safeBottom, dayHours: 24
-            )
-            let normalized = CalendarTimelineGeometry(
-                window: newYorkWindow(2026, 11, 1, daysCount: 1), selectedDayClock: fallBack,
-                longestInReach: nil, hourHeight: standardFloor, mode: .normalized
-            )
-            let scaledFloor = normalized.axisHourHeight
-            XCTAssertEqual(scaledFloor, floor, accuracy: 0.001, "\(phone.name): the scaled 24h floor is the 25h floor")
-            XCTAssertGreaterThanOrEqual(
-                scaledFloor, TimeAxisLayerView.zoneSublabelMinimumHourHeight,
-                "\(phone.name): normalized at the smallest zoom (\(scaledFloor)) keeps the sublabel"
-            )
-            let normalizedAxis = TimeAxisLayerView(frame: CGRect(x: 0, y: 0, width: 26, height: 3000))
-            applyAxis(normalizedAxis, clock: fallBack, hourHeight: scaledFloor)
-            XCTAssertEqual(normalizedAxis.debugZoneLabels().map(\.text), ["EDT", "EST"], phone.name)
-            XCTAssertTrue(normalizedAxis.debugZoneLabels().allSatisfy { !$0.isHidden }, "\(phone.name): normalized axis")
-            host.apply(model([], clock: fallBack, hourHeight: normalized.columnHourHeight(for: fallBack), legend: legend))
-            host.layoutIfNeeded()
-            XCTAssertTrue(host.debugLegendZoneLayers().allSatisfy { !$0.isHidden }, "\(phone.name): normalized legend")
+                // Normalized: the canvas is a standard day, so the floor is
+                // the 24h fit, and the 25h column (here the axis of Nov 1's
+                // own single-day page) is drawn at that floor scaled by
+                // 24/25 — which is the 25h fit again, so the sublabel clears
+                // its bound by the same margin.
+                let standardFloor = pinchFloor(phone, profile, dayHours: 24)
+                let normalized = CalendarTimelineGeometry(
+                    window: newYorkWindow(2026, 11, 1, daysCount: 1), selectedDayClock: fallBack,
+                    longestInReach: nil, hourHeight: standardFloor, mode: .normalized
+                )
+                let scaledFloor = normalized.axisHourHeight
+                XCTAssertEqual(scaledFloor, floor, accuracy: 0.001, "\(name): the scaled 24h floor is the 25h floor")
+                let normalizedAxis = TimeAxisLayerView(frame: CGRect(x: 0, y: 0, width: 26, height: 3000))
+                applyAxis(normalizedAxis, clock: fallBack, hourHeight: scaledFloor)
+                XCTAssertEqual(normalizedAxis.debugZoneLabels().map(\.text), ["EDT", "EST"], name)
+                XCTAssertTrue(normalizedAxis.debugZoneLabels().allSatisfy { !$0.isHidden }, "\(name): normalized axis")
+                host.apply(model([], clock: fallBack, hourHeight: normalized.columnHourHeight(for: fallBack), legend: legend))
+                host.layoutIfNeeded()
+                XCTAssertTrue(host.debugLegendZoneLayers().allSatisfy { !$0.isHidden }, "\(name): normalized legend")
+            }
         }
     }
 
+    /// The sublabel's frame against its hour label's and the next row's:
+    /// under the hour by the glyphs — its capitals start below the hour's
+    /// baseline, where the digits end — tighter than under the hour's whole
+    /// line box, and clear of the next row's frame.
+    private func expectPacked(
+        zone: CGRect, under hour: CGRect, next: CGRect, packing: CalendarZoneSublabelPacking, _ name: String
+    ) {
+        XCTAssertGreaterThan(zone.minY, hour.minY, "\(name): sits under its hour")
+        XCTAssertGreaterThanOrEqual(
+            zone.minY + packing.zoneFont.ascender - packing.zoneFont.capHeight,
+            hour.minY + packing.hourFont.ascender,
+            "\(name): its capitals start below the hour's baseline"
+        )
+        XCTAssertLessThan(zone.minY, hour.minY + packing.hourLineHeight - 1, "\(name): packed tighter than under the hour's line box")
+        XCTAssertLessThanOrEqual(zone.maxY, next.minY, "\(name): stays clear of the next row's label")
+    }
+
     func testTheZoneSublabelBoundIsHonouredAndKeepsClearOfTheNextRow() {
+        let packing = TimeAxisLayerView.zoneSublabelPacking
         let bound = TimeAxisLayerView.zoneSublabelMinimumHourHeight
+        XCTAssertEqual(bound, packing.minimumHourHeight, "the bound is the packing's")
+        XCTAssertEqual(bound, packing.zoneOffset + packing.zoneLineHeight)
         let axis = TimeAxisLayerView(frame: CGRect(x: 0, y: 0, width: 26, height: 3000))
 
         // At the bound: shown, under its own hour label and above the next.
@@ -1360,10 +1406,9 @@ final class CalendarDSTLegendTests: XCTestCase {
             let next = hours.first { $0.slotIndex == zone.slotIndex + 1 }
             XCTAssertNotNil(own, zone.text)
             XCTAssertNotNil(next, zone.text)
-            XCTAssertGreaterThan(zone.frame.minY, own?.frame.minY ?? .infinity, "\(zone.text) sits under its hour")
-            XCTAssertLessThanOrEqual(
-                zone.frame.maxY, next?.frame.minY ?? -.infinity, "\(zone.text) stays clear of the next row's label"
-            )
+            expectPacked(zone: zone.frame, under: own?.frame ?? .null, next: next?.frame ?? .null, packing: packing, "axis \(zone.text)")
+            XCTAssertEqual(own?.frame.height, packing.hourLineHeight, "\(zone.text): the hour label's frame is its line box")
+            XCTAssertEqual(zone.frame.height, packing.zoneLineHeight, "\(zone.text): the sublabel's frame is its line box")
         }
         // Just below the bound: hidden — it is a bound, not always on.
         applyAxis(axis, clock: fallBack, hourHeight: bound - 0.5)
@@ -1374,12 +1419,20 @@ final class CalendarDSTLegendTests: XCTestCase {
         applyAxis(axis, clock: fallBack, hourHeight: 96)
         XCTAssertTrue(axis.debugZoneLabels().allSatisfy { !$0.isHidden })
 
-        // Both in-column legend forms honour the same bound, with the same
-        // clearance.
-        for legend in [CalendarColumnLegend.standard(zoneClock: zone(newYork)), CalendarColumnLegend.narrow(zoneClock: zone(newYork))] {
+        // Both in-column legend forms honour their own bound, with the same
+        // clearance: the wide form's is the axis's, the narrow form's is
+        // smaller, from its smaller fonts.
+        let standard = CalendarColumnLegend.standard(zoneClock: zone(newYork))
+        let narrow = CalendarColumnLegend.narrow(zoneClock: zone(newYork))
+        XCTAssertEqual(standard.zoneSublabelPacking, packing, "the wide form draws the axis's fonts")
+        XCTAssertEqual(standard.zoneSublabelMinimumHourHeight, bound)
+        XCTAssertLessThan(narrow.zoneSublabelMinimumHourHeight, bound)
+        XCTAssertGreaterThan(narrow.zoneSublabelMinimumHourHeight, calendarTimelineHourHeightMin, "a bound, not always on")
+        for legend in [standard, narrow] {
             let form = legend.isNarrow ? "narrow" : "standard"
+            let legendBound = legend.zoneSublabelMinimumHourHeight
             let host = DayLayerHostView(frame: CGRect(x: 0, y: 0, width: 360, height: 3000))
-            host.apply(model([], clock: fallBack, hourHeight: bound, legend: legend))
+            host.apply(model([], clock: fallBack, hourHeight: legendBound, legend: legend))
             host.layoutIfNeeded()
             let rows = host.debugLegendState().rows
             let legendZones = host.debugLegendZoneLayers()
@@ -1388,14 +1441,82 @@ final class CalendarDSTLegendTests: XCTestCase {
                 XCTAssertFalse(zone.isHidden, "\(form) \(zone.text)")
                 let own = rows.first { $0.slotIndex == zone.slotIndex }
                 let next = rows.first { $0.slotIndex == zone.slotIndex + 1 }
-                XCTAssertGreaterThan(zone.frame.minY, own?.frame.minY ?? .infinity, "\(form): \(zone.text) sits under its hour")
-                XCTAssertLessThanOrEqual(
-                    zone.frame.maxY, next?.frame.minY ?? -.infinity, "\(form): \(zone.text) stays clear of the next row"
+                XCTAssertNotNil(own, "\(form) \(zone.text)")
+                XCTAssertNotNil(next, "\(form) \(zone.text)")
+                expectPacked(
+                    zone: zone.frame, under: own?.frame ?? .null, next: next?.frame ?? .null,
+                    packing: legend.zoneSublabelPacking, "\(form) \(zone.text)"
                 )
             }
-            host.apply(model([], clock: fallBack, hourHeight: bound - 0.5, legend: legend))
+            host.apply(model([], clock: fallBack, hourHeight: legendBound - 0.5, legend: legend))
             host.layoutIfNeeded()
             XCTAssertTrue(host.debugLegendZoneLayers().allSatisfy(\.isHidden), "\(form): hidden just below the bound")
+        }
+    }
+
+    func testAnHourLabelWithADescenderKeepsItsSublabelUnderTheGlyphs() {
+        // In the twelve-hour format Cairo's repeated hour reads "11 pm", and
+        // the p reaches below the baseline; the sublabel then sits lower by
+        // that reach — the glyphs still clear, at the bound, of the next
+        // row's digits — while "23:00" in the twenty-four-hour format keeps
+        // the tight packing. Digits overshoot the baseline by a fraction of
+        // a point and count as on it.
+        let packing = TimeAxisLayerView.zoneSublabelPacking
+        for text in ["1:00", "23:00", "1 am", "12 am"] {
+            XCTAssertEqual(packing.hourTextDescent(text), 0, "\(text) ends on the baseline")
+            XCTAssertEqual(packing.zoneOffset(underHourText: text), packing.zoneOffset, text)
+        }
+        let descent = packing.hourTextDescent("11 pm")
+        XCTAssertGreaterThan(descent, CalendarZoneSublabelPacking.glyphGap, "the p's reach is more than the gap absorbs")
+        XCTAssertLessThanOrEqual(descent, -packing.hourFont.descender + 0.01, "and no more than the font's descender")
+        XCTAssertGreaterThan(packing.zoneOffset(underHourText: "11 pm"), packing.zoneOffset)
+
+        let defaults = UserDefaults.standard
+        let previous = defaults.string(forKey: AppSettingsLocale.timeFormatKey)
+        defer {
+            if let previous { defaults.set(previous, forKey: AppSettingsLocale.timeFormatKey) }
+            else { defaults.removeObject(forKey: AppSettingsLocale.timeFormatKey) }
+        }
+        defaults.set(AppTimeFormat.twelve.rawValue, forKey: AppSettingsLocale.timeFormatKey)
+        XCTAssertFalse(AppTimeFormat.current.is24, "fixture")
+        let thursday = day(cairo, 2026, 10, 29)
+        XCTAssertEqual(thursday.length, 25 * 3600, "fixture: Cairo's long day")
+        let axis = TimeAxisLayerView(frame: CGRect(x: 0, y: 0, width: 26, height: 3000))
+        let bound = TimeAxisLayerView.zoneSublabelMinimumHourHeight
+        applyAxis(axis, clock: thursday, hourHeight: bound, zoneClock: zone(cairo))
+        let hours = axis.debugHourLabels()
+        let twelveHourZones = axis.debugZoneLabels()
+        XCTAssertEqual(twelveHourZones.count, 2)
+        for zone in twelveHourZones {
+            let own = hours.first { $0.slotIndex == zone.slotIndex }
+            let next = hours.first { $0.slotIndex == zone.slotIndex + 1 }
+            XCTAssertEqual(own?.text, "11 pm", "fixture")
+            XCTAssertFalse(zone.isHidden)
+            XCTAssertGreaterThanOrEqual(
+                zone.frame.minY + packing.zoneFont.ascender - packing.zoneFont.capHeight,
+                (own?.frame.minY ?? .infinity) + packing.hourFont.ascender + descent,
+                "its capitals start below the p"
+            )
+            XCTAssertLessThanOrEqual(
+                zone.frame.minY + packing.zoneFont.ascender,
+                (next?.frame.minY ?? -.infinity) + packing.hourFont.ascender - packing.hourFont.capHeight,
+                "its baseline stays above the next row's digits"
+            )
+        }
+
+        // The control on a fresh axis: the format is read when the labels
+        // are built, and the same inputs again would rebuild nothing.
+        defaults.set(AppTimeFormat.twentyFour.rawValue, forKey: AppSettingsLocale.timeFormatKey)
+        let twentyFourHourAxis = TimeAxisLayerView(frame: CGRect(x: 0, y: 0, width: 26, height: 3000))
+        applyAxis(twentyFourHourAxis, clock: thursday, hourHeight: bound, zoneClock: zone(cairo))
+        let twentyFourHourZones = twentyFourHourAxis.debugZoneLabels()
+        XCTAssertEqual(twentyFourHourZones.count, 2)
+        XCTAssertEqual(twentyFourHourAxis.debugHourLabels().first { $0.slotIndex == twentyFourHourZones[0].slotIndex }?.text, "23:00", "fixture")
+        for (twelve, twentyFour) in zip(twelveHourZones, twentyFourHourZones) {
+            XCTAssertEqual(twelve.slotIndex, twentyFour.slotIndex)
+            XCTAssertLessThan(twentyFour.frame.minY, twelve.frame.minY, "digits take the tight packing")
+            let next = twentyFourHourAxis.debugHourLabels().first { $0.slotIndex == twentyFour.slotIndex + 1 }
+            XCTAssertLessThanOrEqual(twentyFour.frame.maxY, next?.frame.minY ?? -.infinity)
         }
     }
 }

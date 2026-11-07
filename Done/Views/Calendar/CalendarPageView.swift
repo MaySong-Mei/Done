@@ -1373,9 +1373,7 @@ struct CalendarPageView: View {
     /// all agree even if `allDayOccurrencesCache` holds stale out-of-range
     /// entries (where the dayRange-scoped `timelineAllDayHeight` could differ).
     private var pinnedAllDayHeight: CGFloat {
-        guard maxAllDayCountCache > 0 else { return 0 }
-        return CGFloat(maxAllDayCountCache) * timelineAllDayPillHeight
-            + timelineAllDaySectionPadding * 2
+        calendarTimelineAllDayRowHeight(pillCount: maxAllDayCountCache)
     }
 
     /// True when the all-day pill row is pinned to the scroll frame top (so the
@@ -1524,8 +1522,8 @@ struct CalendarPageView: View {
     private let floatingMenuActivationDelay: TimeInterval = calendarEventExpressMenuAdditionalHoldDuration()
     private let resizeGraceDuration: TimeInterval = 2.5
     private let resizeGraceFadeDuration: TimeInterval = 0.35
-    private let timelineAllDayPillHeight: CGFloat = 28
-    private let timelineAllDaySectionPadding: CGFloat = 4
+    private let timelineAllDayPillHeight: CGFloat = calendarTimelineAllDayPillHeight
+    private let timelineAllDaySectionPadding: CGFloat = calendarTimelineAllDaySectionPadding
 
     var body: some View {
         // gh#201 round-2 SPIKE seam. Round 1 measured ~960ms of held main
@@ -3418,8 +3416,7 @@ private extension CalendarPageView {
         let maxCount = dayRange.reduce(0) { partialResult, offset in
             max(partialResult, allDayOccurrencesCache[offset]?.count ?? 0)
         }
-        guard maxCount > 0 else { return 0 }
-        return CGFloat(maxCount) * timelineAllDayPillHeight + timelineAllDaySectionPadding * 2
+        return calendarTimelineAllDayRowHeight(pillCount: maxCount)
     }
 
     func dateForLegendDayOffset(_ dayOffset: Int) -> Date {

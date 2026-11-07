@@ -653,6 +653,18 @@ func calendarPinchFitHourHeight(
     return (availableForHours / dayHours) * 1.02
 }
 
+/// The all-day row: a pill's height and the row's padding above and below.
+let calendarTimelineAllDayPillHeight: CGFloat = 28
+let calendarTimelineAllDaySectionPadding: CGFloat = 4
+
+/// The all-day row's height for `pillCount` pills: nothing without one,
+/// else the pills and the row's padding. The pager's row, the page's
+/// pinned row and the pinch floor all read it.
+func calendarTimelineAllDayRowHeight(pillCount: Int) -> CGFloat {
+    guard pillCount > 0 else { return 0 }
+    return CGFloat(pillCount) * calendarTimelineAllDayPillHeight + calendarTimelineAllDaySectionPadding * 2
+}
+
 // Extracted for regression tests: the minimum hourHeight allowed during
 // the live pinch gesture.  Equals the "exact fit" point — pinching to
 // the smallest puts the bottom of the day (24:00) right above the tab
@@ -1381,8 +1393,8 @@ struct TimelinePagerView: View {
     private var headerHeight: CGFloat { calendarTimelineTopInset(hourHeight: hourHeight) }
 
     // All-day layout
-    private let allDayPillHeight: CGFloat = 28
-    private let allDaySectionPadding: CGFloat = 4
+    private let allDayPillHeight: CGFloat = calendarTimelineAllDayPillHeight
+    private let allDaySectionPadding: CGFloat = calendarTimelineAllDaySectionPadding
 
     // Computed
     private var isSingleDay: Bool { daysCount == 1 }
@@ -1704,9 +1716,7 @@ struct TimelinePagerView: View {
         return maxCount
     }
     private var allDayHeight: CGFloat {
-        let count = maxAllDayCount
-        guard count > 0 else { return 0 }
-        return CGFloat(count) * allDayPillHeight + allDaySectionPadding * 2
+        calendarTimelineAllDayRowHeight(pillCount: maxAllDayCount)
     }
     private var totalHeight: CGFloat { effectiveAllDayHeight + timelineHeight }
     private var boundaryExtensionAnimation: Animation? {
@@ -3511,6 +3521,10 @@ struct TimeAxisLabels: View {
             // the legend was positioned on, at the axis's hour height.
             let nowTotalMinutes = placement.map { calendarNowLegendAxisMinutes(placement: $0, axisHourHeight: hourHeight) } ?? 0
             let showsZones = hourHeight >= TimeAxisLayerView.zoneSublabelMinimumHourHeight
+            // The sublabel packs under the hour label as the layer axis does:
+            // its top at the packing's offset below the hour label's top.
+            let zonePacking = TimeAxisLayerView.zoneSublabelPacking
+            let zoneSpacing = zonePacking.zoneOffset - zonePacking.hourLineHeight
             ZStack(alignment: .topTrailing) {
                 VStack(spacing: 0) {
                     Color.clear.frame(height: headerHeight)
@@ -3524,7 +3538,7 @@ struct TimeAxisLabels: View {
                                 // OPACITY (not an empty string) so a page
                                 // switch can cross-fade the label back in
                                 // sync with the legend fading out.
-                                VStack(alignment: .trailing, spacing: -1) {
+                                VStack(alignment: .trailing, spacing: zoneSpacing) {
                                     Text(label(forSlot: index, is24: is24))
                                         .font(.system(size: 9, weight: .semibold))
                                     if showsZones, let zone = zoneLabel(forSlot: index, is24: is24) {
