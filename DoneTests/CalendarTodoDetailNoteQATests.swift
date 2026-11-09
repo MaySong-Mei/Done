@@ -189,24 +189,60 @@ final class CalendarTodoDetailNoteQATests: XCTestCase {
         view.convert(view.bounds, to: window).intersects(window.bounds)
     }
 
-    /// The detail Note editor: the one editable, on-screen text view that is
-    /// not showing the item's own description. Found by elimination, not by
-    /// its text, so a page that fails to LOAD still yields its editor.
+    /// On the pager page the window shows, wherever it sits vertically. The
+    /// pager lays its other page beside this one, so a view on that page is
+    /// off to the side; a view below the fold of THIS page is not.
+    private func onShownPage(_ view: UIView, in window: UIWindow) -> Bool {
+        let frame = view.convert(view.bounds, to: window)
+        return frame.maxX > window.bounds.minX && frame.minX < window.bounds.maxX
+    }
+
+    /// Scrolls the page's own vertical scroll view (the nearest non-paging
+    /// one above the editor, never the pager) until the editor is in view,
+    /// the way a user reaches a Note below the fold.
+    private func scrollIntoView(_ editor: UITextView, in window: UIWindow) {
+        var ancestor = editor.superview
+        while let view = ancestor {
+            if let scrollView = view as? UIScrollView, !scrollView.isPagingEnabled {
+                scrollView.scrollRectToVisible(editor.convert(editor.bounds, to: scrollView), animated: false)
+                break
+            }
+            ancestor = view.superview
+        }
+        window.layoutIfNeeded()
+        pump(0.05)
+    }
+
+    /// The detail Note editor: the one editable text view on the shown page
+    /// that is not showing the item's own description, scrolled into view.
+    /// Found by elimination, not by its text, so a page that fails to LOAD
+    /// still yields its editor. Counted over the whole shown page, not just
+    /// what is on screen: how much of the page fits above the fold depends on
+    /// the device's top safe area and on how full the record is, and a second
+    /// editor below the fold must still be rejected.
     private func noteEditor(
         in window: UIWindow,
         file: StaticString = #filePath,
         line: UInt = #line
     ) throws -> UITextView {
         let candidates = allTextViews(in: window).filter {
-            $0.isEditable && $0.text != itemDescription && onScreen($0, in: window)
+            $0.isEditable && $0.text != itemDescription && onShownPage($0, in: window)
         }
         XCTAssertEqual(
             candidates.count, 1,
-            "rig: expected exactly one on-screen Note editor, found \(candidates.count) "
+            "rig: expected exactly one Note editor on the shown page, found \(candidates.count) "
             + "(texts: \(candidates.map { $0.text ?? "nil" }))",
             file: file, line: line
         )
-        return try XCTUnwrap(candidates.first, file: file, line: line)
+        let editor = try XCTUnwrap(candidates.first, file: file, line: line)
+        scrollIntoView(editor, in: window)
+        XCTAssertTrue(
+            window.bounds.contains(editor.convert(editor.bounds, to: window)),
+            "rig: the Note editor must be fully on screen once scrolled to "
+            + "(frame \(editor.convert(editor.bounds, to: window)), window \(window.bounds))",
+            file: file, line: line
+        )
+        return editor
     }
 
     /// Types at the end of the editor through `UITextInput`, one run-loop turn
