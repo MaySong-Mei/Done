@@ -51,6 +51,7 @@
 		BKQA10012FFB000000000001 /* BackupSnapshotDirtyCheckQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BKQA00012FFB000000000001 /* BackupSnapshotDirtyCheckQATests.swift */; };
 		ESDO10012FFA000000000001 /* EventStoreDeletionOrderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ESDO00012FFA000000000001 /* EventStoreDeletionOrderingTests.swift */; };
 		ESLI10012FFA000000000001 /* EventStoreLookupIndexTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ESLI00012FFA000000000001 /* EventStoreLookupIndexTests.swift */; };
+		CTDN10012FFC000000000001 /* CalendarTodoDetailNoteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTDN00012FFC000000000001 /* CalendarTodoDetailNoteTests.swift */; };
 		CDTI10000000000000000001 /* CalendarDetailTimelineIsolationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDTI00000000000000000001 /* CalendarDetailTimelineIsolationTests.swift */; };
 		CDTQ10000000000000000001 /* CalendarDetailTimelineIsolationQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDTQ00000000000000000001 /* CalendarDetailTimelineIsolationQATests.swift */; };
 		IPCQ10000000000000000001 /* CalendarInterruptParallelComposerIsolationQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = IPCQ00000000000000000001 /* CalendarInterruptParallelComposerIsolationQATests.swift */; };
@@ -559,6 +560,7 @@
 		BKQA00012FFB000000000001 /* BackupSnapshotDirtyCheckQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupSnapshotDirtyCheckQATests.swift; sourceTree = "<group>"; };
 		ESDO00012FFA000000000001 /* EventStoreDeletionOrderingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventStoreDeletionOrderingTests.swift; sourceTree = "<group>"; };
 		ESLI00012FFA000000000001 /* EventStoreLookupIndexTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventStoreLookupIndexTests.swift; sourceTree = "<group>"; };
+		CTDN00012FFC000000000001 /* CalendarTodoDetailNoteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarTodoDetailNoteTests.swift; sourceTree = "<group>"; };
 		CDTI00000000000000000001 /* CalendarDetailTimelineIsolationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDetailTimelineIsolationTests.swift; sourceTree = "<group>"; };
 		CDTQ00000000000000000001 /* CalendarDetailTimelineIsolationQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDetailTimelineIsolationQATests.swift; sourceTree = "<group>"; };
 		IPCQ00000000000000000001 /* CalendarInterruptParallelComposerIsolationQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarInterruptParallelComposerIsolationQATests.swift; sourceTree = "<group>"; };
@@ -1093,6 +1095,7 @@
 				BKQA00012FFB000000000001 /* BackupSnapshotDirtyCheckQATests.swift */,
 				ESDO00012FFA000000000001 /* EventStoreDeletionOrderingTests.swift */,
 				ESLI00012FFA000000000001 /* EventStoreLookupIndexTests.swift */,
+				CTDN00012FFC000000000001 /* CalendarTodoDetailNoteTests.swift */,
 				CDTI00000000000000000001 /* CalendarDetailTimelineIsolationTests.swift */,
 				CDTQ00000000000000000001 /* CalendarDetailTimelineIsolationQATests.swift */,
 				IPCQ00000000000000000001 /* CalendarInterruptParallelComposerIsolationQATests.swift */,
@@ -2068,6 +2071,7 @@
 				BKQA10012FFB000000000001 /* BackupSnapshotDirtyCheckQATests.swift in Sources */,
 				ESDO10012FFA000000000001 /* EventStoreDeletionOrderingTests.swift in Sources */,
 				ESLI10012FFA000000000001 /* EventStoreLookupIndexTests.swift in Sources */,
+				CTDN10012FFC000000000001 /* CalendarTodoDetailNoteTests.swift in Sources */,
 				CDTI10000000000000000001 /* CalendarDetailTimelineIsolationTests.swift in Sources */,
 				CDTQ10000000000000000001 /* CalendarDetailTimelineIsolationQATests.swift in Sources */,
 				IPCQ10000000000000000001 /* CalendarInterruptParallelComposerIsolationQATests.swift in Sources */,
