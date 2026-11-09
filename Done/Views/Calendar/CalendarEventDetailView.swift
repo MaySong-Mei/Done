@@ -1146,18 +1146,6 @@ private extension CalendarEventDetailView {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
         }
-        .onAppear { loadDetailDraftIfNeeded() }
-        .onChange(of: detailNoteText) {
-            // gh#197 SPIKE seam (#195): see body's comment above.
-            SpikeProbe.emit(.textLength(Spike195SignalID.reflectionNoteLength, detailNoteText.count))
-            // gh#219: the free-text note is the one field where per-keystroke
-            // fsync of the whole log-record array showed up on device — commit
-            // is coalesced (400 ms + 2.0 s max-wait); lifecycle edges flush it.
-            if didLoadDetailDraft { saveDetailNoteAndTemplate(coalesced: true) }
-        }
-        // Template pick + answers stay discrete/immediate (coalesced: false).
-        .onChange(of: detailSelectedTemplateID) { if didLoadDetailDraft { saveDetailNoteAndTemplate() } }
-        .onChange(of: detailTemplateAnswers.count) { if didLoadDetailDraft { saveDetailNoteAndTemplate() } }
     }
 
     /// Compact one-line "what event am I recording" anchor for Page 2.
@@ -2295,6 +2283,11 @@ private extension CalendarEventDetailView {
             .background(fill, in: Capsule())
     }
 
+    /// The Note editor together with its load and save, so every page that
+    /// shows the editor — an event's reflection page, a todo's single page —
+    /// gets the wiring with it. It used to hang off `reflectionPage` alone,
+    /// and the todo page's note opened empty and was never saved
+    /// (`CalendarTodoDetailNoteTests`).
     var detailNoteSection: some View {
         sectionCard(title: L(.note)) {
             // gh#197 SPIKE seam (#195): see the parent body's comment above.
@@ -2304,6 +2297,18 @@ private extension CalendarEventDetailView {
                 .frame(minHeight: 80)
                 .scrollContentBackground(.hidden)
         }
+        .onAppear { loadDetailDraftIfNeeded() }
+        .onChange(of: detailNoteText) {
+            // gh#197 SPIKE seam (#195): see body's comment above.
+            SpikeProbe.emit(.textLength(Spike195SignalID.reflectionNoteLength, detailNoteText.count))
+            // gh#219: the free-text note is the one field where per-keystroke
+            // fsync of the whole log-record array showed up on device — commit
+            // is coalesced (400 ms + 2.0 s max-wait); lifecycle edges flush it.
+            if didLoadDetailDraft { saveDetailNoteAndTemplate(coalesced: true) }
+        }
+        // Template pick + answers stay discrete/immediate (coalesced: false).
+        .onChange(of: detailSelectedTemplateID) { if didLoadDetailDraft { saveDetailNoteAndTemplate() } }
+        .onChange(of: detailTemplateAnswers.count) { if didLoadDetailDraft { saveDetailNoteAndTemplate() } }
     }
 
     @MainActor var detailSelectedTemplateDefinition: EventLogTemplateDefinition? {
