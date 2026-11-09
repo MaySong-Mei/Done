@@ -16,8 +16,9 @@
 //
 //  Three groups:
 //    - Reflection page regression: what that page loaded and saved before the
-//      move (images, template, effort/completion written before typing, the
-//      open-writes-nothing gate) still holds.
+//      move (the load firing with the editor off screen, template, effort and
+//      completion written before typing, the open-writes-nothing gate) still
+//      holds.
 //    - Todo specifics: recurring, absorbed, Domino-pushed, put back to the
 //      stack, opened twice, route swapped in place.
 //    - Durability and sync: backgrounding and dismissal inside the 400 ms
@@ -223,34 +224,6 @@ final class CalendarTodoDetailNoteQATests: XCTestCase {
         return last
     }
 
-    /// The image strip of `detailImagesSection`: a horizontal SwiftUI
-    /// `ScrollView` of 80 pt thumbnails that exists only when
-    /// `detailExistingImages` (or new picks) is non-empty.
-    private func imageStrips(in window: UIWindow) -> [UIScrollView] {
-        var found: [UIScrollView] = []
-        func walk(_ view: UIView) {
-            if let scroll = view as? UIScrollView,
-               !(scroll is UITextView), !(scroll is UICollectionView), !(scroll is UITableView),
-               abs(scroll.bounds.height - 80) < 1.5,
-               scroll.contentSize.width > 0 {
-                found.append(scroll)
-            }
-            view.subviews.forEach(walk)
-        }
-        walk(window)
-        return found
-    }
-
-    private func imageRefs(_ count: Int) -> [AgenticIntakeImageRef] {
-        (0..<count).map { index in
-            AgenticIntakeImageRef(
-                relativePath: "qa-missing-\(index).jpg",
-                pixelWidth: 10, pixelHeight: 10, fileSizeBytes: 100,
-                createdAt: day
-            )
-        }
-    }
-
     /// A record with every field the Note save writes or must leave alone.
     private func seedRichRecord(for occ: CalendarEventOccurrenceContext, in store: EventStore) {
         store.upsertLogRecord(for: occ) { record in
@@ -271,35 +244,15 @@ final class CalendarTodoDetailNoteQATests: XCTestCase {
 
     // MARK: - 1. Reflection page regression
 
-    /// The load now hangs off the Note section, not the page. The images on
-    /// the same page are loaded by the same call: with stored images the
-    /// strip must be there, without them it must not (the probe's control).
-    func testReflectionPageStillLoadsExistingImages() throws {
-        let store = makeStore()
-        let withImages = item(.event, title: "With images",
-                              agenticIntake: AgenticIntakeRecord(rawText: "", images: imageRefs(2), source: .classicFallback))
-        let without = item(.event, title: "Without images")
-        store.addCalendarEvent(withImages)
-        store.addCalendarEvent(without)
-
-        let control = render(route(without.id), store: store)
-        XCTAssertEqual(imageStrips(in: control.window).count, 0,
-                       "rig: an event with no images must show no image strip")
-        teardown(control)
-
-        let host = render(route(withImages.id), store: store)
-        defer { teardown(host) }
-        XCTAssertEqual(imageStrips(in: host.window).count, 1,
-                       "the reflection page must load the event's stored images (detailExistingImages)")
-    }
-
     /// The load runs when the page appears, not when the Note editor scrolls
-    /// into view: in a short window the editor is below the fold, and the
-    /// images further down are still loaded and the editor already holds the
-    /// stored note.
+    /// into view: in a short window the editor is below the fold and already
+    /// holds the stored note. `detailExistingImages` is filled by the same
+    /// call; the image strip itself is not asserted because this rig does not
+    /// re-evaluate the reflection page after its first pass (on king too), so
+    /// the strip never appears in the window whatever the load did.
     func testReflectionLoadRunsWhileTheNoteIsBelowTheFold() throws {
         let store = makeStore()
-        let event = item(.event, agenticIntake: AgenticIntakeRecord(rawText: "", images: imageRefs(1), source: .classicFallback))
+        let event = item(.event)
         store.addCalendarEvent(event)
         store.upsertLogRecord(for: occurrence(event.id)) { $0.note = "below the fold" }
 
@@ -312,8 +265,6 @@ final class CalendarTodoDetailNoteQATests: XCTestCase {
             XCTAssertFalse(onScreen(editor, in: host.window),
                            "rig: the window must be short enough that the Note editor is off screen")
         }
-        XCTAssertEqual(imageStrips(in: host.window).count, 1,
-                       "images below an off-screen Note editor must still be loaded")
     }
 
     /// Opening is not editing, on either page: the load must not write the
