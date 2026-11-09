@@ -239,7 +239,7 @@ final class TelemetryWireConformanceTests: XCTestCase {
                 TelemetryClaimKey.dayKey(forDayStart: calendar.startOfDay(for: startedAt), calendar: calendar)
             },
             noteOptIn: noteOptIn,
-            allowedStringKeys: TelemetryRedactor.observatoryFixedFormatStringKeys
+            allowedStringKeys: TelemetryRedactor.fixedFormatStringKeys
         )
     }
 
@@ -489,6 +489,90 @@ final class TelemetryWireConformanceTests: XCTestCase {
         XCTAssertEqual((window["wTapsMissingFrameAfterCommit"] as? NSNumber)?.intValue, 1)
         XCTAssertEqual(window["wContaminated"] as? Bool, false)
         XCTAssertNil(window["wP50FrameDeltaMs"], "no probe → no frame statistics")
+    }
+
+    // MARK: - Contract §4 for usage-daily (gh#273 §6.3)
+
+    /// A usage-daily row written by the real center with EVERY declared key
+    /// counted at least once, serialized as the uploader does. Zeros are not
+    /// written, so this fixture is what lets the row's key set be compared
+    /// with the registry in both directions; the declared set is compared
+    /// with the registry directly as well.
+    func testTheUsageRowAndTheDeclaredUsageKeysMatchTheRegistryBothWays() throws {
+        let clock = date("2026-09-21T17:05:00Z")
+        var media = 0.0
+        let center = ResidentObservationCenter(
+            coordinator: SpikeSessionCoordinator(), store: nil, location: location, calendar: la,
+            now: { clock }, mediaNow: { media }, ownerUID: { Self.uid }, stamp: { [unowned self] in self.stamp(build: "29") },
+            installsFollowerProbe: false, verifiesSeed: false, seedTrail: { _ in },
+            countsLaunchSession: true, isAppForeground: { true }
+        )
+        centers.append(center)
+        center.activate()
+        for feature in UsageFeature.allCases {
+            let declaration = feature.declaration
+            for entry in declaration.entries {
+                UsageProbe.enter(entry.tag)
+                media += 1
+                UsageProbe.leave(feature, via: declaration.routes.first?.tag)
+            }
+            for route in declaration.routes {
+                UsageProbe.enter(declaration.entries[0].tag)
+                media += 40
+                UsageProbe.leave(feature, via: route.tag)
+            }
+            if declaration.hasVisits {
+                UsageProbe.enter(declaration.entries[0].tag)
+                media += 400
+                UsageProbe.leave(feature, via: declaration.routes.first?.tag)
+                UsageProbe.enter(declaration.entries[0].tag)
+                media += 10
+                UsageProbe.leave(feature, via: declaration.routes.first?.tag)
+            }
+            declaration.uses.forEach { UsageProbe.use($0.tag) }
+            declaration.dones.forEach { UsageProbe.done($0.tag) }
+            declaration.views.forEach { UsageProbe.view($0.tag) }
+            declaration.events.forEach { UsageProbe.count($0.tag) }
+        }
+        center.flushDaily()
+        center.deactivate()
+        let record = try XCTUnwrap(SpikeRunStore.loadRuns(spikeID: UsageRecordIDs.spikeID, location: location).first)
+        let row = wireRow(record, noteOptIn: false, now: clock)
+        let metrics = try XCTUnwrap(row["metrics"] as? [String: Any])
+
+        let registry = try JSONDecoder().decode([RegistryEntry].self,
+                                                from: Data(contentsOf: repoRoot.appendingPathComponent(Self.registryRelativePath)))
+        let usageRegistered = Dictionary(uniqueKeysWithValues: registry.filter { $0.spike_id == UsageRecordIDs.spikeID }.map { ($0.key, $0) })
+        XCTAssertEqual(Set(usageRegistered.keys), Set(UsageKey.all.map(\.name)), "declared usage keys vs registry, both directions")
+        XCTAssertEqual(Set(metrics.keys), Set(usageRegistered.keys), "the all-keys row vs registry, both directions")
+        XCTAssertEqual(row["spike_id"] as? String, "usage-daily")
+        XCTAssertEqual(row["kind"] as? String, "daily_rollup")
+
+        let histogram = try NSRegularExpression(pattern: "^[0-9]+ [0-9]+ [0-9]+ [0-9]+$")
+        var violations: [String] = []
+        for (key, value) in metrics {
+            guard let entry = usageRegistered[key] else { continue }
+            let ok: Bool
+            switch (entry.kind, entry.value_schema) {
+            case ("counter", "number"):
+                ok = (value as? NSNumber).map { CFGetTypeID($0) != CFBooleanGetTypeID() && $0.doubleValue.rounded() == $0.doubleValue && $0.doubleValue > 0 } ?? false
+            case ("histogram", "fixed_string"):
+                ok = (value as? String).map { histogram.numberOfMatches(in: $0, range: NSRange($0.startIndex..., in: $0)) == 1 } ?? false
+            default:
+                ok = false
+            }
+            if !ok { violations.append("\(key) (\(entry.kind)/\(entry.value_schema)) = \(value)") }
+        }
+        XCTAssertEqual(violations, [])
+        // Hand-computed on this fixture. Focus: two entry visits of 1 s, three
+        // route visits of 40 s, one of 400 s and one of 10 s. Create: four
+        // entry visits of 1 s, two route visits of 40 s, one of 400 s, one of
+        // 10 s.
+        XCTAssertEqual(metrics["usage.focus.dwell"] as? String, "2 1 3 1")
+        XCTAssertEqual(metrics["usage.create.dwell"] as? String, "4 1 2 1")
+        XCTAssertEqual((metrics["usage.focus.abandon"] as? NSNumber)?.intValue, 7, "no visit there used anything")
+        XCTAssertEqual((metrics["usage.focus.exit.swipe"] as? NSNumber)?.intValue, 5, "the entry visits and the two extra left by the first route, plus its own")
+        XCTAssertEqual((metrics["sessions"] as? NSNumber)?.intValue, 1, "the launch")
     }
 
     // MARK: - The inferred path for a pre-chassis line

@@ -431,3 +431,44 @@ RLS:authenticated `select / insert / update` 自己的行(`user_id = (select aut
 **staging(2026-10-26)**:016 + 注册表经 `supabase-staging.yml`(workflow_dispatch on king ff93997,run 40255421366)应用到 done-staging;Debug 模拟器以 qa-a 会话真传一行 daily_rollup(build 11 / debug / 18 键),视图按契约忽略 debug 行(全部 0 行)。release 标记的行要等真机 release 包:`SYNC_DEBUG_SESSION` 只在 DEBUG 下可用,模拟器上无法以 release 配置登录。MCP `apply_migration` 在终端里弹不出确认框,DDL 一律走工作流。
 
 **留给第 3 片 / 清单**:注册表 Swift 导出(QA #9、契约 §4);Redactor 的 metric 键白名单来自注册表(review P2-7);Lean 回放覆盖 `inferred` 路径(QA #8);假服务器 vs SQL 用同一份 Lean `server.*` 夹具机器对拍(服务端 T27);启动补传读文件仍在主线程(`residentInitMs` / `catchUpReadMs` 量测后再定);每 daily 两次 `stamp()` 与窗口首次 append 全量解码(P2-10);合并到 main 即自动把 016 应用到生产(P2-15,流程事实,合并顺序 = 部署顺序);既有套件的 token 投影泄漏(找出写入方并隔离到独立 suite)。
+
+## 附录 D:`usage-daily` 第一片实施记录(2026-11-09,分支 feat/usage-daily-g1)
+
+范围:§6.3 的底盘 + §6.3.1 里的 focus / event_detail / create / repeat / all_day 五组。服务端视图(`v_usage_funnel_30d` / `v_usage_suspicious`)另做。下面是后来的读者需要知道、但规范没写死的决定。
+
+**登记与键名**
+- 唯一登记处是 `UsageFeature.declaration`(`Done/Models/UsageModel.swift`):每个功能列出入口(带 `user` / `auto`)、用了、完成、子页、离开路线、独立计数;`UsageKey` 与 O(1) 槽位表由它推出,一次建好。注册表 JSON 的 usage 行由测试 `UsageRegistryTests` 与 Swift 逐列双向对拍(不一致时测试把应有的行打印出来),`since_build` 全部为 29(本片随下一个构建出;实际构建号不同就改 `UsageFeature.firstUsageBuild` 一处)。
+- 分区与属性:`enter.<入口>`、`use.<组>`、`exit.<路线>`、`abandon.<路线>` 都是**分区**(一次信号只加其中一个),阶段合计 = 子键之和,此时没有裸键;`done.<属性>`(`create.done.repeat` / `all_day` / `note`)是**属性**(保存时带了这一项,每个 ≤ 裸 `done`),不能按前缀求和。服务端视图读 `done` 用裸键。
+- 离开路线两种记法:focus 记 `exit.<路线>`(每次结算都记,用没用过都记)+ 裸 `abandon`;create 只在放弃时记 `abandon.<路线>`(cancel / swipe),没有裸 `abandon`,避免前缀求和重复。
+- `create.abandon.banner` 不是一次访问的结算:它数的是「横幅上丢弃已保存的草稿」,发生在那次访问(以 swipe 结算)之后,或在进程死掉、访问从未结算之后。`abandon ≤ enter` 的一致性检查只能用 `abandon.cancel + abandon.swipe`。
+- `repeat.use.form` 发生在新建 / 编辑表单里,不在任何 rule_editor 访问内;`v_usage_suspicious` 的 `missing_enter` 对 repeat 要排除这个键,否则「只在表单里选了重复」的日子会被误标。
+- 预建选择器(confirm-before-tracking 打开时点类型)单独成一个功能 `focus_precreate`:入口 `pill`,Begin 为 `done`,Cancel(或预建还开着时离开 focus)为 `abandon`。这样「预建放弃」不会和「focus 一次访问没动手」混在同一个 `focus.abandon` 里。focus 本身没有 `done`。
+
+**`sessions`(分母)的确切定义**:一条记录的 `sessions` = 该记录存续期间开始的前台会话数 + 记录铸出时已经在前台运行的那个会话(1 或 0)。前台会话开始 = 冷启动时进程已在前台(激活中心那一刻 `applicationState != .background`),或 `didEnterBackground` 之后第一次 `willEnterForeground` / `didBecomeActive`(两个通知只算一次)。没有 `didEnterBackground` 在前的 `didBecomeActive`(控制中心、Face ID、系统弹窗)不算。「铸出时已在前台」覆盖午夜跨天、进程内换账号、同意重铸、擦除:那天 / 那个账号仍有分母,代价是跨午夜的一个会话两天各记一次。回到前台的那一下先做跨天检查,午夜后回来的会话记在新的一天。
+
+**访问与停留**
+- 每个有入口的功能同一时刻最多一个打开的访问,只在内存里(进入时的媒体时钟、累计前台秒数、是否动过手)。离开时结算:停留档 + 没动过手则放弃(或放弃路线)+ focus 的离开路线。
+- 停留只算前台:`didEnterBackground` 停表,回前台续表;`willResignActive` 不停(控制中心下拉时界面还在)。档位上界不含:<3 s、<30 s、<300 s、≥300 s。访问在离开那天结算(进入记在进入那天)。
+- 进程在后台被杀:访问从未结算,不记停留也不记放弃;它的 `enter` 早已随退后台的 flush 落盘。
+- 离开时没有打开的访问:什么都不记(路线也不记)。同一功能再次 `enter` 时旧访问还开着:旧访问**丢弃不结算**(与被杀同形),所以漏了离开点只会让停留 / 放弃偏少,不会凭空造出放弃。
+- focus 的离开路线:surface 在调 `onExit` 之前 `noteExit(.focusSwipe / .focusSystem)`,离开时以此为准;没有提示时,设置仍开着 = 转回竖屏(`rotate`),设置已关 = `system`(本机开关或同步写入)。
+
+**记录**:`usage-daily` 是常驻中心写的第二条 daily(`kind = daily_rollup`,`scenario = daily-rollup`),与 `resident-daily` 共用认领键、日界、dayKey、flush 边沿、同日采纳、换账号 / 同意 / 跨天重铸与擦除;id 独立。值为 0 的键不写;一天没有任何使用就不写 usage 行。启动采纳时本构建不认识的键(或形状不对的值)丢弃并计数(`usageUnknownKeyDrops`,并打一行轨迹),该行在下一次 flush 时不带它重写。Redactor 对 `spike_id = usage-daily` 的行再按 `UsageKey` 过一遍:未登记的键删除,计数必须是非负整数,停留必须正好四个非负整数。
+
+**成本**:信号路径 = 一次静态 weak 读 + 一次 `Date()` + 一次 Double 比较(日界)+ 数组下标加一;进入 / 离开另读一次媒体时钟;结算 ≤3 次比较 + ≤3 次加。脏检查比的是一个变更计数,不持有计数数组的副本(持有副本会让 flush 后的第一次加触发写时复制)。新增的落盘只有 usage 行本身,随原有 flush 追加;同一文件的压实规则与其他 spike 文件相同。
+
+**§6.3.1 落点的更正 / 细化**(以源扫描为准)
+- `create.done` 及属性、`abandon.cancel / swipe` 记在 `CreateCalendarEventView`(SH)的保存闭包与 `onDraftSessionEnd` 里,不在 FV 的按钮里:FV 同时是编辑表单,在 FV 里记会把编辑的保存也算成新建。
+- event_detail 的离开:三个呈现者(PV、`CalendarSearchView`、`CalendarListView`)各自在路由绑定变成 nil 时记;DV 自己的 `onAppear` / `onDisappear` 一律不记。
+- search 入口记在 `openEvent` / `openOccurrenceLog` 两个汇合函数里(四个按钮都走它们);canvas 入口记在 `handleTimelineEventTap`(时间线块与全天条都走它)。
+- focus 的 `track` 记在 FM 的 `handleClockTrackingTap`(时钟视图只是转发);`extend` / `end_now` 记在 DoneApp 构造 FocusModeView 的闭包里;`note` 只在发送按钮与键盘发送处记(`commitNote(byUser:)`)。
+- 反思页备注 / 模板:不改 `detailNoteSection` 与备注加载 / 保存代码(另一分支在改),改为在 DV 的修饰链上观察 `(已加载, 备注, 模板, 答案数)`,只有加载前后都为「已加载」的变化才算用户编辑,每个详情页只记一次(不按每个字)。todo 事件上同样的编辑记为 `use.todo`。
+- todo 组:`toggleTodoDone`、`releaseAbsorption`、`putBackToStack`、`updateDeadline`(开关与滚轮提交都走它)。`timeline_note`:保存、删除、长按开始编辑。
+- 重复规则编辑器:进入记在 DV 的「管理重复」按钮(同时记 `event_detail.use.plan`),离开记在该 sheet 的 `onDismiss`(Save / Cancel / 删除整个系列 / 下滑都经过它);删除整个系列另记 `repeat.use.delete_series`,不算放弃。
+- `reminder_ai` 的访问从点按开始(表单在 AI 返回后才弹出),所以它的停留含等待 AI 的时间;`create.ai_fallback` 在 AI 关和 AI 失败两种回退里都记。
+
+**已知局限**
+- 详情页还在导航栈里时切到别的 Tab,访问不结束,停留含在别的 Tab 的时间;推到聊天页的时间同样算在详情页里(聊天被视为详情的一部分)。
+- 带着详情页一起被弹出的搜索页(从搜索结果跳日历)不会把详情页的路由写回 nil,该访问不结算,下次进入时丢弃。
+- 预建选择器打开时若恰好有事件开始(界面切到当前事件),预建访问保持打开,直到 Begin / Cancel 或离开 focus。
+- 测试宿主下中心不数冷启动会话(`countsLaunchSession` 默认在 XCTest 下为 false,与 `installsFollowerProbe` 同一理由);测试显式传入。

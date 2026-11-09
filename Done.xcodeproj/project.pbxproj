@@ -261,6 +261,8 @@
 		QA0273OBS000000000000B01 /* TelemetryObservatoryQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QA0273OBS000000000000F01 /* TelemetryObservatoryQATests.swift */; };
 		TELE10012FE8000000000005 /* TelemetryQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TELE00012FE8000000000005 /* TelemetryQATests.swift */; };
 		TELE10012FE8000000000006 /* TelemetryWireConformanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TELE00012FE8000000000006 /* TelemetryWireConformanceTests.swift */; };
+		USAG10012FE8000000000002 /* UsageModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = USAG00012FE8000000000002 /* UsageModelTests.swift */; };
+		USAG10012FE8000000000003 /* UsageCenterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = USAG00012FE8000000000003 /* UsageCenterTests.swift */; };
 		FA57000000000000000B0002 /* SpikeRunStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0002 /* SpikeRunStore.swift */; };
 		FA57000000000000000B0003 /* SpikeSessionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0003 /* SpikeSessionCoordinator.swift */; };
 		FA57000000000000000B0004 /* Spike195DetailPerf.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0004 /* Spike195DetailPerf.swift */; };
@@ -767,6 +769,8 @@
 		QA0273OBS000000000000F01 /* TelemetryObservatoryQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryObservatoryQATests.swift; sourceTree = "<group>"; };
 		TELE00012FE8000000000005 /* TelemetryQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryQATests.swift; sourceTree = "<group>"; };
 		TELE00012FE8000000000006 /* TelemetryWireConformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryWireConformanceTests.swift; sourceTree = "<group>"; };
+		USAG00012FE8000000000002 /* UsageModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageModelTests.swift; sourceTree = "<group>"; };
+		USAG00012FE8000000000003 /* UsageCenterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageCenterTests.swift; sourceTree = "<group>"; };
 		FA57000000000000000A0002 /* SpikeRunStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeRunStore.swift; sourceTree = "<group>"; };
 		FA57000000000000000A0003 /* SpikeSessionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeSessionCoordinator.swift; sourceTree = "<group>"; };
 		FA57000000000000000A0004 /* Spike195DetailPerf.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Spike195DetailPerf.swift; sourceTree = "<group>"; };
@@ -1108,6 +1112,8 @@
 				QA0273OBS000000000000F01 /* TelemetryObservatoryQATests.swift */,
 				TELE00012FE8000000000005 /* TelemetryQATests.swift */,
 				TELE00012FE8000000000006 /* TelemetryWireConformanceTests.swift */,
+				USAG00012FE8000000000002 /* UsageModelTests.swift */,
+				USAG00012FE8000000000003 /* UsageCenterTests.swift */,
 				AGCT00012FFA000000000001 /* AgentToolContainmentTests.swift */,
 				CESC00012FFA000000000001 /* CalendarEffortScrubberCommitTests.swift */,
 				E2010001300100000000A001 /* CalendarEffortTapPerformanceTests.swift */,
@@ -2085,6 +2091,8 @@
 				QA0273OBS000000000000B01 /* TelemetryObservatoryQATests.swift in Sources */,
 				TELE10012FE8000000000005 /* TelemetryQATests.swift in Sources */,
 				TELE10012FE8000000000006 /* TelemetryWireConformanceTests.swift in Sources */,
+				USAG10012FE8000000000002 /* UsageModelTests.swift in Sources */,
+				USAG10012FE8000000000003 /* UsageCenterTests.swift in Sources */,
 				AGCT10012FFA000000000001 /* AgentToolContainmentTests.swift in Sources */,
 				CESC10012FFA000000000001 /* CalendarEffortScrubberCommitTests.swift in Sources */,
 				E2011001300100000000A001 /* CalendarEffortTapPerformanceTests.swift in Sources */,

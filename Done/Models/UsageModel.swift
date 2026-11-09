@@ -153,7 +153,7 @@ enum UsageFeature: UInt16, CaseIterable {
                     .init(tag: .focusAuto, name: "auto", source: .auto, what: "rotated into landscape with landscape focus on"),
                 ],
                 uses: [
-                    .init(tag: .focusExtend, name: "extend", what: "a −15 / +15 pill on the current event"),
+                    .init(tag: .focusExtend, name: "extend", what: "a -15 / +15 pill on the current event"),
                     .init(tag: .focusEndNow, name: "end_now", what: "End on the current event"),
                     .init(tag: .focusNote, name: "note", what: "a note sent from the composer (not the auto-save on background or teardown)"),
                     .init(tag: .focusTrack, name: "track", what: "a type pill on the idle clock"),
@@ -216,7 +216,7 @@ enum UsageFeature: UInt16, CaseIterable {
                 ],
                 routeStage: .abandon,
                 events: [
-                    .init(tag: .createAbandonBanner, suffix: "abandon.banner", what: "a kept draft discarded from the resume banner — after its visit settled, so not a visit settle"),
+                    .init(tag: .createAbandonBanner, suffix: "abandon.banner", what: "a kept draft discarded from the resume banner, after its visit settled (not a visit settle)"),
                     .init(tag: .createAIFallback, suffix: "ai_fallback", what: "a reminder opened without AI prefill (AI off or failed)"),
                 ]
             )
@@ -355,58 +355,58 @@ struct UsageLayout {
             let d = feature.declaration
             let base = UsageKey.prefix + d.name + "."
             let f = Int(feature.rawValue)
-            let label = "Usage · \(d.summary)"
+            let label = "Usage - \(d.summary)"
             routeStage[f] = d.routeStage
             hasVisits[f] = d.hasVisits
             for e in d.entries {
                 let i = Int(e.tag.rawValue)
                 entrySlot[i] = add(base + "enter." + e.name, .counter, feature, d.sinceBuild,
-                                   "\(label) · entered (\(e.source.rawValue)): \(e.what).")
+                                   "\(label) - entered (\(e.source.rawValue)): \(e.what).")
                 entryFeature[i] = feature
             }
             for u in d.uses {
                 let i = Int(u.tag.rawValue)
                 useSlot[i] = add(base + "use" + (u.name.map { "." + $0 } ?? ""), .counter, feature, d.sinceBuild,
-                                 "\(label) · used: \(u.what).")
+                                 "\(label) - used: \(u.what).")
                 useFeature[i] = feature
             }
             for done in d.dones {
                 let i = Int(done.tag.rawValue)
                 doneSlot[i] = add(base + "done" + (done.name.map { "." + $0 } ?? ""), .counter, feature, d.sinceBuild,
-                                  "\(label) · done: \(done.what).")
+                                  "\(label) - done: \(done.what).")
                 doneFeature[i] = feature
             }
             for v in d.views {
                 let i = Int(v.tag.rawValue)
                 viewSlot[i] = add(base + "view." + v.name, .counter, feature, d.sinceBuild,
-                                  "\(label) · viewed: \(v.what).")
+                                  "\(label) - viewed: \(v.what).")
                 viewFeature[i] = feature
             }
             if d.hasVisits {
                 switch d.routeStage {
                 case .exit:
                     abandonSlot[f] = add(base + "abandon", .counter, feature, d.sinceBuild,
-                                         "\(label) · abandoned: a visit left with no use and no done.")
+                                         "\(label) - abandoned: a visit left with no use and no done.")
                     for r in d.routes {
                         let i = Int(r.tag.rawValue)
                         routeSlot[i] = add(base + "exit." + r.name, .counter, feature, d.sinceBuild,
-                                           "\(label) · left (every settled visit): \(r.what).")
+                                           "\(label) - left (every settled visit): \(r.what).")
                         routeFeature[i] = feature
                     }
                 case .abandon:
                     for r in d.routes {
                         let i = Int(r.tag.rawValue)
                         routeSlot[i] = add(base + "abandon." + r.name, .counter, feature, d.sinceBuild,
-                                           "\(label) · abandoned (a visit with no done): \(r.what).")
+                                           "\(label) - abandoned (a visit with no done): \(r.what).")
                         routeFeature[i] = feature
                     }
                 }
                 dwellSlot[f] = add(base + "dwell", .histogram, feature, d.sinceBuild,
-                                   "\(label) · foreground dwell per settled visit, buckets <3 s / <30 s / <300 s / ≥300 s.")
+                                   "\(label) - foreground dwell per settled visit, buckets <3 s / <30 s / <300 s / >=300 s.")
             }
             for ev in d.events {
                 eventSlot[Int(ev.tag.rawValue)] = add(base + ev.suffix, .counter, feature, d.sinceBuild,
-                                                      "\(label) · \(ev.what).")
+                                                      "\(label) - \(ev.what).")
             }
         }
 
