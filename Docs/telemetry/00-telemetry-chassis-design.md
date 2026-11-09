@@ -2,6 +2,7 @@
 
 日期:2026-10-24。分支 king-of-rubbish-bin @ fd92618。实施票:#273。拍板来源:#197(2026-08-26)。
 过程:蓝图 v0 → 三方对抗(事实核查 A / 攻击 B / 独立设计 C,见 `round1/`)→ 本稿裁决。
+修订:2026-11-09 §6.3 功能使用改为分阶段(进入 / 用了 / 完成 / 放弃 + 停留),附逐站点清单(king @ 81d0999f)。
 本稿只做「纯粹的数据收集」。agent 自动分流、候选修复不在范围(另议)。
 
 ## 0. 一页结论
@@ -61,7 +62,7 @@
 
 | 层 | 内容 | 现成的 | 本期新增 |
 |---|---|---|---|
-| L0 信号 | 热路径上 O(1) 固定键 bump;禁 UserDefaults / Calendar / 落盘 / 网络 / publish / 字符串分配 | `ResidentTierOneCore`、`SpikeProbe.emit` | `UsageKey` / `IncidentKey` 枚举下标计数;`UsageProbe.used(_:)` 只许从 action 闭包、`onAppear`、`onChange` 调 |
+| L0 信号 | 热路径上 O(1) 固定键 bump;禁 UserDefaults / Calendar / 落盘 / 网络 / publish / 字符串分配 | `ResidentTierOneCore`、`SpikeProbe.emit` | `UsageKey` / `IncidentKey` 枚举下标计数;`UsageProbe` 的 enter / use / done 只许在用户动作闭包和手势结束处调,`onAppear` 不许记进入(§6.3 落点规则) |
 | L1 聚合 | 每日汇总(counter / 固定桶 histogram / gauge last·max·n);事件记录(窗口、手动 run、判定快照) | 观察站 | 脏检查(`ResidentCounterSet` 已 Equatable);`evictedUnuploaded` 删失计数 |
 | L2 落盘 | `Documents/spike-runs/<spikeID>.jsonl`,同 id 最新胜,200 run / 256KB→128KB 压实 | `SpikeRunStore` | 每记录 `revision`;MetricKit 独占文件且回调 hop 到 main |
 | L3 上传 | 单写者(`@MainActor` 类 + 串行 Task);`revision` 游标 + 隔离集;四个触发点;keep-alive 包退后台边沿;复用 `SupabaseREST.send` 的鉴权/401 重试/offline 开关;**上传器随 `DoneApp` 的 @State 初值创建**(不是 onAppear),ContentView 的 attach 幂等并有 onChange 兜底;每个门拦截结果变化时打 trail | `SupabaseREST` | `TelemetryUploader`、`.upload-cursor.json`、`.install-id`、Redactor |
@@ -114,7 +115,7 @@ acceptance?:修复验收方向(键、方向、阈值)— 本期不实现字段,�
 - 键只增不改义;改义 = 新键 + 旧键填 `retiredBuild`;条目退役不删(R-F11)。
 - `CaseIterable` 导出 `done-mcp/supabase/telemetry/key_registry.json`,迁移里的 `key_registry` 表由它生成,测试逐行对拍;服务端注册表不手抄。
 - 源扫描:每个键 case 在 `Done/` 非测试源码里至少一处引用,否则红(死线)。
-- usage 键的 emit 只许在 action 闭包 / `onAppear` / `onChange`,不许在 `body`(B·F2:body pass 数的是重渲染);服务端 sanity 视图:某键日计数 > 当日 `detailBodyPasses` 即标 suspicious。
+- usage 键的 emit 只许在用户动作闭包与手势结束处,不许在 `body`(B·F2:body pass 数的是重渲染),进入不许在 `onAppear`(返回、重建、启动选 Tab 都会再触发);`onChange` 只在排除了程序写入和同步写入后才可用。细则见 §6.3。服务端 sanity 视图:某键日计数 > 当日 `detailBodyPasses` 即标 suspicious;分阶段一致性见 `v_usage_suspicious`。
 - 多个观察系统共用一个 resident、一个 switch(B·F3),不各自注册。
 
 ## 6. 首批观察系统
@@ -125,8 +126,89 @@ acceptance?:修复验收方向(键、方向、阈值)— 本期不实现字段,�
 ### 6.2 判定快照 `verdictSnapshot`(修正 B·F28)
 评估器是纯函数(`FixWatchView.swift:213-222` 两次 `loadRuns` + 算术)。改为在跨天 flush 之后和启动补传之前各算一次(off-main),打开观察站只是额外一次。每个修复条目两个键:`state`(4 态枚举数值)+ `alarm`(bool)。
 
-### 6.3 功能使用 `usage-daily`
-`enum UsageKey: UInt16, CaseIterable`,起步 ≈ 23 项(清单在 #273,待删);每天每键一个整数;同记录带 `sessions`(didBecomeActive 次数)作分母。入口 `UsageProbe.used(.x)`。
+### 6.3 功能使用 `usage-daily`(2026-11-09 改为分阶段)
+
+用户 2026-11-09:「很多东西都要考虑是进入了还是使用了,粒度或许要细致一点」。原稿每功能每天一个数,#273 的起步清单里「打开」和「提交」混记:「重复事件 0」分不出是没人发现,还是有人打开了又退出。改为每个功能按阶段记。
+
+**阶段**(每个功能只登记它有的阶段)
+- `enter.<入口>`:到了这个功能里。必带入口细分(如事件详情的 `canvas` / `menu` / `list` / `search`),每个入口在注册表里标来源 `user`(用户点进来)或 `auto`(非用户动作带进来,如横屏自动进 Focus 的 `focus.enter.auto`、自动弹出的恢复面板)。启动时落在哪个 Tab 不算进入。
+- `use`:在里面动了手(改了、发了、拖了、切了)。可带细分(`focus.use.extend`)。
+- `done`:留下了结果(保存、提交、生成)。
+- `abandon`:一次访问从进入到离开没有任何 `use` / `done`。
+- 可选 `view.<子页>`:看了某个子页面(如详情的反思页),不算动手,不影响 `abandon`。
+
+**停留**:有界面的功能每次访问结算一次 `usage.<功能>.dwell`,直方图,边界 3 / 30 / 300 秒,四档;只记档位,不记时间点。停留只算前台时间(退后台暂停,回前台继续,回前台不算新进入);进程在后台被杀的访问不结算,不计停留也不计放弃。访问在离开那天结算。
+
+**键名**:`usage.<功能>.<阶段>[.<细分>]`,例如 `usage.focus.enter.tap`、`usage.focus.enter.auto`、`usage.event_detail.enter.search`、`usage.focus.use.extend`、`usage.event_detail.abandon`、`usage.focus.dwell`。服务端视图按前缀切分(同 `sync.write.` 的做法),只认注册表里的键。
+
+**登记**:`enum UsageFeature: UInt16, CaseIterable`,每个 case 声明自己的阶段、入口(及其来源)和细分;`UsageKey` 由它派生,登记一个功能 = 加一个 case。分母 `sessions`(键名沿用 016 checks 夹具与 `liveness_key`)= 后台→前台次数(不用 `didBecomeActive`:控制中心、Face ID、系统弹窗也会触发)。
+
+**落点规则**(替换 §3 L0 与 §5 原来「action 闭包 / `onAppear` / `onChange`」的写法)
+1. `enter` 只记在打开它的那一下用户动作里(按钮 action、点按回调)。不许在 `body`,也不许在 `onAppear`:从下一页返回、视图重建、启动选 Tab 都会再触发(`ReportViews.swift:66`、`FixWatchView.swift:96`、`ContentView.swift:297`)。
+2. 非用户动作带进来的,在触发处记 `enter.auto`(如 `DoneApp.swift:828` 横屏判定)。
+3. 由 `onChange` 观察的状态(Tab 选择、设置开关)必须先排除程序写入和跨设备同步写入:Tab 的 `onChange`(`ContentView.swift:371`)也会被启动选 Tab(:297)和「我」页的跳转(`AnalysisView.swift:829`)触发;多数设置键会从别的设备同步过来(`SyncedSettings.swift`),直接挂 `onChange` 会把远端改动算成本机使用。
+4. 手势只在结束(commit)那一下记,不在逐帧回调里记。
+5. `done` 记在通向保存的那个用户动作里,不记在 store 内部:store 层的写入也会被同步回放、agent / MCP 写入触发。
+6. 同一界面从几处打开,每处入口都要记,来源一致;源扫描测试保证每个声明了 `enter` 的功能有结算点(离开)。
+
+**和数据库的分工**:会留下数据的功能,`done` 在云端按账号、按日期本来就数得出来;埋点重点补 `enter` / `abandon` / 停留。设备上照样记 `done`,每周和云端对一次数(同账号全部设备求和),差得多说明漏了落点。
+
+**一致性检查(服务端)**:同一 (install, 日, 功能):`abandon ≤ enter 合计`;停留各档之和 ≤ `enter` 合计;有 `enter` 阶段的功能出现 `use + done > 0` 而 `enter = 0` → 标 `missing_enter`(漏了入口)。这三条进 `v_usage_suspicious`。
+
+**成本**:每次信号仍是 1 次下标 + 1 次加;每个打开中的界面在内存里放一个访问记录(进入时刻 + 有没有动过手),离开时 ≤3 次比较 + 2 次加。键数从 23 涨到约 150(清单见 §6.3.1);值为 0 的键不写进记录(服务端 `counter_long` 按注册表把缺失读成 0,契约 §4),一条日记录通常 <2KB,在 §10 预算内。
+
+**隐私**:不变。只有整数和固定档位,不记标题、内容、时间点。
+
+#### 6.3.1 功能清单(2026-11-09,king @ 81d0999f 逐站点核对)
+
+缩写(路径相对 `Done/`,不带目录的在 `Views/Calendar/` 下):PV `Views/Calendar/CalendarPageView.swift` · DV `CalendarEventDetailView.swift` · FV `CalendarEventFormView.swift` · SH `CalendarEventSheets.swift` · SV `CalendarSearchView.swift` · TS `Components/TodoStackView.swift` · HV `Components/Header/AppleCalendarHeaderView.swift` · DL / TL `Components/Timeline/CalendarDayLayerView.swift` / `TimelineView.swift` · RP `Components/Reminder/ReminderPanelView.swift` · CV `CalendarEventChatView.swift` · FM / FE `Views/Focus/FocusModeView.swift` / `FocusModeEventView.swift` · APP `DoneApp.swift` · OM `Models/OrientationManager.swift` · CT `ContentView.swift` · AS `Views/Agent/AgentSettingsView.swift` · AV `Views/Analysis/AnalysisView.swift` · RV `Views/Analysis/ReportViews.swift`。行号只作实施起点,落点以源扫描测试为准。
+
+**日历**
+
+| 功能(键前缀) | 进入 | 用了 | 完成 | 放弃 / 离开 | 注意 |
+|---|---|---|---|---|---|
+| Tab(`tab.calendar` / `tab.report` / `tab.me`) | 点 Tab 栏:`CT:371` 的 `onChange(selectedTab)`,排除程序写入 | — | — | 停留 | 启动选 Tab(`CT:297`,还会随视图重建再跑)和「我」页跳日历(`AV:829`)都会写 `selectedTab`,写之前打标记 |
+| 事件详情 `event_detail` | 细分 `canvas`(DL:6819→PV:4740;全天条 TL:2867)· `menu`(PV:2473 / 2489)· `list`(`CalendarListView.swift:28`)· `search`(SV:748 / 765 / 845 / 873) | 细分 `plan`(类型 784/796、时长 3451/3467、重复 1513、改名 3560、编辑 3565)· `reflect`(完成 2574、精力 3542、标签 2205/2218、备注 2302、模板 1159)· `timeline_note`(3108/3284/3356/3255)· `todo`(2425/2442/2543/829/874)· `delete`(954) | 无保存按钮;动过手即「留下」 | 返回 1201、侧滑;`abandon` = 没动手就走 | 另记 `view.reflection`(翻到反思页,不算动手;`selectedPage` 目前没人观察);`onDisappear`(471)推聊天页时也会触发,不能当离开;`DV.onAppear`(975)从聊天页返回会再触发 |
+| 新建 `create` | 细分 `drag`(DL:8086→PV:6078)· `plus`(PV:3137)· `resume_draft`(PV:6880)· `reminder_ai`(PV:6164,异步 AI 后才弹) | — | FV:434 Done;另记 `done.repeat` / `done.all_day` / `done.note`(保存时带了这项) | `abandon.cancel`(FV:416)· `abandon.swipe`(FV:210)· `abandon.banner`(PV:6917) | Done / Cancel 都回调 nil,要用 `draftSession.endedExplicitly` 区分;AI 关或失败的回退另记 `create.ai_fallback`(PV:6181 / 6249) |
+| 重复规则 `repeat` | 新建表单里打不开观察(Menu);详情里的规则编辑器 DV:1513 | 选了非「不重复」(FV:683,需新加 `onChange`,排除草稿恢复 SH:85 / 414) | 规则编辑器 Save(`CalendarRecurrenceRuleEditor.swift:165`);新建时见 `create.done.repeat` | 编辑器 Cancel(:162) | |
+| 全天 `all_day` | — | 开关 FV:595(仅事件类型显示) | 见 `create.done.all_day` | — | |
+| 照片 `photo` | 系统相册选择器不报打开 | 选了图:DV:2360(反思页)、DV:4772(时间线备注);只在新数量 > 0 时记 | 反思页图片立即保存(2376);备注图片随备注保存(4730) | 不可观察 | 选完重置选择(2367 / 4812)会让数量 `onChange` 再触发一次 |
+| 待办栈 `todo_stack` | PV:3131 | 展开 TS:881 · 新增 TS:820 · 开始拖 TS:935 | 拖到画布成功 TS:194-201 | `drag_cancel`(TS:203 / 207)· 关闭 X 777 / 背景 61 / 下滑 689 | 进 Focus 时自动关(TS:115),不算放弃;`onDisappear`(503)会存半截标题,不算新增 |
+| Focus `focus` | `tap`(PV:3153)· `auto`(横屏 + 设置,APP:828);两者都在 APP:791 `onChange(focusActive)` 读 `manualFocusActive` / `autoFocusTrigger` 分来源 | `extend`(FE:228→APP:929)· `end_now`(FE:230→APP:941)· `note`(FE:291 / 304→APP:882)· `track`(`FocusModeClockView.swift:165`→APP:908) | 预建选择器 Begin(`FocusPreCreateView.swift:256`) | 离开细分 `swipe`(FM:640)· `rotate`(OM:637)· `system`(FM:1120 前台恢复 / OM:536 关设置);预建 Cancel(:244) | 退后台(FE:102)和 `onDisappear`(FE:110)自动存的备注不算 `note`;部分事件不显示快捷操作(FM:255) |
+| 手势 `pinch` / `view_mode` / `move` / `resize` | — | 捏合结束 TL:2222→PV:4885 · 视图切换 HV:169 / 183→PV:3119(细分 day / 3day / week)· 移动提交 PV:4826(细分 `same_day` / `cross_day`,5509)· 调时长 PV:4863 | — | — | 不在逐帧回调里记;排除几何夹紧(PV:4113)和启动恢复视图(`CalendarViewState.swift:59`、PV:2851);浮动 chip 已关(DL:6665),跨日移动走普通移动 |
+| 精力滑杆 | — | 已有观察站 `tapCount` / `dragCount`(`GlassCardView.swift:276 / 285`),复用不另记 | 提交 DV:3542(值没变不写) | — | 退后台 flush(:125)不算 |
+| 搜索 `search` | PV:3127 | 稳定后的查询(SV:610,不按每个字) | 点结果(→ `event_detail.enter.search`)· `jump`(跳到日历 768 / 876 / 881) | 返回 SV:695、侧滑 | `SV.onAppear`(649)返回时再触发 |
+| 每日分享卡 `share_card` | PV:3155 | 换样式 PV:3295 | 导出闭包 `CalendarDailyShareCard.swift:821`(弱代理:`ShareLink` 不报完成,预览也走它) | Done 3196、下滑 | |
+| 提醒面板 `reminder` | 过度下拉 PV:4538→6141(逐帧回调,只在关→开那一下记) | 新增 RP:200 / 206 · 勾选 155 · 改名 281 · 删除 171 | 排进日历 RP:267 / 285→PV:6164(→ `create.enter.reminder_ai`) | PV:6150、RP:126 | RP:83 / 250 / 295 的自动保存不算 |
+| 打断 `interrupt` / 并行 `parallel` | 画布菜单 PV:2481 · 详情 DV:1287;并行 DV:1290 | — | 计划打断 PV:2564 · 实时开始 2573 / 结束 2593 · 详情保存 DV:4184;并行保存 DV:4389 | PV:2596 · DV:4170;并行 DV:4376 | |
+| 吸收 `absorb` | 选择器 DV:656 / 2465 | — | 画布放下 PV:5543 · 待办栈放下 PV:2356 · 选择器选中 DV:677 / 2487 | 选择器取消 DV:699 / 2509 | store 吸收时自动完成待办(`EventStore.swift:396`)不算 |
+| 事件聊天 `event_chat` | DV:1321 | 发送 CV:150 | — | CV:49、侧滑;停留 | 首次打开自动发种子提示(CV:190),不算发送 |
+
+**其他页面**
+
+| 功能(键前缀) | 进入 | 用了 | 完成 | 放弃 / 离开 | 注意 |
+|---|---|---|---|---|---|
+| Agent 对话 `agent_chat` | 顶栏工具 HV:159→PV:3123(默认收在「…」菜单) | 发送 `AgentChatView.swift:150` · 新对话 :64 · 切历史 `ConversationHistoryView.swift:52` · 从消息打开事件 :106 | 确认待执行动作 :118(取消 :119 记 `abandon.action`) | 下滑关闭;停留 | 聊天视图没有 `onDisappear`,离开要在 sheet 的 `onDismiss` 记 |
+| 报告 `report` | Tab 栏(`tab.report`) | 切周期 RV:73 · 前后翻 84 / 101 · 打开旧报告 169 · 评分 406 · 写备注 373 · 删除 175 | 生成 RV:147 / 136→214,成功 248;失败另记 `generate_fail`(254) | — | `RV.onAppear`(66)每次切回和从报告返回都触发;报告详情从两处打开(64 / 170) |
+| 我 `me` | Tab 栏(`tab.me`) | 编辑资料 AV:781(保存 2499 / 取消 2496)· 性格生成 1090 / 刷新 1017 · 周分享 959(分享 2835)· 周分析 885 · 反思提交 1506 · 连接 993 · 奖杯 1171 · 设置 683 | 见「用了」里各自的保存 | — | 语言切换自动重算性格(1029)不算;`meComputedVisible` / `Hidden` 数的是渲染次数,不是进入 |
+| Agent 设置 `settings_agent` | AS:366 · 聊天齿轮 `AgentChatView.swift:73` | 供应商 AS:175 · API key :186(按提交记,不按每个字)· 开关 :209 · 清规则 :237 · 清决策 :241 | — | 没改就走 | |
+| MCP 连接 `mcp` | AS:389 · AV:993 | 复制 `AccountView.swift:457` · 显示 :448 · AI 快照链接 :532 | 生成 :409 / 重新生成 :482→506,成功 :512 | — | `mcpURL` 会从别的设备同步过来(`SyncedSettings.swift:114`),同步来的不算生成 |
+| 人物 `people` | AS:356 | `PeopleSettingsView.swift`:新增 36 / 37 · 改名 129 · 归档 130 · 分组 87 / 183 / 205 | — | 没改就走 | 日历里的人物选择器(`EventPeoplePickerView.swift`)写同一份数据,另设 `people_picker`,落点待实施时补 |
+| 节假日 `holidays` | AS:341 | 开关 `HolidaysSettingsView.swift:36 / 38`(需新加处理)· 纪念日编辑 43 / 新增 51 · 删除 199 | 保存 213 | 取消 210 | 这两项数据不同步,`onChange` 可用 |
+| 云端恢复 `restore` | `tap`:AS:800(恢复)/ 788(预览);`auto`:CT:499 自动弹出 | 合并 `RestoreSheet.swift:156` · 覆盖 167(确认 64)· 保留本机 / 云端 / 逐条 250 / 261 / 272 · 逐行 632 | 各 `apply` 之后,或完成页 Done :425 | 取消 :43 · 对话框取消 :67 · 下滑(:54 `onDisappear`) | `RestoreSheet()` 没有来源参数,要加一个才能分 `tap` / `auto` |
+| 观察站 `fixwatch` | AS:413 / 750 | 上传开关 `FixWatchView.swift:115` · 备注开关 :133 · 看样本 AS:1157 · 立即上传 AS:1168 | — | 没改就走 | `FixWatchView.onAppear`(96)从 Spike 列表返回再触发;TF 默认开(`TelemetryUploader.swift:654`)不算用户打开开关 |
+| 通用设置 `settings_general` | 设置页本身 | 只用自定义 Binding 的 setter 记 | — | — | 多数设置键会从别的设备同步(`SyncedSettings.swift`),挂 `onChange` 会把远端改动算进来 |
+
+**现在够不着的功能**(不登记键;功能恢复时再登记。前 4 项在 #273 起步清单里)
+- Wanna 打开:Tab 06-22 拿掉(e659e06a);`WannaListView` 没有任何地方创建,`completeWanna` 只在它和 `WannaDetailView` 里调。
+- LogSheet 提交:`CalendarEventLogEditor` 没有任何地方创建;记录实际在事件详情反思页里改,归 `event_detail.use.reflect`。
+- 反馈提交:没有用户提交入口;`event_feedback` 行在第一次打开事件聊天时自动写(CV:39→`EventStore+OccurrenceRecords.swift:478`),所以云端 `event_feedback` 行数不是使用量。
+- 小组件深链进入:全仓库(含 `DoneWidget/`)没有 `onOpenURL` / `widgetURL` / 用户活动 / 通知入口;URL scheme 只用于登录回调。手表只经 `WCSession` 传数据,不导航。
+- 计时器开始:只在 `EventGridView.swift:344`,该视图没有地方创建。
+- Domino:只有自动(APP:760 / 806 / 1008),不是用户功能。
+- 地点:没有输入框,只由提醒 AI 预填。
+- 智能录入的照片提交、乐观创建横幅(`CalendarAgenticCreateView`):只有测试调用。
+- 页面级聊天入口(PV:1250 / 1570):目的地从不被设置。
 
 ### 6.4 错误计数 `incident-daily`(采 C 的接法,不接 104 处轨迹点)
 接类型化咽喉,而不是给每处 `DiagnosticTrail.record` 发 ID(全库 104 处,随重构漂移):
@@ -213,7 +295,7 @@ RLS:authenticated `select / insert / update` 自己的行(`user_id = (select aut
 `key_registry(key, kind, family, value_schema, since_build, retired_build, liveness_key, spike_id, description)` 由 Swift 导出生成(列以契约 §4 为准;`value_schema` 含 `number_list`)。`counter_long` 视图只覆盖 `kind = counter ∧ value_schema = number`:对每个 `(行, 键)`,`app_build` 在 `[since, retired)` 内 → `coalesce(值, 0)`,否则 NULL;gauge / histogram 由各自视图直接读。已知局限:注册表没有 scenario 维度,键只按 `spike_id` 配对行。问题 2 的「没人用」只在「应出现且全机为 0 且 sessions > 0」时成立;另有 `v_possible_dead_wire` 列出这类键供人核。
 
 ### 9.5 视图(具名消费方)
-`v_active_installs`(问题 5)· `v_feature_unused_30d`(问题 2)· `v_sync_failure_by_build`(问题 3)· `v_metrickit_by_build`(问题 4)· `v_fixwatch_verdicts_by_install` + `v_fixwatch_pooled_buckets`(问题 1,前者权威、后者样本量;直方图实际在 `daily_rollup` 的 `ResidentCounterSet` 里而不在窗口行,pooled 视图按注册表 `kind = histogram` + `spike_id` 选行)· `v_possible_dead_wire`(诊断)。全部 `security_invoker`,末尾 `revoke all`。
+`v_active_installs`(问题 5)· `v_feature_unused_30d`(问题 2)· `v_sync_failure_by_build`(问题 3)· `v_metrickit_by_build`(问题 4)· `v_fixwatch_verdicts_by_install` + `v_fixwatch_pooled_buckets`(问题 1,前者权威、后者样本量;直方图实际在 `daily_rollup` 的 `ResidentCounterSet` 里而不在窗口行,pooled 视图按注册表 `kind = histogram` + `spike_id` 选行)· `v_possible_dead_wire`(诊断)· 第 3 片新增 `v_usage_funnel_30d`(按账号 × 功能:各入口进入、用了、完成、放弃、停留四档、`sessions`)与 `v_usage_suspicious`(§6.3 三条一致性);`v_feature_unused_30d` 对 usage 改按功能前缀聚合,只看 enter / use / done(`abandon` 为 0 是常态,不能读成「没人用」)。全部 `security_invoker`,末尾 `revoke all`。
 读者:每周跑 `telemetry_checks.sql` + 五条视图的摘要回帖 #273(PASS/FAIL + 各视图行数);这是「有读者」的最低形式。
 
 ### 9.6 保留
@@ -244,13 +326,19 @@ RLS:authenticated `select / insert / update` 自己的行(`user_id = (select aut
 10. **判定快照 == 卡片**:手算夹具(dailies/windows 字面量 → 期望快照字面量),SQL 侧插该行解出同一状态(B·F41,避免「测自己算的值」)。
 11. **删失**:flush 后 bump 再杀进程 → 下次 `appUncleanExit = 1`,断言 flush 后那段计数确实丢了(C·§1.9-3)。
 12. **装机**:两台 TestFlight 机开关开 3 天 → `v_active_installs` 每日 = 2 且 `build_configuration = 'release' and app_build = <TF build>`;第 2 天起 `v_metrickit_by_build` 有行。
+13. **返回不重复计进入**(§6.3):打开详情 → 推聊天页 → 返回 → `event_detail.enter.*` 仍为 1,`abandon` 不结算;正对照:再点一次块 → 2。变异:把进入挪到 `onAppear` → 红。
+14. **启动落 Tab 不算进入**:默认页设为「我」冷启动 → `tab.me.enter` = 0;点 Tab 栏 → 1。变异:去掉程序写入标记 → 红。
+15. **同步来的改动不算使用**:对同步设置键施加一条远端变更 → 对应 `use` = 0;本机拨同一开关 → 1。
+16. **访问结算**:进入 → 退后台 10 分钟 → 回前台 5 秒后离开 → 停留落 3–30 秒档且 `abandon` = 1;进入 → 用了 → 离开 → `abandon` = 0;进程在后台被杀 → 停留与放弃都不记。
+17. **一致性视图有牙**:SQL 夹具「`use` > 0 且 `enter` = 0」→ `v_usage_suspicious` 出 `missing_enter`;一致夹具 → 0 行。
+18. **源扫描**:每个声明了 `enter` 的功能在 `Done/` 非测试源里至少有一个进入点和一个离开结算点;`onAppear` 闭包里出现 `UsageProbe.enter` → 红。
 
 ## 12. 切片与顺序
 
 0. 按账号 SQL 数现有云端表(todo_lists / event_logs / event_feedback / agent_conversations / 带图 / 重复 / snapshots):零改动,今天可跑。
 1. **服务端**:迁移 016(表、触发器、RLS、`key_registry`、六视图)+ `telemetry_checks.sql`。
 2. **客户端骨架**:installID、ownerUID 与认领键、dayKey/tz、revision、游标、单写者上传器、四触发点、`beginBackgroundTask`、同意水位、闸门、Redactor、开关与文案与可见反馈、擦除 QA 断言、测试 1–7。观察站数据先通。
-3. **观察系统**:判定快照改在跨天/启动;`usage-daily`(枚举键、`UsageProbe`、emit 落点规则);`incident-daily`(类型化咽喉 + 轨迹类别计数);`metrickit-daily`(独占文件、payload 的 build/day、补 diskWrite);脏检查;`evictedUnuploaded`;键注册表导出与对拍;测试 8–11。
+3. **观察系统**:判定快照改在跨天/启动;`usage-daily`(分阶段键、入口来源、访问结算与停留、`UsageProbe`、落点规则,§6.3);`incident-daily`(类型化咽喉 + 轨迹类别计数);`metrickit-daily`(独占文件、payload 的 build/day、补 diskWrite);脏检查;`evictedUnuploaded`;键注册表导出与对拍;测试 8–11。
 4. **激活**:TestFlight 卡片 + 测试说明 + 成功判据;装机验收 12。
 5. (另开)用户报告。
 
@@ -262,7 +350,7 @@ RLS:authenticated `select / insert / update` 自己的行(`user_id = (select aut
 2. **行键是否保留 `user_id`**:本稿保留(§8.1);C 主张假名化 install-only + forget RPC。建议保留。
 3. **TestFlight 一次性激活卡片**:做 / 不做。建议做;不做则问题 1–5 大概率无数据。
 4. **关闭开关时**:立即停(本稿)/ 发最后一条带 `optOut=1` 再停(C)。建议立即停。
-5. **功能 ID 起步清单**:#273 的 23 项待删。
+5. **功能清单**:2026-11-09 用户批分阶段方向(「这样我们数据分析精致一点」),清单见 §6.3.1;起步清单里 4 项(Wanna 打开 / LogSheet 提交 / 反馈提交 / 小组件深链进入)现在够不着,不登记。删减与先做哪几组仍待定。
 
 ## 14. 延期 / 不做
 
