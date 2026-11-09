@@ -239,7 +239,8 @@ final class UsageCenterTests: XCTestCase {
     }
 
     /// The visit is open when the process goes to the background and dies
-    /// there: its enter was flushed, its dwell and abandonment never are.
+    /// there: its enter was flushed, its dwell and abandonment never are —
+    /// not even by a write that happens while it sits in the background.
     /// Positive control: the same visit closed before backgrounding settles.
     func testAVisitKilledInTheBackgroundNeverSettles() throws {
         let clock = Box(morning)
@@ -249,6 +250,8 @@ final class UsageCenterTests: XCTestCase {
         media.value = 40
         post(UIApplication.willResignActiveNotification)
         post(UIApplication.didEnterBackgroundNotification)
+        media.value = 900
+        doomed.flushDaily()                     // any later write while backgrounded
         doomed.deactivate()                     // the process dies here
 
         clock.value = morning.addingTimeInterval(1800)

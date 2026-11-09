@@ -169,7 +169,7 @@ struct CreateCalendarEventView: View {
         UsageProbe.done(.create)
         if event.isRecurringSeries { UsageProbe.done(.createRepeat) }
         if event.isAllDay { UsageProbe.done(.createAllDay) }
-        if !event.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { UsageProbe.done(.createNote) }
+        if event.note.contains(where: { !$0.isWhitespace }) { UsageProbe.done(.createNote) }
     }
 
     /// Carries out a slot action decided by `calendarCreateDraftSlotAction` /
