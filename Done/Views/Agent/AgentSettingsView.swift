@@ -396,6 +396,15 @@ struct SettingsHomeView: View {
             }
 
             settingsCard(spacing: 14) {
+                NavigationLink {
+                    ArchivedFeaturesView()
+                } label: {
+                    settingsLinkRow(title: L(.archivedFeatures))
+                }
+                .buttonStyle(SettingsRowButtonStyle())
+            }
+
+            settingsCard(spacing: 14) {
                 // FIX WATCH (R-F10): 观察站 sits top-level — the verdict
                 // deck for merged fixes under observation, with the manual
                 // Spikes list as its child page. It deliberately does NOT
@@ -549,13 +558,48 @@ struct SettingsHomeView: View {
     }
 }
 
+struct ArchivedFeaturesView: View {
+    @AppStorage(AppSettingsKeys.archivedFocusEnabled) private var focusEnabled = false
+    @AppStorage(AppSettingsKeys.archivedTodoStackEnabled) private var todoStackEnabled = false
+    @AppStorage(AppSettingsKeys.archivedWannaEnabled) private var wannaEnabled = false
+    @AppStorage(AppSettingsKeys.archivedReportEnabled) private var reportEnabled = false
+
+    var body: some View {
+        settingsPage(L(.archivedFeatures)) {
+            settingsCard(spacing: 14) {
+                Toggle(L(.focusMode), isOn: $focusEnabled)
+                Toggle(L(.archivedTodoStack), isOn: $todoStackEnabled)
+                Toggle(L(.tabWanna), isOn: $wannaEnabled)
+                Toggle(L(.tabReport), isOn: $reportEnabled)
+
+                settingsHintText(L(.hintArchivedFeatures))
+            }
+        }
+    }
+}
+
 struct GeneralSettingsView: View {
     @AppStorage(AppSettingsKeys.rememberLastTab) private var rememberLastTab = true
     @AppStorage(AppSettingsKeys.defaultTab) private var defaultTabRawValue = RootTab.calendar.rawValue
+    @AppStorage(AppSettingsKeys.archivedWannaEnabled) private var archivedWannaEnabled = false
+    @AppStorage(AppSettingsKeys.archivedReportEnabled) private var archivedReportEnabled = false
     @AppStorage(AppSettingsKeys.showTimerBanner) private var showTimerBanner = true
     @AppStorage(AppSettingsLocale.languageKey) private var languageRaw = AppLanguage.english.rawValue
     @AppStorage(AppSettingsLocale.timeFormatKey) private var timeFormatRaw = AppTimeFormat.twentyFour.rawValue
     @AppStorage(AppSettingsKeys.appearanceMode) private var appearanceModeRaw = AppAppearanceMode.system.rawValue
+
+    private var availableTabs: [RootTab] {
+        RootTab.allCases.filter { $0.isAvailable(wannaEnabled: archivedWannaEnabled, reportEnabled: archivedReportEnabled) }
+    }
+
+    /// A stored default whose tab is archived opens the calendar, so the
+    /// picker shows that instead of a blank row.
+    private var shownDefaultTab: Binding<String> {
+        Binding(
+            get: { availableTabs.map(\.rawValue).contains(defaultTabRawValue) ? defaultTabRawValue : RootTab.calendar.rawValue },
+            set: { defaultTabRawValue = $0 }
+        )
+    }
 
     var body: some View {
         settingsPage(L(.general)) {
@@ -584,9 +628,8 @@ struct GeneralSettingsView: View {
 
                 settingsPickerRow(
                     L(.defaultTab),
-                    selection: $defaultTabRawValue,
-                    // Wanna tab is temporarily removed — don't offer it as a default.
-                    options: RootTab.allCases.filter { $0 != .wanna }.map { ($0.rawValue, L($0.titleKey)) },
+                    selection: shownDefaultTab,
+                    options: availableTabs.map { ($0.rawValue, L($0.titleKey)) },
                     disabled: rememberLastTab
                 )
 
@@ -601,6 +644,7 @@ struct GeneralSettingsView: View {
 }
 
 struct WorkflowSettingsView: View {
+    @AppStorage(AppSettingsKeys.archivedFocusEnabled) private var archivedFocusEnabled = false
     @AppStorage(AppSettingsKeys.landscapeFocusMode) private var landscapeFocusModeEnabled = false
     @AppStorage(AppSettingsKeys.landscapeFocusKeepAwake) private var landscapeFocusKeepAwakeEnabled = true
     @AppStorage(AppSettingsKeys.calendarAgenticCreateEnabled) private var calendarAgenticCreateEnabled = true
@@ -609,12 +653,14 @@ struct WorkflowSettingsView: View {
     var body: some View {
         settingsPage(L(.recordingAndWorkflow)) {
             settingsCard(L(.workflow)) {
-                Toggle(L(.landscapeFocusMode), isOn: $landscapeFocusModeEnabled)
-                Toggle(L(.landscapeFocusKeepAwake), isOn: $landscapeFocusKeepAwakeEnabled)
+                if archivedFocusEnabled {
+                    Toggle(L(.landscapeFocusMode), isOn: $landscapeFocusModeEnabled)
+                    Toggle(L(.landscapeFocusKeepAwake), isOn: $landscapeFocusKeepAwakeEnabled)
+                }
                 Toggle(L(.enableAiTypeSuggestions), isOn: $calendarAgenticCreateEnabled)
                 Toggle(L(.effortBasedEventOpacity), isOn: $effortOpacityEnabled)
 
-                settingsHintText(L(.hintLandscapeAndAgent))
+                settingsHintText(L(archivedFocusEnabled ? .hintLandscapeAndAgent : .hintAiTypeSuggestions))
                 settingsHintText(L(.hintEffortBasedEventOpacity))
             }
         }

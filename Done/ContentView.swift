@@ -24,6 +24,15 @@ enum RootTab: String, CaseIterable, Identifiable {
         case .me:       return .tabMe
         }
     }
+
+    /// False for a tab whose archived feature is switched off.
+    func isAvailable(wannaEnabled: Bool, reportEnabled: Bool) -> Bool {
+        switch self {
+        case .wanna:  return wannaEnabled
+        case .report: return reportEnabled
+        case .calendar, .me: return true
+        }
+    }
 }
 
 // MARK: - Root-tab visibility (gh#214)
@@ -110,6 +119,8 @@ struct ContentView: View {
     @AppStorage(AppSettingsKeys.rememberLastTab) private var rememberLastTab = true
     @AppStorage(AppSettingsKeys.defaultTab) private var defaultTabRawValue = RootTab.calendar.rawValue
     @AppStorage(AppSettingsKeys.lastSelectedTab) private var lastSelectedTabRawValue = RootTab.calendar.rawValue
+    @AppStorage(AppSettingsKeys.archivedWannaEnabled) private var archivedWannaEnabled = false
+    @AppStorage(AppSettingsKeys.archivedReportEnabled) private var archivedReportEnabled = false
     @AppStorage(AppSettingsKeys.showTimerBanner) private var showTimerBanner = true
     @State private var calendarState = CalendarViewState()
     @StateObject private var calendarFocusState = CalendarFocusState()
@@ -158,11 +169,18 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             TabView(selection: $selectedTab) {
-                // NOTE: The "想做" (wanna) tab is temporarily removed. The
-                // RootTab.wanna case and WannaListView are intentionally kept
-                // so the rest of the app keeps compiling; to restore the tab,
-                // re-add the NavigationStack block below and revert the
-                // wanna-related default tab values.
+                if archivedWannaEnabled {
+                    NavigationStack {
+                        WannaListView()
+                            .environmentObject(store)
+                    }
+                    .toolbar(isDecisionQuestionVisible ? .hidden : .visible, for: .tabBar)
+                    .tag(RootTab.wanna)
+                    .tabItem {
+                        Label(L(.tabWanna), systemImage: "sparkles")
+                    }
+                }
+
                 NavigationStack {
                     CalendarPageView()
                         .environmentObject(store)
@@ -193,14 +211,16 @@ struct ContentView: View {
                     Label(L(.tabCalendar), systemImage: "calendar")
                 }
 
-                NavigationStack {
-                    ReportTabView()
-                        .environmentObject(store)
-                }
-                .toolbar(isDecisionQuestionVisible ? .hidden : .visible, for: .tabBar)
-                .tag(RootTab.report)
-                .tabItem {
-                    Label(L(.tabReport), systemImage: "doc.text")
+                if archivedReportEnabled {
+                    NavigationStack {
+                        ReportTabView()
+                            .environmentObject(store)
+                    }
+                    .toolbar(isDecisionQuestionVisible ? .hidden : .visible, for: .tabBar)
+                    .tag(RootTab.report)
+                    .tabItem {
+                        Label(L(.tabReport), systemImage: "doc.text")
+                    }
                 }
 
                 NavigationStack {
@@ -233,6 +253,8 @@ struct ContentView: View {
                 y: isDecisionQuestionVisible ? AgentDecisionPresentationStyle.backgroundShadowYOffset : 0
             )
             .animation(AgentDecisionPresentationStyle.spring, value: isDecisionQuestionVisible)
+            .onChange(of: archivedWannaEnabled) { _, _ in leaveSelectedTabIfArchived() }
+            .onChange(of: archivedReportEnabled) { _, _ in leaveSelectedTabIfArchived() }
 
             Color.black
                 .opacity(isDecisionQuestionVisible ? AgentDecisionPresentationStyle.scrimOpacity : 0)
@@ -307,13 +329,14 @@ struct ContentView: View {
             // calendar record, log or feedback change no longer runs a
             // predict / reconcile / bootstrap pass on the main actor.
             store.onCalendarEventRecordCompleted = { event in
+                guard UserDefaults.standard.bool(forKey: AppSettingsKeys.archivedReportEnabled) else { return }
                 Task { await service.analyzeEvent(event) }
             }
             // One backlog sweep per launch, idempotent against onAppear
             // re-entry like the attach calls below; the service's own
             // re-entry guard backstops this. The sweep itself is capped at
             // SkillAnalysisService.perLaunchAnalysisCap provider calls.
-            if skillAnalysisTask == nil {
+            if skillAnalysisTask == nil, UserDefaults.standard.bool(forKey: AppSettingsKeys.archivedReportEnabled) {
                 let events = store.rawCalendarEvents
                 skillAnalysisTask = Task { await service.analyzePastEvents(events) }
             }
@@ -499,13 +522,19 @@ struct ContentView: View {
         isPresentingRestoreSheet = true
     }
 
+    private func tabIsAvailable(_ tab: RootTab) -> Bool {
+        tab.isAvailable(wannaEnabled: archivedWannaEnabled, reportEnabled: archivedReportEnabled)
+    }
+
+    private func leaveSelectedTabIfArchived() {
+        if !tabIsAvailable(selectedTab) { selectedTab = .calendar }
+    }
+
     private var startupTab: RootTab {
-        // The wanna tab is temporarily removed, so any persisted "wanna"
-        // selection must fall back to a tab that still exists.
-        if rememberLastTab, let last = RootTab(rawValue: lastSelectedTabRawValue), last != .wanna {
+        if rememberLastTab, let last = RootTab(rawValue: lastSelectedTabRawValue), tabIsAvailable(last) {
             return last
         }
-        if let preferred = RootTab(rawValue: defaultTabRawValue), preferred != .wanna {
+        if let preferred = RootTab(rawValue: defaultTabRawValue), tabIsAvailable(preferred) {
             return preferred
         }
         return .calendar

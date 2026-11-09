@@ -42,6 +42,8 @@ import Foundation
 ///     doorbell (gh#257 staging QA round 6), and an account switch read the
 ///     previous account as having an unsynced change. `rememberLastTab` and
 ///     `defaultTab`, the user's choices, stay synced.
+///   - `AppSettingsKeys.archived*Enabled` — the Archived Features switches.
+///     Each device opts in on its own; the features' data still syncs.
 enum SyncedSettings {
     static let allKeys: [String] = [
         // ── General / tab behavior ──

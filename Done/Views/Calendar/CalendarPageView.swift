@@ -4834,6 +4834,7 @@ private extension CalendarPageView {
             ? timelineDragState.dragWindowHeight
             : calendarKeyWindowHeight()
         if event.canReturnToStack,
+           UserDefaults.standard.bool(forKey: AppSettingsKeys.archivedTodoStackEnabled),
            let touch = timelineDragState.currentTouchPointGlobal,
            TodoPutBackPeekMetrics.isInZone(touchY: touch.y, screenHeight: putBackWindowHeight) {
             store.putTodoBackToStack(todoID: event.id)

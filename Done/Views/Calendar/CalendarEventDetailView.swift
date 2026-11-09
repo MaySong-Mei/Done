@@ -868,7 +868,7 @@ private extension CalendarEventDetailView {
     /// (`Event.isStackTodo`) excludes — dateless but visible nowhere.
     @ViewBuilder
     func todoUnscheduleSection(event: Event) -> some View {
-        if event.canReturnToStack {
+        if event.canReturnToStack, UserDefaults.standard.bool(forKey: AppSettingsKeys.archivedTodoStackEnabled) {
             sectionCard(title: L(.kindTodo)) {
                 Button {
                     putBackToStack(eventID: event.id)

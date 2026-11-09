@@ -214,3 +214,43 @@ final class ResetSweepQATests: XCTestCase {
         )
     }
 }
+
+final class ArchivedFeaturesRulesTests: XCTestCase {
+    private let keys = [
+        AppSettingsKeys.archivedFocusEnabled,
+        AppSettingsKeys.archivedTodoStackEnabled,
+        AppSettingsKeys.archivedWannaEnabled,
+        AppSettingsKeys.archivedReportEnabled,
+    ]
+
+    func testSwitchesStayOnTheDeviceAndReset() {
+        for key in keys {
+            XCTAssertFalse(SyncedSettings.allKeys.contains(key), key)
+            XCTAssertTrue(AppSettingsKeys.resettableUserDefaultsKeys.contains(key), key)
+        }
+    }
+
+    func testArchivedTabsLeaveOnlyWhenOff() {
+        XCTAssertFalse(RootTab.wanna.isAvailable(wannaEnabled: false, reportEnabled: true))
+        XCTAssertTrue(RootTab.wanna.isAvailable(wannaEnabled: true, reportEnabled: false))
+        XCTAssertFalse(RootTab.report.isAvailable(wannaEnabled: true, reportEnabled: false))
+        XCTAssertTrue(RootTab.report.isAvailable(wannaEnabled: false, reportEnabled: true))
+        XCTAssertTrue(RootTab.calendar.isAvailable(wannaEnabled: false, reportEnabled: false))
+        XCTAssertTrue(RootTab.me.isAvailable(wannaEnabled: false, reportEnabled: false))
+    }
+
+    func testHeaderToolsFollowTheirOwnSwitch() {
+        let off = calendarHeaderAvailableTools(focusEnabled: false, todoStackEnabled: false)
+        XCTAssertFalse(off.contains(.focus))
+        XCTAssertFalse(off.contains(.todo))
+        XCTAssertEqual(off.count, CalendarHeaderTool.allCases.count - 2)
+
+        let focusOnly = calendarHeaderAvailableTools(focusEnabled: true, todoStackEnabled: false)
+        XCTAssertTrue(focusOnly.contains(.focus))
+        XCTAssertFalse(focusOnly.contains(.todo))
+
+        let todoOnly = calendarHeaderAvailableTools(focusEnabled: false, todoStackEnabled: true)
+        XCTAssertFalse(todoOnly.contains(.focus))
+        XCTAssertTrue(todoOnly.contains(.todo))
+    }
+}
