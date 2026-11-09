@@ -279,6 +279,23 @@ final class UsageModelTests: XCTestCase {
         XCTAssertEqual(tracker.counts.metrics, ["sessions": .number(1)], "the erased owner's visit settles nothing afterwards")
     }
 
+    /// The detail's reflection editors are filled from the record in the same
+    /// update that marks them loaded; only a change after that is the user's.
+    func testTheReflectionNoteLoadIsNotAUserEdit() {
+        let fresh = DetailReflectionEditUsageKey(loaded: false, note: "", templateID: nil, answerCount: 0)
+        let loaded = DetailReflectionEditUsageKey(loaded: true, note: "stored note", templateID: nil, answerCount: 0)
+        let typed = DetailReflectionEditUsageKey(loaded: true, note: "stored note!", templateID: nil, answerCount: 0)
+        let emptyLoad = DetailReflectionEditUsageKey(loaded: true, note: "", templateID: nil, answerCount: 0)
+        let firstKey = DetailReflectionEditUsageKey(loaded: true, note: "a", templateID: nil, answerCount: 0)
+        XCTAssertFalse(DetailReflectionEditUsageKey.isUserEdit(from: fresh, to: loaded), "the load")
+        XCTAssertFalse(DetailReflectionEditUsageKey.isUserEdit(from: fresh, to: emptyLoad), "the load of an empty note")
+        XCTAssertTrue(DetailReflectionEditUsageKey.isUserEdit(from: loaded, to: typed), "a keystroke after the load")
+        XCTAssertTrue(DetailReflectionEditUsageKey.isUserEdit(from: emptyLoad, to: firstKey), "the first keystroke into an empty note")
+        XCTAssertFalse(DetailReflectionEditUsageKey.isUserEdit(from: loaded, to: loaded))
+        let answered = DetailReflectionEditUsageKey(loaded: true, note: "stored note", templateID: nil, answerCount: 1)
+        XCTAssertTrue(DetailReflectionEditUsageKey.isUserEdit(from: loaded, to: answered), "a template answer")
+    }
+
     func testEveryChangeToTheCountsMovesTheChangeCount() {
         var tracker = UsageTracker()
         var last = tracker.changeCount
@@ -549,6 +566,19 @@ final class UsageSourceScanTests: XCTestCase {
     func testNoEnterSitsInsideAnOnAppearClosure() throws {
         let offenders = try sources().flatMap { UsageSourceScan.entersInsideOnAppear($0.stripped, file: $0.file) }
         XCTAssertEqual(offenders, [])
+    }
+
+    /// Design §3 L0: the usage model is arithmetic over values the caller
+    /// holds. Comments are stripped first, so a doc line naming a banned API
+    /// cannot satisfy or trip the scan.
+    func testTheUsageModelStaysPure() throws {
+        let url = doneRoot.appendingPathComponent("Models/UsageModel.swift")
+        let code = UsageSourceScan.stripCommentsAndStrings(try String(contentsOf: url, encoding: .utf8))
+        XCTAssertTrue(code.contains("struct UsageTracker"), "liveness: the scan read the model")
+        for banned in ["UserDefaults", "Calendar", "FileManager", "URLSession", "UIKit", "SwiftUI", "@Published",
+                       "DispatchQueue", "NotificationCenter", "Date()", "DiagnosticTrail", "SpikeRunStore"] {
+            XCTAssertFalse(code.contains(banned), "UsageModel.swift must not use \(banned)")
+        }
     }
 
     /// Positive controls for the scanner itself: it finds an enter inside an

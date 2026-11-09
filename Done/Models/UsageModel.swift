@@ -296,8 +296,9 @@ enum UsageDwell {
 // MARK: - Layout (built once)
 
 /// Every key and every tag's slot, computed once from the declarations so
-/// the signal path is a subscript.
-struct UsageLayout {
+/// the signal path is a subscript. A class: the signal path holds one
+/// reference to it, never a copy of its arrays.
+final class UsageLayout {
     let keys: [UsageKey]
     let slotCount: Int
     let keysByName: [String: UsageKey]
