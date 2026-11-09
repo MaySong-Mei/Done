@@ -794,6 +794,7 @@ struct DoneApp: App {
                 // change here keeps the side effect out of the gate
                 // expression in `body`.
                 syncOrientationLock(focusActive: active)
+                recordFocusUsage(active: active)
             }
             .onChange(of: landscapeFocusModeEnabled) { _, enabled in
                 // gh#219: generation demand follows the setting. @AppStorage
@@ -833,6 +834,22 @@ struct DoneApp: App {
         autoFocusTrigger || orientationManager.manualFocusActive
     }
 
+    /// gh#273 §6.3: focus is entered and left HERE, where both ways in meet.
+    /// The manual flag is the header button's (a user tap); without it the
+    /// session was opened by rotation with the setting on. Leaving: the
+    /// surface notes a swipe (or a recovered dismissal) just before it asks
+    /// to close, and that note wins; otherwise the setting still being on
+    /// means the device rotated back, and the setting being off means it was
+    /// switched off (here or by a synced write).
+    private func recordFocusUsage(active: Bool) {
+        if active {
+            UsageProbe.enter(orientationManager.manualFocusActive ? .focusTap : .focusAuto)
+        } else {
+            UsageProbe.leave(.focusPrecreate)
+            UsageProbe.leave(.focus, via: landscapeFocusModeEnabled ? .focusRotate : .focusSystem)
+        }
+    }
+
     private func syncOrientationLock(focusActive: Bool) {
         FocusOrientationGate.allowsLandscape = focusActive
         // On enter: don't force a specific orientation on an upright
@@ -860,9 +877,11 @@ struct DoneApp: App {
             onExit: { orientationManager.endManualFocus() },
             canExitBySwipe: !autoFocusTrigger,
             onExtendCurrent: { event, delta in
+                UsageProbe.use(.focusExtend)
                 applyEndTimeDelta(to: event, delta: delta)
             },
             onEndCurrent: { event, now in
+                UsageProbe.use(.focusEndNow)
                 applyEndTime(to: event, end: now)
             },
             onAddNoteToCurrent: { occurrence, text in

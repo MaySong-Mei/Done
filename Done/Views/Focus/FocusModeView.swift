@@ -273,10 +273,13 @@ struct FocusModeView: View {
                             allOccurrences: allToday,
                             isPortrait: isPortrait,
                             onConfirm: { title, start, end in
+                                UsageProbe.done(.focusPrecreate)
+                                UsageProbe.leave(.focusPrecreate)
                                 onStartTracking(pending, title, start, end)
                                 pendingProposalTemplate = nil
                             },
                             onCancel: {
+                                UsageProbe.leave(.focusPrecreate)
                                 pendingProposalTemplate = nil
                             }
                         )
@@ -637,6 +640,7 @@ struct FocusModeView: View {
                                 } completion: {
                                     guard pendingDismissID == id else { return }
                                     pendingDismissID = nil
+                                    UsageProbe.noteExit(.focusSwipe)
                                     onExit()
                                 }
                             } else {
@@ -1119,6 +1123,7 @@ struct FocusModeView: View {
             break
         case .exit:
             pendingDismissID = nil
+            UsageProbe.noteExit(.focusSystem)
             onExit()
         case .settle:
             cancelDismissAndSettle()
@@ -1159,7 +1164,9 @@ struct FocusModeView: View {
         // Raising the preview over a surface that is on its way out would
         // leave the dismissal to complete underneath it.
         catchPendingDismiss()
+        UsageProbe.use(.focusTrack)
         if confirmBeforeTracking {
+            UsageProbe.enter(.focusPrecreatePill)
             pendingProposalTemplate = template
         } else {
             let now = Date()

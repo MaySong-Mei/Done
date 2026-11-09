@@ -94,7 +94,7 @@ struct UsageDeclaration {
     struct View { let tag: UsageView; let name: String; let what: String }
     struct Route { let tag: UsageRoute; let name: String; let what: String }
     /// `suffix` is everything after `usage.<feature>.`.
-    struct Event { let tag: UsageEvent; let suffix: String; let what: String }
+    struct Tally { let tag: UsageEvent; let suffix: String; let what: String }
 
     let name: String
     let summary: String
@@ -106,14 +106,14 @@ struct UsageDeclaration {
     let views: [View]
     let routes: [Route]
     let routeStage: UsageRouteStage
-    let events: [Event]
+    let events: [Tally]
 
     /// A feature with an entry has visits: they settle `abandon` and `dwell`.
     var hasVisits: Bool { !entries.isEmpty }
 
     init(name: String, summary: String, sinceBuild: Int, entries: [Entry] = [], uses: [Use] = [],
          dones: [Done] = [], views: [View] = [], routes: [Route] = [],
-         routeStage: UsageRouteStage = .exit, events: [Event] = []) {
+         routeStage: UsageRouteStage = .exit, events: [Tally] = []) {
         self.name = name
         self.summary = summary
         self.sinceBuild = sinceBuild

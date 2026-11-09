@@ -309,6 +309,9 @@ struct CalendarEventDetailView: View {
 
     @State private var selectedPage: CalendarEventDetailPage = .overview
     @State private var didHandleInitialJump = false
+    /// gh#273 §6.3: typing into the reflection note or picking a template is
+    /// counted as ONE use per detail page, not per keystroke.
+    @State private var usageCountedReflectionEdit = false
     /// gh#219: the deadline wheel commits once on release, not per detent.
     /// Held per view session so the pending value survives re-renders during a
     /// scrub; flushed on disappear and on backgrounding below.
@@ -711,6 +714,7 @@ private extension CalendarEventDetailView {
     }
 
     private func releaseAbsorption(todoID: UUID) {
+        UsageProbe.use(.eventDetailTodo)
         store.releaseTodoAbsorption(todoID: todoID)
     }
 
@@ -769,6 +773,7 @@ private extension CalendarEventDetailView {
     }
 
     private func updateDeadline(_ newValue: Date?, eventID: UUID) {
+        UsageProbe.use(.eventDetailTodo)
         editOccurrence(eventID: eventID) { $0.deadline = newValue }
     }
 
@@ -815,6 +820,7 @@ private extension CalendarEventDetailView {
     }
 
     private func updateType(_ newType: String, eventID: UUID) {
+        UsageProbe.use(.eventDetailPlan)
         editOccurrence(eventID: eventID) { $0.type = newType }
     }
 
@@ -881,6 +887,7 @@ private extension CalendarEventDetailView {
     }
 
     private func putBackToStack(eventID: UUID) {
+        UsageProbe.use(.eventDetailTodo)
         store.putTodoBackToStack(todoID: eventID)
         // The block just left the canvas; a detail page for an occurrence
         // that no longer exists shouldn't linger.
@@ -938,7 +945,10 @@ private extension CalendarEventDetailView {
                         .padding()
                 }
             }
-            .sheet(item: $manageRepeatContext) { ctx in
+            .sheet(item: $manageRepeatContext, onDismiss: {
+                // Save, Cancel, Delete series and a swipe-down all end here.
+                UsageProbe.leave(.repeatRule)
+            }) { ctx in
                 CalendarRecurrenceRuleEditor(series: ctx.series, occurrenceDate: ctx.occurrenceDate)
                     .environmentObject(store)
             }
@@ -986,6 +996,22 @@ private extension CalendarEventDetailView {
                 didHandleInitialJump = false
                 resetTimelineInteractionState()
                 handleRouteJump(force: true)
+            }
+            // gh#273 §6.3: the reflection page was shown — a view, not a use.
+            .onChange(of: selectedPage) { _, page in
+                if page == .reflection { UsageProbe.view(.eventDetailReflection) }
+            }
+            // gh#273 §6.3: the note / template as the USER changed them. The
+            // load that fills them from the record flips `loaded` in the same
+            // update, so a change only counts when it was loaded before and
+            // after — the load itself never does.
+            .onChange(of: DetailReflectionEditUsageKey(
+                loaded: didLoadDetailDraft, note: detailNoteText,
+                templateID: detailSelectedTemplateID, answerCount: detailTemplateAnswers.count
+            )) { old, new in
+                guard DetailReflectionEditUsageKey.isUserEdit(from: old, to: new), !usageCountedReflectionEdit else { return }
+                usageCountedReflectionEdit = true
+                UsageProbe.use(currentEvent?.kind == .todo ? .eventDetailTodo : .eventDetailReflect)
             }
             // gh#163: the old `.onChange(of: timelineNoteText)` that poked the
             // auto-resume interaction clock on every keystroke moved INTO
@@ -1511,6 +1537,8 @@ private extension CalendarEventDetailView {
                        let series = store.findSeriesEvent(for: event),
                        series.isRecurringSeries {
                         Button {
+                            UsageProbe.use(.eventDetailPlan)
+                            UsageProbe.enter(.repeatRuleEditor)
                             manageRepeatContext = CalendarManageRepeatContext(
                                 series: series,
                                 occurrenceDate: route.occurrence.occurrenceDate
@@ -2202,6 +2230,7 @@ private extension CalendarEventDetailView {
                     tags: CalendarEmotionTag.allCases.map { (id: $0.rawValue, title: $0.title) },
                     selection: Set(draft.emotions)
                 ) { tagID, targetSelected in
+                    UsageProbe.use(.eventDetailReflect)
                     store.applyQuickTagIntent(
                         axis: .emotions,
                         tagID: tagID,
@@ -2215,6 +2244,7 @@ private extension CalendarEventDetailView {
                     tags: CalendarBehaviorTag.allCases.map { (id: $0.rawValue, title: $0.title) },
                     selection: Set(draft.behaviors)
                 ) { tagID, targetSelected in
+                    UsageProbe.use(.eventDetailReflect)
                     store.applyQuickTagIntent(
                         axis: .behaviors,
                         tagID: tagID,
@@ -2551,6 +2581,7 @@ private extension CalendarEventDetailView {
     /// behind the latest write).
     private func toggleTodoDone(eventID: UUID) {
         guard let current = store.findCalendarEvent(id: eventID) else { return }
+        UsageProbe.use(.eventDetailTodo)
         let markDone = !current.isDone
         editOccurrence(eventID: eventID) { event in
             if markDone {
@@ -3517,6 +3548,7 @@ private extension CalendarEventDetailView {
     // reason it is not a view method like its siblings below.
 
     func applyQuickCompletion(_ status: EventLogCompletionStatus) {
+        UsageProbe.use(.eventDetailReflect)
         store.applyQuickCompletion(status, for: route.occurrence)
     }
 
@@ -3541,11 +3573,13 @@ private extension CalendarEventDetailView {
     /// "untouched" nil.
     func commitEffortDrag(_ finalValue: Int) {
         guard calendarEffortDragShouldCommit(finalValue: finalValue, currentStoreValue: quickEffortValue) else { return }
+        UsageProbe.use(.eventDetailReflect)
         applyQuickEffort(finalValue)
     }
 
     func quickAdjustDuration(by deltaMinutes: Int) {
         guard let event = currentEvent else { return }
+        UsageProbe.use(.eventDetailPlan)
         // Canvas/detail edits are single-occurrence: a duration tweak on a
         // recurring series materializes an exception for this one day. Rule-
         // level changes live in the "Manage repeat…" editor.
@@ -3559,11 +3593,13 @@ private extension CalendarEventDetailView {
     /// The naming prompt's answer (`AwaitingNameStore.answer`).
     func nameAwaitingEvent(_ name: String?) {
         guard let event = currentEvent else { return }
+        UsageProbe.use(.eventDetailPlan)
         awaitingNames.answer(event.id, name: name, in: store)
     }
 
     func startEditFlow() {
         guard let event = currentEvent else { return }
+        UsageProbe.use(.eventDetailPlan)
         // For a series occurrence the edit sheet materializes an exception
         // (scope .single); a plain event / existing exception edits in place.
         editSheetRequest = CalendarDetailEditSheetRequest(
@@ -3679,6 +3715,7 @@ private extension CalendarEventDetailView {
 
     func performDelete() {
         guard let event = currentEvent else { return }
+        UsageProbe.use(.eventDetailDelete)
         if event.isRecurringSeries {
             store.deleteRecurringCalendarEvent(
                 seriesEvent: event,
@@ -3883,6 +3920,7 @@ private extension CalendarEventDetailView {
             noteTimelineInteraction(at: now)
             return
         }
+        UsageProbe.use(.eventDetailTimelineNote)
         runTimelineComposerAnimation {
             timelineEditingNoteID = note.id
             // Editing a settled note is a NEW session even if that note was
@@ -4725,6 +4763,7 @@ private extension CalendarEventDetailView {
     func saveTimelineNote(at date: Date) {
         let trimmed = noteDraft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !timelineNoteImageDrafts.isEmpty || !timelineNoteExistingImages.isEmpty else { return }
+        UsageProbe.use(.eventDetailTimelineNote)
 
         var savedImages = timelineNoteExistingImages
         if !timelineNoteImageDrafts.isEmpty, let event = currentEvent {
@@ -4821,6 +4860,7 @@ private extension CalendarEventDetailView {
     }
 
     func deleteTimelineNote(_ note: EventLogTimelineNote, at now: Date = Date()) {
+        UsageProbe.use(.eventDetailTimelineNote)
         store.deleteTimelineNote(note.id, for: route.occurrence)
         if timelineEditingNoteID == note.id {
             isTimelineNoteFieldFocused = false
@@ -6128,4 +6168,19 @@ func calendarEventDetailTimeSummary(
         return "\(dateFormatter.string(from: range.start)) • \(startText) - \(endText)"
     }
     return "\(dateFormatter.string(from: range.start)) \(startText) - \(dateFormatter.string(from: range.end)) \(endText)"
+}
+
+// MARK: - Usage (gh#273 §6.3)
+
+/// What the reflection editors hold, for telling a user's edit from the
+/// load that fills them.
+struct DetailReflectionEditUsageKey: Equatable {
+    let loaded: Bool
+    let note: String
+    let templateID: EventLogTemplateID?
+    let answerCount: Int
+
+    static func isUserEdit(from old: Self, to new: Self) -> Bool {
+        old.loaded && new.loaded && old != new
+    }
 }

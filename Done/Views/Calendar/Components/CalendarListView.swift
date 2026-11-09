@@ -38,6 +38,7 @@ struct CalendarListView: View {
                                     isAllDay: event.isAllDay,
                                     source: .timelineTap
                                 )
+                                UsageProbe.enter(.eventDetailList)
                                 selectedEventDetailRoute = CalendarEventDetailRoute(occurrence: occurrence)
                             } label: {
                                 CalendarListEventRow(event: event)
@@ -57,6 +58,10 @@ struct CalendarListView: View {
             .navigationDestination(item: $selectedEventDetailRoute) { route in
                 CalendarEventDetailView(route: route)
                     .environmentObject(store)
+            }
+            // gh#273 §6.3: the detail's visit ends when it is popped.
+            .onChange(of: selectedEventDetailRoute) { oldValue, newValue in
+                if oldValue != nil, newValue == nil { UsageProbe.leave(.eventDetail) }
             }
             .onAppear {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
