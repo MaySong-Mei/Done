@@ -40,6 +40,13 @@
 //  records. Uninstalled, the daily line still carries the follower keys, all
 //  zero.
 //
+//  Usage (gh#273 §6.3): the center is also `UsageProbe`'s sink. The day's
+//  usage counts are a second daily record, `usage-daily`, in the same pool:
+//  minted, adopted, re-minted, flushed and erased together with the
+//  resident's own daily — one claim key, one day bound, one set of flush
+//  edges, one uploader. Visits (enter → leave, foreground dwell) live only
+//  in memory here; a visit open when the process dies never settles.
+//
 //  Not wired under XCTest (R-F10): `DoneApp` creates this only when
 //  `EventStorageLocation.isRunningUnderXCTest` is false. DoneTests is a
 //  host-app bundle — a resident registered at app launch would run
@@ -119,6 +126,25 @@ final class ResidentObservationCenter {
     private var lastWrittenStartedAt: Date?
     private var rolloverFlushScheduled = false
 
+    // MARK: usage-daily (gh#273 §6.3)
+
+    /// The day's usage counts and the open visits.
+    private(set) var usage = UsageTracker()
+    /// The usage record's own id for the current claim and day; minted and
+    /// re-minted with `dailyRunID`, never on its own.
+    private var usageRunID: UUID
+    private var usageRunStartedAt: Date
+    /// `usage.changeCount` when this id was last written (nil: never).
+    private var usageWrittenChange: Int?
+    private var usageWrittenStartedAt: Date?
+    /// Keys the launch seed dropped because this build does not register
+    /// them (design §4.3, B·F40) — readable at runtime, and a trail line.
+    private(set) var usageUnknownKeyDrops = 0
+    /// What the usage launch seed found in the tail (tests).
+    let usageLaunchSeed: SpikeRunFileScan.TailRecord
+    private let countsLaunchSession: Bool
+    private let isAppForeground: @MainActor () -> Bool
+
     private(set) var window: ResidentWindowModel?
     private var frameProbe: SpikeFrameProbe?
     private var windowCloseWorkItem: DispatchWorkItem?
@@ -166,7 +192,9 @@ final class ResidentObservationCenter {
         installsFollowerProbe: Bool = !EventStorageLocation.isRunningUnderXCTest,
         isAppActive: @escaping @MainActor () -> Bool = { UIApplication.shared.applicationState == .active },
         verifiesSeed: Bool = !EventStorageLocation.isRunningUnderXCTest,
-        seedTrail: @escaping (String) -> Void = { DiagnosticTrail.record("FixWatch", $0) }
+        seedTrail: @escaping (String) -> Void = { DiagnosticTrail.record("FixWatch", $0) },
+        countsLaunchSession: Bool = !EventStorageLocation.isRunningUnderXCTest,
+        isAppForeground: @escaping @MainActor () -> Bool = { UIApplication.shared.applicationState != .background }
     ) {
         self.coordinator = coordinator
         self.store = store
@@ -180,6 +208,8 @@ final class ResidentObservationCenter {
         self.installsFollowerProbe = installsFollowerProbe
         self.isAppActive = isAppActive
         self.seedTrail = seedTrail
+        self.countsLaunchSession = countsLaunchSession
+        self.isAppForeground = isAppForeground
         let followers = FollowerTimingRecorder(now: followerClock, isForeground: false)
         self.followers = followers
 
@@ -246,6 +276,37 @@ final class ResidentObservationCenter {
         dailyClaim = claim
         core = seededCore
         launchSeed = seed
+
+        // Usage: the same claim-aware tail seed, over its own file. Today's
+        // usage line under this claim is adopted with every count it holds,
+        // so a same-day relaunch keeps one id per claim and day.
+        let usageSeed = SpikeRunFileScan.newestMatch(
+            in: SpikeRunStore.fileURL(spikeID: UsageRecordIDs.spikeID, location: location),
+            maxBytes: Self.seedTailBytes, maxDecodes: Self.seedMaxDecodes
+        ) { bounds.contains($0.startedAt) && TelemetryClaimKey(run: $0) == claim }
+        var seededUsage = UsageTracker()
+        if case .found(let todays, _) = usageSeed {
+            var drops = 0
+            seededUsage.seed(UsageCounts(metrics: todays.metrics, unknownKeyDrops: &drops))
+            usageRunID = todays.id
+            usageRunStartedAt = todays.startedAt
+            // A line that carried a key this build does not know is rewritten
+            // at the next flush, without it.
+            usageWrittenChange = drops > 0 ? nil : seededUsage.changeCount
+            usageWrittenStartedAt = drops > 0 ? nil : todays.startedAt
+            usageUnknownKeyDrops = drops
+            if drops > 0 {
+                seedTrail("usage.seed dropped=\(drops)")
+            }
+        } else {
+            usageRunID = UUID()
+            usageRunStartedAt = today
+            usageWrittenChange = nil
+            usageWrittenStartedAt = nil
+        }
+        usage = seededUsage
+        usageLaunchSeed = usageSeed
+
         if verifiesSeed {
             verifyLaunchSeed(seed, seedMs: seedMs, bounds: bounds, claim: claim)
         }
@@ -402,13 +463,19 @@ final class ResidentObservationCenter {
         lastWrittenStartedAt = nil
         lastWrittenFollowers = nil
         lastWrittenFollowerOverflow = 0
+        usageRunID = UUID()
+        usageRunStartedAt = date
+        usageWrittenChange = nil
+        usageWrittenStartedAt = nil
     }
 
     /// A new day, a new owner or a consent re-mint: every count starts over,
-    /// the followers' with the counters'.
+    /// the followers' and the usage counts with the counters'. Open usage
+    /// visits stay open and settle into the new record.
     private func resetCountsForNewDaily() {
         core.resetForNewDay()
         followers.resetDaily()
+        usage.resetCountsForNewRecord()
     }
 
     // MARK: Activation
@@ -421,6 +488,17 @@ final class ResidentObservationCenter {
     func activate() {
         Self.shared = self
         followers.isForeground = isAppActive()
+        // Usage: the tables are built here, not on the first signal; then
+        // this launch's session, when the process came up in the foreground.
+        _ = UsageLayout.shared
+        UsageProbe.sink = self
+        if isAppForeground() {
+            if countsLaunchSession {
+                usage.enterForeground(at: mediaNow())
+            } else {
+                usage.assumeForeground()
+            }
+        }
         if installsFollowerProbe {
             FollowerTiming.recorder = followers
         }
@@ -462,6 +540,26 @@ final class ResidentObservationCenter {
                 }
             })
         }
+        // Usage visits: the clock stops only in the background — Control
+        // Center and Face ID resign active without leaving the surface.
+        lifecycleObservers.append(center.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.usage.enterBackground(at: self.mediaNow())
+            }
+        })
+        // A return from background is ONE session whichever of the two
+        // notifications arrives first; the tracker ignores the second, and a
+        // `didBecomeActive` that no background preceded.
+        for name in [UIApplication.willEnterForegroundNotification, UIApplication.didBecomeActiveNotification] {
+            lifecycleObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.handleUsageForegroundEdge()
+                }
+            })
+        }
         // The S8 token's clearing edge: back to foreground re-arms the
         // one-flush-per-backgrounding-cycle guard.
         lifecycleObservers.append(center.addObserver(
@@ -495,6 +593,9 @@ final class ResidentObservationCenter {
         manualRunWatch = nil
         if FollowerTiming.recorder === followers {
             FollowerTiming.recorder = nil
+        }
+        if UsageProbe.sink === self {
+            UsageProbe.sink = nil
         }
         if Self.shared === self {
             Self.shared = nil
@@ -736,6 +837,9 @@ final class ResidentObservationCenter {
         if dailyHasUnwrittenCounts {
             appendDailyRecord(endedAt: now(), claim: dailyClaim)
         }
+        if usageHasUnwrittenCounts {
+            appendUsageRecord(endedAt: now(), claim: dailyClaim)
+        }
         resetCountsForNewDaily()
         mintDailyRun(at: now(), bounds: dayBounds)
         writeDailyRecord()
@@ -767,6 +871,9 @@ final class ResidentObservationCenter {
         _ = followers.disarmWindow()
 
         resetCountsForNewDaily()
+        // The open usage visits are the erased owner's too: one settling
+        // after the erase would count its abandonment into the next owner's day.
+        usage.forgetAll()
         let currentNow = now()
         mintDailyRun(at: currentNow, bounds: rebaseDay(at: currentNow))
     }
@@ -812,6 +919,9 @@ final class ResidentObservationCenter {
             if dailyHasUnwrittenCounts {
                 appendDailyRecord(endedAt: endedAt ?? now(), claim: dailyClaim)
             }
+            if usageHasUnwrittenCounts {
+                appendUsageRecord(endedAt: endedAt ?? now(), claim: dailyClaim)
+            }
             resetCountsForNewDaily()
             mintDailyRun(at: now(), bounds: dayBounds)
             return
@@ -819,13 +929,87 @@ final class ResidentObservationCenter {
         // Dirty check (B·F6). A rollover close always writes: its `endedAt`
         // is the day end, which marks the line as complete (F20) even when
         // nothing was counted since the last flush.
-        if endedAt == nil,
-           lastWrittenCounters == core.counters,
-           lastWrittenStartedAt == dailyRunStartedAt,
-           followersMatchLastWrite {
-            return
+        let residentClean = endedAt == nil
+            && lastWrittenCounters == core.counters
+            && lastWrittenStartedAt == dailyRunStartedAt
+            && followersMatchLastWrite
+        if !residentClean {
+            appendDailyRecord(endedAt: endedAt ?? now(), claim: claim)
         }
-        appendDailyRecord(endedAt: endedAt ?? now(), claim: claim)
+        // The usage line: written when it holds something new; closed at the
+        // day end on a rollover once it has ever been written. A day with no
+        // usage at all writes no usage line.
+        if usageHasUnwrittenCounts || (endedAt != nil && usageWrittenChange != nil) {
+            appendUsageRecord(endedAt: endedAt ?? now(), claim: claim)
+        }
+    }
+
+    /// Whether the usage line on disk is behind the counts in memory. A
+    /// never-written id is behind only when something was counted.
+    private var usageHasUnwrittenCounts: Bool {
+        if let usageWrittenChange {
+            return usageWrittenChange != usage.changeCount || usageWrittenStartedAt != usageRunStartedAt
+        }
+        return !usage.counts.isEmpty
+    }
+
+    private func appendUsageRecord(endedAt: Date, claim: TelemetryClaimKey) {
+        if SpikeRunStore.finishRun(makeUsageRecord(endedAt: endedAt, claim: claim),
+                                   owner: .explicit(claim.ownerUID), location: location) {
+            usageWrittenChange = usage.changeCount
+            usageWrittenStartedAt = usageRunStartedAt
+        }
+    }
+
+    /// The day's usage as a `usage-daily` daily rollup: the resident's day
+    /// and claim, the usage id, only the keys that are not zero.
+    func makeUsageRecord(endedAt: Date, claim: TelemetryClaimKey) -> SpikeRun {
+        let context = stamp()
+        var run = SpikeRun(
+            id: usageRunID,
+            spikeID: UsageRecordIDs.spikeID,
+            scenarioID: UsageRecordIDs.scenarioID,
+            variantID: nil,
+            startedAt: usageRunStartedAt,
+            endedAt: endedAt,
+            appVersion: context.appVersion,
+            appBuild: claim.appBuild,
+            appCommit: context.appCommit,
+            deviceModel: context.deviceModel,
+            osVersion: claim.osVersion,
+            timeZoneIdentifier: context.timeZoneIdentifier,
+            localeIdentifier: context.localeIdentifier,
+            buildConfiguration: claim.buildConfiguration,
+            metrics: usage.counts.metrics,
+            note: nil,
+            outcome: .completed,
+            abortReason: nil
+        )
+        run.dayKey = dailyDay.dayKey
+        run.dayTZOffsetMin = dailyDay.tzOffsetMin
+        run.kind = .dailyRollup
+        run.ownerUID = claim.ownerUID
+        return run
+    }
+
+    // MARK: Usage signals (UsageSink)
+
+    /// A return from background (or the first foreground of a process that
+    /// came up in the background). The day rolls over FIRST — a lifecycle
+    /// edge, not a body pass, so the flush may run here — so a return after
+    /// midnight counts on the new day.
+    private func handleUsageForegroundEdge() {
+        guard !usage.inForeground else { return }
+        performRolloverFlushIfDue()
+        usage.enterForeground(at: mediaNow())
+    }
+
+    /// The signal path's day check, as the resident's: one compare, and a
+    /// scheduled hop when midnight has passed.
+    private func noteUsageSignal() {
+        if now().timeIntervalSinceReferenceDate >= dayEndSinceReference {
+            scheduleRolloverFlush()
+        }
     }
 
     /// The settings row's view of today (red-team S2): the day line a flush
@@ -884,5 +1068,45 @@ final class ResidentObservationCenter {
         run.kind = .dailyRollup
         run.ownerUID = claim.ownerUID
         return (run, followerDay, followerOverflow)
+    }
+}
+
+// MARK: - UsageProbe's sink
+
+/// Every call: the day check (one Date read, one compare), then the
+/// tracker's O(1) bump. `enter` and `leave` also read the media clock.
+extension ResidentObservationCenter: UsageSink {
+    func usageEnter(_ entry: UsageEntry) {
+        noteUsageSignal()
+        usage.enter(entry, at: mediaNow())
+    }
+
+    func usageUse(_ use: UsageUse) {
+        noteUsageSignal()
+        usage.use(use)
+    }
+
+    func usageDone(_ done: UsageDone) {
+        noteUsageSignal()
+        usage.done(done)
+    }
+
+    func usageView(_ view: UsageView) {
+        noteUsageSignal()
+        usage.view(view)
+    }
+
+    func usageCount(_ event: UsageEvent) {
+        noteUsageSignal()
+        usage.count(event)
+    }
+
+    func usageNoteExit(_ route: UsageRoute) {
+        usage.noteExit(route)
+    }
+
+    func usageLeave(_ feature: UsageFeature, via route: UsageRoute?) {
+        noteUsageSignal()
+        usage.leave(feature, via: route, at: mediaNow())
     }
 }
