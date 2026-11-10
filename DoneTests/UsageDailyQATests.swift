@@ -555,6 +555,76 @@ final class UsageQARecordTests: XCTestCase {
         print("QA-MEASURE usage line all-keys bytes=\(bytes) keys=\(metrics.count)")
         XCTAssertLessThan(bytes, 3 * 1024, "a full day stays near the spec's ~2 KB, not several times it")
     }
+
+    /// The same full day, uploaded: the redactor must let every legitimate
+    /// usage key through unchanged (a histogram or a key it does not know
+    /// how to judge would silently vanish on the server), and nothing else.
+    func testAFullDaysLineGoesUpWholeThroughTheRedactor() async throws {
+        let clock = QABox(UsageQARig.at(10, 0))
+        let media = QABox(0.0)
+        center = UsageQARig.makeCenter(location: location, clock: clock, media: media,
+                                       countsLaunchSession: true, gates: QABox(Set(UsageGate.allCases)))
+        for entry in UsageEntry.allCases {
+            UsageProbe.enter(entry)
+            media.value += 400
+            let (f, route) = feature(of: entry)
+            UsageProbe.leave(f, via: route)
+        }
+        for route in UsageRoute.allCases {
+            let (f, entry) = feature(of: route)
+            UsageProbe.enter(entry)
+            UsageProbe.leave(f, via: route)
+        }
+        let toggles = Set(UsageGate.allCases.flatMap { [$0.toggleTags.on, $0.toggleTags.off] })
+        for use in UsageUse.allCases where !toggles.contains(use) { UsageProbe.use(use) }
+        for gate in UsageGate.allCases {
+            UsageProbe.switchToggled(gate, isOn: false)
+            UsageProbe.switchToggled(gate, isOn: true)
+        }
+        for done in UsageDone.allCases { UsageProbe.done(done) }
+        for view in UsageView.allCases { UsageProbe.view(view) }
+        for event in UsageEvent.allCases { UsageProbe.count(event) }
+        center?.flushDaily()
+        let onDisk = try XCTUnwrap(UsageQARig.records(location).last)
+
+        let suite = "UsageQAUpload-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var deps = TelemetryUploader.Dependencies()
+        deps.defaults = defaults
+        deps.location = location
+        let later = UsageQARig.at(11, 0)
+        deps.now = { later }
+        deps.launchDelay = 0
+        deps.makeKeepAlive = { nil }
+        deps.bootstrapOwner = { nil }
+        let uploader = TelemetryUploader(dependencies: deps)
+        let server = SyncFakeServer(userId: UsageQARig.uid)
+        let user = UsageQARig.uid
+        uploader.attach(TelemetryUploader.Attachment(gateway: server, isBlockedByBuild: { false },
+                                                     currentUserID: { user }, isSignedIn: { true }))
+        defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        TelemetryConsentStore.recordGrant(defaults, at: UsageQARig.at(9, 0))
+        _ = await uploader.uploadNow(trigger: .deckOpen)
+
+        let row = try XCTUnwrap(server.telemetryRow(runID: onDisk.id), "the usage line was uploaded")
+        let sent = try XCTUnwrap(row.data["metrics"] as? [String: Any])
+        let registry = try UsageQARig.registryUsageKeys()
+        XCTAssertEqual(Set(sent.keys), Set(registry.keys), "every registered key of a full day reaches the server, and nothing else")
+        var changed: [String] = []
+        for (key, value) in onDisk.metrics {
+            switch value {
+            case .number(let n):
+                if (sent[key] as? NSNumber)?.doubleValue != n { changed.append(key) }
+            case .string(let s):
+                if sent[key] as? String != s { changed.append(key) }
+            default:
+                changed.append("\(key): unexpected kind on disk")
+            }
+        }
+        XCTAssertEqual(changed.sorted(), [], "values reach the server as written")
+        XCTAssertGreaterThan(server.telemetryRowCount(), 0)
+    }
 }
 
 // MARK: - The real detail view: writes that are not the user
