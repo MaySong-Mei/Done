@@ -63,6 +63,7 @@ enum UsageUse: UInt16, CaseIterable {
     case archivedTodoStackOn, archivedTodoStackOff
     case archivedWannaOn, archivedWannaOff
     case archivedReportOn, archivedReportOff
+    case archivedRemindersOn, archivedRemindersOff
 }
 
 enum UsageDone: UInt16, CaseIterable {
@@ -89,7 +90,7 @@ enum UsageEvent: UInt16, CaseIterable {
 /// Each gate owns its feature's `available` key: the feature's denominator,
 /// since a switched-off feature reads zero whether or not anyone would use it.
 enum UsageGate: UInt16, CaseIterable {
-    case focus, todoStack, wanna, report
+    case focus, todoStack, wanna, report, reminders
 
     /// The Settings toggle tags for this switch.
     var toggleTags: (on: UsageUse, off: UsageUse) {
@@ -98,6 +99,7 @@ enum UsageGate: UInt16, CaseIterable {
         case .todoStack: return (.archivedTodoStackOn, .archivedTodoStackOff)
         case .wanna: return (.archivedWannaOn, .archivedWannaOff)
         case .report: return (.archivedReportOn, .archivedReportOff)
+        case .reminders: return (.archivedRemindersOn, .archivedRemindersOff)
         }
     }
 }
@@ -183,6 +185,7 @@ enum UsageFeature: UInt16, CaseIterable {
     case report
     /// Settings → Archived Features itself: the switch flips.
     case archived
+    case reminders
 
     /// The feature whose `available` key a gate writes.
     static func owner(of gate: UsageGate) -> UsageFeature {
@@ -191,6 +194,7 @@ enum UsageFeature: UInt16, CaseIterable {
         case .todoStack: return .todoStack
         case .wanna: return .wanna
         case .report: return .report
+        case .reminders: return .reminders
         }
     }
 
@@ -305,6 +309,8 @@ enum UsageFeature: UInt16, CaseIterable {
             return UsageDeclaration(name: "wanna", summary: "Wanna", sinceBuild: build, gate: .wanna)
         case .report:
             return UsageDeclaration(name: "report", summary: "Report", sinceBuild: build, gate: .report)
+        case .reminders:
+            return UsageDeclaration(name: "reminders", summary: "Reminders panel", sinceBuild: build, gate: .reminders)
         case .archived:
             return UsageDeclaration(
                 name: "archived", summary: "Settings - Archived Features", sinceBuild: build,
@@ -317,6 +323,8 @@ enum UsageFeature: UInt16, CaseIterable {
                     .init(tag: .archivedWannaOff, name: "wanna_off", what: "the Wanna switch turned off by the user"),
                     .init(tag: .archivedReportOn, name: "report_on", what: "the Report switch turned on by the user"),
                     .init(tag: .archivedReportOff, name: "report_off", what: "the Report switch turned off by the user"),
+                    .init(tag: .archivedRemindersOn, name: "reminders_on", what: "the Reminders switch turned on by the user"),
+                    .init(tag: .archivedRemindersOff, name: "reminders_off", what: "the Reminders switch turned off by the user"),
                 ]
             )
         }

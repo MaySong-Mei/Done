@@ -341,7 +341,7 @@ final class UsageCenterTests: XCTestCase {
         XCTAssertEqual(n(usage, "usage.wanna.available"), 1, "turned on during the session, counted once")
         XCTAssertEqual(n(usage, "usage.archived.use.wanna_on"), 2)
         XCTAssertEqual(n(usage, "usage.archived.use.wanna_off"), 1)
-        for key in ["usage.focus.available", "usage.wanna.available", "usage.todo_stack.available", "usage.report.available"] {
+        for key in ["usage.focus.available", "usage.wanna.available", "usage.todo_stack.available", "usage.report.available", "usage.reminders.available"] {
             XCTAssertLessThanOrEqual(n(usage, key) ?? 0, n(usage, "sessions") ?? 0, "\(key) <= sessions")
         }
     }

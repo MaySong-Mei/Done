@@ -1267,6 +1267,7 @@ struct CalendarPageView: View {
     @Environment(\.scenePhase) private var scenePhase
     // Reminder pull-down panel state.
     @State private var isReminderPanelOpen: Bool = false
+    @AppStorage(AppSettingsKeys.archivedRemindersEnabled) private var archivedRemindersEnabled = false
     @State private var schedulingReminderID: UUID? = nil
     @State private var pendingReminderSchedule: ReminderSchedulePrefill? = nil
     @State private var pendingInterruptComposer: PendingInterruptComposerPresentation? = nil
@@ -2426,7 +2427,7 @@ private extension CalendarPageView {
         // reflows beneath it (never covered). When closed, height is 0 and the
         // timeline sits right under the header.
         let reminderPanelMaxHeight = metrics.containerSize.height * 0.5
-        let reminderRevealHeight = isReminderPanelOpen
+        let reminderRevealHeight = isReminderPanelOpen && archivedRemindersEnabled
             ? ReminderPanelView.openHeight(
                 count: store.visibleReminders.count,
                 maxHeight: reminderPanelMaxHeight
@@ -2451,9 +2452,14 @@ private extension CalendarPageView {
                 }
             }
             .animation(.spring(duration: 0.35, bounce: 0.15), value: calendarState.rangeMode)
+            .onChange(of: archivedRemindersEnabled) { _, enabled in
+                if !enabled { isReminderPanelOpen = false }
+            }
 
             // Reminder panel sits below the header in z-order (header stays on
             // top) and fills the reflowed gap above the timeline.
+            // Kept in the tree with the Reminders switch off: at height 0 it
+            // draws nothing, and its half-typed draft survives the switch.
             ReminderPanelView(
                 isOpen: $isReminderPanelOpen,
                 height: reminderRevealHeight,
@@ -6152,7 +6158,7 @@ private extension CalendarPageView {
     /// update and trips a "modifying state during view update" crash.
     private func updateReminderPanelForScroll(_ scrollY: CGFloat) {
         if !isReminderPanelOpen {
-            guard scrollY < -70 else { return }
+            guard scrollY < -70, archivedRemindersEnabled else { return }
             DispatchQueue.main.async {
                 guard !isReminderPanelOpen else { return }
                 withAnimation(.spring(response: 0.42, dampingFraction: 0.88)) {

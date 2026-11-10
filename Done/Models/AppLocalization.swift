@@ -242,7 +242,7 @@ enum LKey {
 
     // Settings
     case settings, general, aiAndAgent, recordingAndWorkflow, analysisPreferences, dataAndPrivacy
-    case archivedFeatures, archivedTodoStack, hintArchivedFeatures
+    case archivedFeatures, archivedTodoStack, archivedReminders, hintArchivedFeatures
     case appearance, appearanceSystem, appearanceLight, appearanceDark
     case status, provider, apiKey, learnedRules, enterApiKey, notConfigured, keySaved
     case missing, configured, llmProvider, defaultTab
@@ -561,6 +561,7 @@ enum LKey {
         case .recordingAndWorkflow: return "Recording & Workflow"
         case .archivedFeatures: return "Archived Features"
         case .archivedTodoStack: return "Todo Stack"
+        case .archivedReminders: return "Reminders (pull-down)"
         case .hintArchivedFeatures: return "These features are being retired and may be removed in a future version. Turning one off hides it; your data is kept."
         case .analysisPreferences: return "Analysis Preferences"
         case .watchSettings: return "Apple Watch"
@@ -1300,6 +1301,7 @@ enum LKey {
         case .recordingAndWorkflow: return "记录与工作流"
         case .archivedFeatures: return "归档功能"
         case .archivedTodoStack: return "待办堆"
+        case .archivedReminders: return "下拉待办"
         case .hintArchivedFeatures: return "这些功能正在退役，未来版本可能移除。关闭只是隐藏，你的数据会保留。"
         case .analysisPreferences: return "分析偏好"
         case .watchSettings: return "Apple Watch"

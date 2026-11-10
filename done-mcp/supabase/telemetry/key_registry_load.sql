@@ -4,7 +4,7 @@
 -- One statement, so a liveness_key that points forward in the list resolves
 -- at statement end (the self-reference is a plain, non-deferrable FK).
 -- Retired keys stay (retired_build set); this file never deletes a row.
--- 253 keys.
+-- 256 keys.
 insert into public.key_registry (key, kind, family, value_schema, since_build, retired_build, liveness_key, spike_id, description) values
   ('detailBodyPasses', 'counter', 'fixwatch', 'number', 5, null, null, 'resident-daily', 'Entry 1: CalendarEventDetailView body evaluations on the day (per-instance store seam onDetailBodyPass).'),
   ('draftComputes', 'counter', 'fixwatch', 'number', 5, null, null, 'resident-daily', 'Entry 1: prefilled draft computations on the day (seam onPrefilledDraftComputed).'),
@@ -258,7 +258,10 @@ insert into public.key_registry (key, kind, family, value_schema, since_build, r
   ('usage.archived.use.wanna_on', 'counter', 'usage', 'number', 31, null, 'sessions', 'usage-daily', 'Usage - Settings - Archived Features - used: the Wanna switch turned on by the user.'),
   ('usage.archived.use.wanna_off', 'counter', 'usage', 'number', 31, null, 'sessions', 'usage-daily', 'Usage - Settings - Archived Features - used: the Wanna switch turned off by the user.'),
   ('usage.archived.use.report_on', 'counter', 'usage', 'number', 31, null, 'sessions', 'usage-daily', 'Usage - Settings - Archived Features - used: the Report switch turned on by the user.'),
-  ('usage.archived.use.report_off', 'counter', 'usage', 'number', 31, null, 'sessions', 'usage-daily', 'Usage - Settings - Archived Features - used: the Report switch turned off by the user.')
+  ('usage.archived.use.report_off', 'counter', 'usage', 'number', 31, null, 'sessions', 'usage-daily', 'Usage - Settings - Archived Features - used: the Report switch turned off by the user.'),
+  ('usage.archived.use.reminders_on', 'counter', 'usage', 'number', 31, null, 'sessions', 'usage-daily', 'Usage - Settings - Archived Features - used: the Reminders switch turned on by the user.'),
+  ('usage.archived.use.reminders_off', 'counter', 'usage', 'number', 31, null, 'sessions', 'usage-daily', 'Usage - Settings - Archived Features - used: the Reminders switch turned off by the user.'),
+  ('usage.reminders.available', 'counter', 'usage', 'number', 31, null, 'sessions', 'usage-daily', 'Usage - Reminders panel - available: the switch was on for a session (on at its start, or turned on during it); at most once per session, so <= sessions. The denominator of this feature''s keys.')
 on conflict (key) do update set
   kind = excluded.kind,
   family = excluded.family,

@@ -85,6 +85,7 @@ final class UsageArchivedSwitchTests: XCTestCase {
     private static let keys = [
         AppSettingsKeys.archivedFocusEnabled, AppSettingsKeys.archivedTodoStackEnabled,
         AppSettingsKeys.archivedWannaEnabled, AppSettingsKeys.archivedReportEnabled,
+        AppSettingsKeys.archivedRemindersEnabled,
     ]
     private var saved: [String: Any] = [:]
     private var location: SpikeRunStorageLocation!
@@ -133,8 +134,8 @@ final class UsageArchivedSwitchTests: XCTestCase {
         let host = UsageSurfaceHost.show(NavigationStack { ArchivedFeaturesView() })
         defer { UsageSurfaceHost.hide(host) }
         let switches = UsageSurfaceHost.views(UISwitch.self, in: host.window)
-        XCTAssertEqual(switches.count, 4, "the page's four switches, top to bottom: Focus, Todo stack, Wanna, Report")
-        guard switches.count == 4 else { return }
+        XCTAssertEqual(switches.count, 5, "the page's five switches, top to bottom: Focus, Todo stack, Wanna, Report, Reminders")
+        guard switches.count == 5 else { return }
 
         // Programmatic writes while the page is on screen: what a reset, an
         // erase or another writer does.

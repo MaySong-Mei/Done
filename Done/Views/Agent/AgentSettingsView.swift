@@ -563,6 +563,7 @@ struct ArchivedFeaturesView: View {
     @AppStorage(AppSettingsKeys.archivedTodoStackEnabled) private var todoStackEnabled = false
     @AppStorage(AppSettingsKeys.archivedWannaEnabled) private var wannaEnabled = false
     @AppStorage(AppSettingsKeys.archivedReportEnabled) private var reportEnabled = false
+    @AppStorage(AppSettingsKeys.archivedRemindersEnabled) private var remindersEnabled = false
 
     var body: some View {
         settingsPage(L(.archivedFeatures)) {
@@ -571,6 +572,7 @@ struct ArchivedFeaturesView: View {
                 Toggle(L(.archivedTodoStack), isOn: Self.userToggle($todoStackEnabled, .todoStack))
                 Toggle(L(.tabWanna), isOn: Self.userToggle($wannaEnabled, .wanna))
                 Toggle(L(.tabReport), isOn: Self.userToggle($reportEnabled, .report))
+                Toggle(L(.archivedReminders), isOn: Self.userToggle($remindersEnabled, .reminders))
 
                 settingsHintText(L(.hintArchivedFeatures))
             }
