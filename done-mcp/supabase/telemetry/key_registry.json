@@ -758,5 +758,14 @@
    "spike_id": "usage-daily", "description": "Usage - Settings - Archived Features - used: the Report switch turned on by the user."},
   {"key": "usage.archived.use.report_off", "kind": "counter", "family": "usage", "value_schema": "number",
    "since_build": 31, "retired_build": null, "liveness_key": "sessions",
-   "spike_id": "usage-daily", "description": "Usage - Settings - Archived Features - used: the Report switch turned off by the user."}
+   "spike_id": "usage-daily", "description": "Usage - Settings - Archived Features - used: the Report switch turned off by the user."},
+  {"key": "usage.archived.use.reminders_on", "kind": "counter", "family": "usage", "value_schema": "number",
+   "since_build": 31, "retired_build": null, "liveness_key": "sessions",
+   "spike_id": "usage-daily", "description": "Usage - Settings - Archived Features - used: the Reminders switch turned on by the user."},
+  {"key": "usage.archived.use.reminders_off", "kind": "counter", "family": "usage", "value_schema": "number",
+   "since_build": 31, "retired_build": null, "liveness_key": "sessions",
+   "spike_id": "usage-daily", "description": "Usage - Settings - Archived Features - used: the Reminders switch turned off by the user."},
+  {"key": "usage.reminders.available", "kind": "counter", "family": "usage", "value_schema": "number",
+   "since_build": 31, "retired_build": null, "liveness_key": "sessions",
+   "spike_id": "usage-daily", "description": "Usage - Reminders panel - available: the switch was on for a session (on at its start, or turned on during it); at most once per session, so <= sessions. The denominator of this feature's keys."}
 ]

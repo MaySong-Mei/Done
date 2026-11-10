@@ -221,6 +221,7 @@ final class ArchivedFeaturesRulesTests: XCTestCase {
         AppSettingsKeys.archivedTodoStackEnabled,
         AppSettingsKeys.archivedWannaEnabled,
         AppSettingsKeys.archivedReportEnabled,
+        AppSettingsKeys.archivedRemindersEnabled,
     ]
 
     func testSwitchesStayOnTheDeviceAndReset() {
@@ -252,5 +253,16 @@ final class ArchivedFeaturesRulesTests: XCTestCase {
         let todoOnly = calendarHeaderAvailableTools(focusEnabled: false, todoStackEnabled: true)
         XCTAssertFalse(todoOnly.contains(.focus))
         XCTAssertTrue(todoOnly.contains(.todo))
+    }
+
+    func testEachSwitchIsItsOwnUsageGate() {
+        let suite = "ArchivedFeaturesRulesTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertEqual(AppSettingsKeys.archivedFeatureGatesOn(defaults), [])
+        defaults.set(true, forKey: AppSettingsKeys.archivedRemindersEnabled)
+        XCTAssertEqual(AppSettingsKeys.archivedFeatureGatesOn(defaults), [.reminders])
+        for key in keys { defaults.set(true, forKey: key) }
+        XCTAssertEqual(AppSettingsKeys.archivedFeatureGatesOn(defaults), Set(UsageGate.allCases))
     }
 }

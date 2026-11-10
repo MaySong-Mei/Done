@@ -316,7 +316,8 @@ final class UsageQAInvariantTests: XCTestCase {
     /// The spec's names: features with visits, and the gate-owning ones.
     private static let visited = ["focus", "focus_precreate", "event_detail", "create", "repeat"]
     private static let available = ["usage.focus.available", "usage.todo_stack.available",
-                                    "usage.wanna.available", "usage.report.available"]
+                                    "usage.wanna.available", "usage.report.available",
+                                    "usage.reminders.available"]
 
     private func sum(_ counts: UsageCounts, prefix: String, excluding: Set<String> = []) -> Int {
         UsageLayout.shared.keys
@@ -488,7 +489,8 @@ final class UsageQARecordTests: XCTestCase {
         case .repeatDeleteSeries: return (.repeatRuleEditor, .repeatRule, nil)
         case .repeatForm, .allDayToggle: return nil
         case .archivedFocusOn, .archivedFocusOff, .archivedTodoStackOn, .archivedTodoStackOff,
-             .archivedWannaOn, .archivedWannaOff, .archivedReportOn, .archivedReportOff: return nil
+             .archivedWannaOn, .archivedWannaOff, .archivedReportOn, .archivedReportOff,
+             .archivedRemindersOn, .archivedRemindersOff: return nil
         }
     }
 

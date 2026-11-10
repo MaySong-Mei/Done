@@ -26,6 +26,7 @@ enum AppSettingsKeys {
     static let archivedTodoStackEnabled = "archivedTodoStackEnabled"
     static let archivedWannaEnabled = "archivedWannaEnabled"
     static let archivedReportEnabled = "archivedReportEnabled"
+    static let archivedRemindersEnabled = "archivedRemindersEnabled"
 
     /// gh#273 §6.3: the archive switches that are on, as usage's gates — the
     /// resident center reads this at session starts for `available`.
@@ -35,6 +36,7 @@ enum AppSettingsKeys {
         if defaults.bool(forKey: archivedTodoStackEnabled) { on.insert(.todoStack) }
         if defaults.bool(forKey: archivedWannaEnabled) { on.insert(.wanna) }
         if defaults.bool(forKey: archivedReportEnabled) { on.insert(.report) }
+        if defaults.bool(forKey: archivedRemindersEnabled) { on.insert(.reminders) }
         return on
     }
     /// When true, calendar event blocks are rendered with effort-based
@@ -346,6 +348,7 @@ enum AppSettingsKeys {
         archivedTodoStackEnabled,
         archivedWannaEnabled,
         archivedReportEnabled,
+        archivedRemindersEnabled,
         effortOpacityEnabled,
         experimentalMultiTypeEvents,
         experimentalMultiTypeMaxCount,

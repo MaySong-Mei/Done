@@ -76,9 +76,11 @@ final class UsageModelTests: XCTestCase {
             "usage.repeat.enter.rule_editor", "usage.repeat.use.form", "usage.repeat.done", "usage.repeat.abandon",
             "usage.all_day.use",
             "usage.focus.available", "usage.todo_stack.available", "usage.wanna.available", "usage.report.available",
+            "usage.reminders.available",
             "usage.archived.use.focus_on", "usage.archived.use.focus_off", "usage.archived.use.todo_stack_on",
             "usage.archived.use.todo_stack_off", "usage.archived.use.wanna_on", "usage.archived.use.wanna_off",
             "usage.archived.use.report_on", "usage.archived.use.report_off",
+            "usage.archived.use.reminders_on", "usage.archived.use.reminders_off",
         ] {
             XCTAssertTrue(names.contains(expected), "missing \(expected)")
         }
