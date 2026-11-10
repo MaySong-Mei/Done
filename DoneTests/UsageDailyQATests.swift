@@ -47,13 +47,15 @@ private enum UsageQARig {
 
     static func makeCenter(
         location: SpikeRunStorageLocation, clock: QABox<Date>, media: QABox<Double>,
-        countsLaunchSession: Bool, gates: QABox<Set<UsageGate>> = QABox([])
+        countsLaunchSession: Bool, gates: QABox<Set<UsageGate>> = QABox([]),
+        owner: QABox<String?>? = nil
     ) -> ResidentObservationCenter {
+        let ownerBox = owner ?? QABox<String?>(uid)
         let center = ResidentObservationCenter(
             coordinator: SpikeSessionCoordinator(), store: nil, location: location, calendar: la,
             now: { clock.value }, mediaNow: { media.value },
             makeFrameProbe: { SpikeFrameProbe() },
-            ownerUID: { uid }, stamp: { stamp() },
+            ownerUID: { ownerBox.value }, stamp: { stamp() },
             installsFollowerProbe: false, isAppActive: { true }, verifiesSeed: false,
             seedTrail: { _ in }, countsLaunchSession: countsLaunchSession, isAppForeground: { true },
             availableGates: { gates.value }
@@ -475,10 +477,52 @@ final class UsageQARecordTests: XCTestCase {
         }
     }
 
+    /// The visit a use or done happens inside (round 2: one arriving after its
+    /// visit ended is a late write and is dropped). nil: the stage belongs to
+    /// no visit (the all-day switch, a repeat picked in an event form).
+    private func visit(for use: UsageUse) -> (UsageEntry, UsageFeature, UsageRoute?)? {
+        switch use {
+        case .focusExtend, .focusEndNow, .focusNote, .focusTrack: return (.focusTap, .focus, .focusRotate)
+        case .eventDetailPlan, .eventDetailReflect, .eventDetailTimelineNote, .eventDetailTodo, .eventDetailDelete:
+            return (.eventDetailCanvas, .eventDetail, nil)
+        case .repeatDeleteSeries: return (.repeatRuleEditor, .repeatRule, nil)
+        case .repeatForm, .allDayToggle: return nil
+        case .archivedFocusOn, .archivedFocusOff, .archivedTodoStackOn, .archivedTodoStackOff,
+             .archivedWannaOn, .archivedWannaOff, .archivedReportOn, .archivedReportOff: return nil
+        }
+    }
+
+    private func visit(for done: UsageDone) -> (UsageEntry, UsageFeature, UsageRoute?) {
+        switch done {
+        case .focusPrecreate: return (.focusPrecreatePill, .focusPrecreate, nil)
+        case .create, .createRepeat, .createAllDay, .createNote: return (.createPlus, .create, .createCancel)
+        case .repeatRule: return (.repeatRuleEditor, .repeatRule, nil)
+        }
+    }
+
+    /// Every use and done of the slice, each inside a visit of its feature.
+    private func useAndCompleteEverything(toggles: Set<UsageUse>) {
+        for use in UsageUse.allCases where !toggles.contains(use) {
+            if let (entry, feature, route) = visit(for: use) {
+                UsageProbe.enter(entry)
+                UsageProbe.use(use)
+                UsageProbe.leave(feature, via: route)
+            } else {
+                UsageProbe.use(use)
+            }
+        }
+        for done in UsageDone.allCases {
+            let (entry, feature, route) = visit(for: done)
+            UsageProbe.enter(entry)
+            UsageProbe.done(done)
+            UsageProbe.leave(feature, via: route)
+        }
+    }
+
     private func feature(of route: UsageRoute) -> (UsageFeature, UsageEntry) {
         switch route {
         case .focusSwipe, .focusRotate, .focusSystem: return (.focus, .focusTap)
-        case .createCancel, .createSwipe: return (.create, .createPlus)
+        case .createCancel, .createDismiss: return (.create, .createPlus)
         }
     }
 
@@ -506,12 +550,11 @@ final class UsageQARecordTests: XCTestCase {
             UsageProbe.leave(f, via: route)
         }
         let toggles = Set(UsageGate.allCases.flatMap { [$0.toggleTags.on, $0.toggleTags.off] })
-        for use in UsageUse.allCases where !toggles.contains(use) { UsageProbe.use(use) }
+        useAndCompleteEverything(toggles: toggles)
         for gate in UsageGate.allCases {
             UsageProbe.switchToggled(gate, isOn: false)
             UsageProbe.switchToggled(gate, isOn: true)
         }
-        for done in UsageDone.allCases { UsageProbe.done(done) }
         for view in UsageView.allCases { UsageProbe.view(view) }
         for event in UsageEvent.allCases { UsageProbe.count(event) }
         center?.flushDaily()
@@ -576,12 +619,11 @@ final class UsageQARecordTests: XCTestCase {
             UsageProbe.leave(f, via: route)
         }
         let toggles = Set(UsageGate.allCases.flatMap { [$0.toggleTags.on, $0.toggleTags.off] })
-        for use in UsageUse.allCases where !toggles.contains(use) { UsageProbe.use(use) }
+        useAndCompleteEverything(toggles: toggles)
         for gate in UsageGate.allCases {
             UsageProbe.switchToggled(gate, isOn: false)
             UsageProbe.switchToggled(gate, isOn: true)
         }
-        for done in UsageDone.allCases { UsageProbe.done(done) }
         for view in UsageView.allCases { UsageProbe.view(view) }
         for event in UsageEvent.allCases { UsageProbe.count(event) }
         center?.flushDaily()
@@ -939,5 +981,270 @@ final class UsageQAProbePlacementTests: XCTestCase {
         UsageProbe.leave(.create, via: .createCancel)
         """
         XCTAssertEqual(Self.probeCalls(in: Self.codeOnly(sample)), 2, "the two real calls; the property read is not a call")
+    }
+}
+
+// MARK: - Round 2: held signals across midnight, the stray guard, owner change
+
+@MainActor
+final class UsageQARound2CenterTests: XCTestCase {
+    private var location: SpikeRunStorageLocation!
+    private var center: ResidentObservationCenter?
+    private var displacedSink: UsageSink?
+    private var displacedRecorder: FollowerTimingRecorder?
+
+    override func setUp() {
+        super.setUp()
+        location = .ephemeral(id: UUID())
+        displacedSink = UsageProbe.sink
+        displacedRecorder = FollowerTiming.recorder
+        FollowerTiming.recorder = nil
+    }
+
+    override func tearDown() {
+        center?.deactivate()
+        center = nil
+        UsageProbe.sink = displacedSink
+        FollowerTiming.recorder = displacedRecorder
+        try? FileManager.default.removeItem(at: location.directory)
+        super.tearDown()
+    }
+
+    /// Lets the center's own delayed rollover hop run on the real clock.
+    private func waitOutTheForegroundHop() {
+        UsageQARig.pump(2.6)
+    }
+
+    /// Back from the background after midnight; inside the hop's delay the
+    /// user leaves the detail that was open, opens another and edits it. All
+    /// of it is the new day's, in the order it happened: the first visit
+    /// settles there, the second stays open and is used, not stray.
+    func testSignalsHeldAcrossAMidnightReturnReplayInOrderOnTheNewDay() throws {
+        let clock = QABox(UsageQARig.at(23, 50))
+        let media = QABox(0.0)
+        let made = UsageQARig.makeCenter(location: location, clock: clock, media: media, countsLaunchSession: true)
+        center = made
+
+        UsageProbe.enter(.eventDetailCanvas)
+        clock.value = UsageQARig.at(23, 51); media.value = 60
+        UsageQARig.post(UIApplication.willResignActiveNotification)
+        UsageQARig.post(UIApplication.didEnterBackgroundNotification)
+
+        clock.value = UsageQARig.at(0, 10, nextDay: true); media.value = 1260
+        UsageQARig.post(UIApplication.willEnterForegroundNotification)
+        UsageQARig.post(UIApplication.didBecomeActiveNotification)
+        clock.value = UsageQARig.at(0, 10, 5, nextDay: true); media.value = 1265
+        UsageProbe.leave(.eventDetail)
+        media.value = 1266
+        UsageProbe.enter(.eventDetailList)
+        UsageProbe.use(.eventDetailPlan)
+        waitOutTheForegroundHop()
+        made.flushDaily()
+
+        let records = UsageQARig.records(location)
+        XCTAssertEqual(records.count, 2)
+        guard records.count == 2 else { return }
+        let (old, new) = (records[0], records[1])
+        XCTAssertEqual(UsageQARig.number(old, "usage.event_detail.enter.canvas"), 1)
+        XCTAssertNil(old.metrics["usage.event_detail.enter.list"], "nothing of 00:10 on the old day")
+        XCTAssertNil(old.metrics["usage.event_detail.dwell"])
+        XCTAssertEqual(UsageQARig.histogram(new, "usage.event_detail.dwell"), UsageQARig.oneVisit(in: UsageQARig.specBucket(65)),
+                       "one settled visit: 60 s before the background, 5 s after the return")
+        XCTAssertEqual(UsageQARig.number(new, "usage.event_detail.abandon"), 1)
+        XCTAssertEqual(UsageQARig.number(new, "usage.event_detail.enter.list"), 1)
+        XCTAssertEqual(UsageQARig.number(new, "usage.event_detail.use.plan"), 1, "the edit in the new visit is a use, not a stray")
+        XCTAssertEqual(UsageQARig.number(new, "sessions"), 1)
+        XCTAssertTrue(made.usage.isVisitOpen(.eventDetail), "the leave replayed before the enter, not after")
+    }
+
+    /// The app is brought back after midnight and goes back to the
+    /// background before it ever becomes active; the user really returns in
+    /// the morning. Background time is not dwell, and the morning return is
+    /// a session of its own.
+    func testAMidnightReturnThatNeverBecameActiveLeavesNoClockRunningInTheBackground() throws {
+        let clock = QABox(UsageQARig.at(23, 50))
+        let media = QABox(0.0)
+        let made = UsageQARig.makeCenter(location: location, clock: clock, media: media, countsLaunchSession: true)
+        center = made
+
+        UsageProbe.enter(.eventDetailCanvas)
+        clock.value = UsageQARig.at(23, 51); media.value = 60
+        UsageQARig.post(UIApplication.willResignActiveNotification)
+        UsageQARig.post(UIApplication.didEnterBackgroundNotification)
+
+        clock.value = UsageQARig.at(0, 10, nextDay: true); media.value = 1260
+        UsageQARig.post(UIApplication.willEnterForegroundNotification)
+        media.value = 1261
+        UsageQARig.post(UIApplication.didEnterBackgroundNotification)
+        waitOutTheForegroundHop()
+
+        clock.value = UsageQARig.at(8, 0, nextDay: true); media.value = 1261 + 28_140
+        UsageQARig.post(UIApplication.willEnterForegroundNotification)
+        UsageQARig.post(UIApplication.didBecomeActiveNotification)
+        media.value += 5
+        UsageProbe.leave(.eventDetail)
+        made.flushDaily()
+
+        let new = try XCTUnwrap(UsageQARig.records(location).last)
+        XCTAssertEqual(UsageQARig.number(new, "sessions"), 2, "00:10 and 08:00 are two returns from the background")
+        XCTAssertEqual(UsageQARig.histogram(new, "usage.event_detail.dwell"), UsageQARig.oneVisit(in: UsageQARig.specBucket(66)),
+                       "60 s + 1 s + 5 s in the foreground; the night in the background is not dwell")
+    }
+
+    /// Uses of features that have no visits, and the repeat picked in an
+    /// event form, are never late writes: a sibling visit having ended must
+    /// not swallow them. Positive control: a done after its own visit ended
+    /// is dropped (the guard is live in this rig).
+    func testTheStrayGuardKeepsUsesThatBelongToNoVisit() throws {
+        let made = UsageQARig.makeCenter(location: location, clock: QABox(UsageQARig.at(10, 0)), media: QABox(0),
+                                         countsLaunchSession: true)
+        center = made
+
+        UsageProbe.enter(.createPlus)
+        UsageProbe.leave(.create, via: .createCancel)
+        UsageProbe.enter(.repeatRuleEditor)
+        UsageProbe.leave(.repeatRule)
+
+        UsageProbe.use(.allDayToggle)
+        UsageProbe.use(.repeatForm)
+        UsageProbe.switchToggled(.focus, isOn: true)
+        UsageProbe.done(.create)
+
+        XCTAssertEqual(made.usage.counts.count("usage.all_day.use"), 1, "the all-day switch belongs to no visit")
+        XCTAssertEqual(made.usage.counts.count("usage.repeat.use.form"), 1, "a repeat picked in a form is not the rule editor's")
+        XCTAssertEqual(made.usage.counts.count("usage.archived.use.focus_on"), 1)
+        XCTAssertEqual(made.usage.counts.count("usage.create.done"), 0, "positive control: a done after its visit ended is dropped")
+    }
+
+    /// The account changes while a detail is open; the change is noticed at
+    /// the next flush (the background edge); the user comes back and leaves
+    /// the detail. The visit was the first owner's: it settles nowhere —
+    /// neither its abandonment nor its dwell lands in the second owner's
+    /// record — and a fresh visit afterwards counts normally.
+    func testAnOwnerChangeMidVisitSettlesTheOldVisitNowhere() throws {
+        let owner = QABox<String?>(UsageQARig.uid)
+        let clock = QABox(UsageQARig.at(10, 0))
+        let media = QABox(0.0)
+        let made = UsageQARig.makeCenter(location: location, clock: clock, media: media, countsLaunchSession: true, owner: owner)
+        center = made
+
+        UsageProbe.enter(.eventDetailCanvas)
+        media.value = 30
+        owner.value = "99999999-2222-4333-8444-555555555555"
+        UsageQARig.post(UIApplication.willResignActiveNotification)
+        UsageQARig.post(UIApplication.didEnterBackgroundNotification)
+        clock.value = UsageQARig.at(10, 5); media.value = 330
+        UsageQARig.post(UIApplication.willEnterForegroundNotification)
+        UsageQARig.post(UIApplication.didBecomeActiveNotification)
+        media.value = 340
+        UsageProbe.leave(.eventDetail)
+
+        UsageProbe.enter(.eventDetailSearch)
+        media.value = 345
+        UsageProbe.leave(.eventDetail)
+        made.flushDaily()
+
+        let byOwner = Dictionary(grouping: UsageQARig.records(location), by: { $0.ownerUID ?? "nil" })
+        let first = try XCTUnwrap(byOwner[UsageQARig.uid]?.last)
+        let second = try XCTUnwrap(byOwner["99999999-2222-4333-8444-555555555555"]?.last)
+        XCTAssertEqual(UsageQARig.number(first, "usage.event_detail.enter.canvas"), 1, "the first owner's line has the enter")
+        XCTAssertNil(first.metrics["usage.event_detail.abandon"])
+        XCTAssertNil(second.metrics["usage.event_detail.enter.canvas"])
+        XCTAssertEqual(UsageQARig.number(second, "usage.event_detail.enter.search"), 1)
+        XCTAssertEqual(UsageQARig.number(second, "usage.event_detail.abandon"), 1, "only the fresh visit is the second owner's")
+        XCTAssertEqual(UsageQARig.histogram(second, "usage.event_detail.dwell"), UsageQARig.oneVisit(in: UsageQARig.specBucket(5)))
+    }
+}
+
+// MARK: - Round 2: an erase while an upload batch is reading the files
+
+@MainActor
+final class UsageQAEraseRaceTests: XCTestCase {
+    private var location: SpikeRunStorageLocation!
+    private var center: ResidentObservationCenter?
+    private var displacedSink: UsageSink?
+    private var displacedRecorder: FollowerTimingRecorder?
+
+    override func setUp() {
+        super.setUp()
+        location = .ephemeral(id: UUID())
+        displacedSink = UsageProbe.sink
+        displacedRecorder = FollowerTiming.recorder
+        FollowerTiming.recorder = nil
+    }
+
+    override func tearDown() {
+        center?.deactivate()
+        center = nil
+        UsageProbe.sink = displacedSink
+        FollowerTiming.recorder = displacedRecorder
+        try? FileManager.default.removeItem(at: location.directory)
+        super.tearDown()
+    }
+
+    /// A batch starts and is still reading the record files (one file is
+    /// large, so the read takes a while off the main thread) when the erase
+    /// begins. Nothing read before the erase may go up. Positive control: the
+    /// same batch with no erase uploads.
+    private func runBatch(erasingDuringTheRead: Bool) async throws -> (outcome: TelemetryUploadOutcome, rows: Int, seconds: Double) {
+        let made = UsageQARig.makeCenter(location: location, clock: QABox(UsageQARig.at(10, 0)), media: QABox(0),
+                                         countsLaunchSession: true)
+        center = made
+        UsageProbe.enter(.createPlus)
+        UsageProbe.leave(.create, via: .createCancel)
+        made.flushDaily()
+        let usageURL = SpikeRunStore.fileURL(spikeID: UsageRecordIDs.spikeID, location: location)
+        let template = try XCTUnwrap(try String(contentsOf: usageURL, encoding: .utf8)
+            .split(separator: "\n").last.map(String.init), "fixture: a usage line on disk")
+        let templateID = try XCTUnwrap(UsageQARig.records(location).last?.id).uuidString
+        XCTAssertTrue(template.contains(templateID), "fixture: the line carries its id as written")
+        var bulk = ""
+        bulk.reserveCapacity(template.utf8.count * 40_001)
+        for _ in 0..<40_000 {
+            bulk += template.replacingOccurrences(of: templateID, with: UUID().uuidString)
+            bulk += "\n"
+        }
+        try bulk.write(to: location.directory.appendingPathComponent("aaa-bulk.jsonl"), atomically: true, encoding: .utf8)
+
+        let suite = "UsageQAEraseRace-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var deps = TelemetryUploader.Dependencies()
+        deps.defaults = defaults
+        deps.location = location
+        let later = UsageQARig.at(11, 0)
+        deps.now = { later }
+        deps.launchDelay = 0
+        deps.makeKeepAlive = { nil }
+        deps.bootstrapOwner = { nil }
+        let uploader = TelemetryUploader(dependencies: deps)
+        let server = SyncFakeServer(userId: UsageQARig.uid)
+        let user = UsageQARig.uid
+        uploader.attach(TelemetryUploader.Attachment(gateway: server, isBlockedByBuild: { false },
+                                                     currentUserID: { user }, isSignedIn: { true }))
+        defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        TelemetryConsentStore.recordGrant(defaults, at: UsageQARig.at(9, 0))
+
+        let started = Date()
+        let batch = Task { await uploader.uploadNow(trigger: .deckOpen) }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        if erasingDuringTheRead { LocalDataEraseEpoch.bump() }
+        let outcome = await batch.value
+        return (outcome, server.telemetryRowCount(), Date().timeIntervalSince(started))
+    }
+
+    func testAnEraseDuringTheBatchesFileReadUploadsNothingFromBeforeIt() async throws {
+        try await LocalDataEraseEpoch.withIsolatedEpoch {
+            let result = try await runBatch(erasingDuringTheRead: true)
+            XCTAssertGreaterThan(result.seconds, 0.6, "readiness: the read outlasted the moment of the erase")
+            XCTAssertEqual(result.rows, 0, "nothing read before the erase reached the server (outcome \(result.outcome))")
+        }
+    }
+
+    func testPositiveControlTheSameBatchWithoutAnEraseUploads() async throws {
+        try await LocalDataEraseEpoch.withIsolatedEpoch {
+            let result = try await runBatch(erasingDuringTheRead: false)
+            XCTAssertGreaterThan(result.rows, 0, "the rig's batch does upload (outcome \(result.outcome))")
+        }
     }
 }
