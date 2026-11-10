@@ -6874,6 +6874,7 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
                 mode: currentMode
             )
             sessionPutBackEligible = currentMode == .move && hit.occurrence.event.canReturnToStack
+                && UserDefaults.standard.bool(forKey: AppSettingsKeys.archivedTodoStackEnabled)
 
             let frameInWindow = view.convert(frame, to: nil)
             callbacks.onEventLongPressBegan?(

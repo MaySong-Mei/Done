@@ -242,6 +242,7 @@ enum LKey {
 
     // Settings
     case settings, general, aiAndAgent, recordingAndWorkflow, analysisPreferences, dataAndPrivacy
+    case archivedFeatures, archivedTodoStack, hintArchivedFeatures
     case appearance, appearanceSystem, appearanceLight, appearanceDark
     case status, provider, apiKey, learnedRules, enterApiKey, notConfigured, keySaved
     case missing, configured, llmProvider, defaultTab
@@ -279,7 +280,7 @@ enum LKey {
 
     // Settings hints
     case hintApiKeyClaude, hintApiKeyOpenAI, hintApiKeyDeepSeek
-    case hintTypeSuggestions, hintDefaultTab, hintLandscapeAndAgent
+    case hintTypeSuggestions, hintDefaultTab, hintLandscapeAndAgent, hintAiTypeSuggestions
     case hintLearning, hintAnalysisPeriod, hintLocalData, hintClearData
     case hintClearSkillInsights, hintClearTokenCache, hintResetAllData
     case storageFaultTitle, storageFaultBody, storageWriteFailedBody
@@ -558,6 +559,9 @@ enum LKey {
         case .general: return "General"
         case .aiAndAgent: return "AI & Agent"
         case .recordingAndWorkflow: return "Recording & Workflow"
+        case .archivedFeatures: return "Archived Features"
+        case .archivedTodoStack: return "Todo Stack"
+        case .hintArchivedFeatures: return "These features are being retired and may be removed in a future version. Turning one off hides it; your data is kept."
         case .analysisPreferences: return "Analysis Preferences"
         case .watchSettings: return "Apple Watch"
         case .watchStatsPage: return "Stats Page"
@@ -697,6 +701,7 @@ enum LKey {
         case .hintApiKeyDeepSeek: return "Get your API key from platform.deepseek.com"
         case .hintTypeSuggestions: return "When enabled, calendar forms preselect a type while you type, matching against your event history and local keyword rules — no network calls."
         case .hintDefaultTab: return "If last tab memory is enabled, the default tab is only used when there is no previous selection yet."
+        case .hintAiTypeSuggestions: return "AI type suggestions preselect a type from your history while you type."
         case .hintLandscapeAndAgent: return "Rotate to landscape to auto-enter immersive focus; the focus screen can stay awake to avoid auto-lock. AI type suggestions preselect a type from your history while you type."
         case .hintLearning: return "Learning is stored locally on this device and is currently based on explicit decisions."
         case .hintAnalysisPeriod: return "The selected period is applied when opening analysis from a new session. Auto-loading suggestions can make the analysis page feel heavier on large data sets."
@@ -1293,6 +1298,9 @@ enum LKey {
         case .general: return "通用"
         case .aiAndAgent: return "AI 与助理"
         case .recordingAndWorkflow: return "记录与工作流"
+        case .archivedFeatures: return "归档功能"
+        case .archivedTodoStack: return "待办堆"
+        case .hintArchivedFeatures: return "这些功能正在退役，未来版本可能移除。关闭只是隐藏，你的数据会保留。"
         case .analysisPreferences: return "分析偏好"
         case .watchSettings: return "Apple Watch"
         case .watchStatsPage: return "统计页"
@@ -1432,6 +1440,7 @@ enum LKey {
         case .hintApiKeyDeepSeek: return "从 platform.deepseek.com 获取 API 密钥"
         case .hintTypeSuggestions: return "启用后，日历表单会根据历史事件和本地关键词规则预选类型——不发起网络请求。"
         case .hintDefaultTab: return "如果启用了标签页记忆，默认标签页仅在没有上次选择时生效。"
+        case .hintAiTypeSuggestions: return "AI 类型建议会在日历输入时按历史预选类型。"
         case .hintLandscapeAndAgent: return "横屏旋转自动进入沉浸式专注；专注界面可保持常亮防止自动锁屏。AI 类型建议会在日历输入时按历史预选类型。"
         case .hintLearning: return "学习数据存储在本设备上，目前基于你的明确决策。"
         case .hintAnalysisPeriod: return "所选分析周期在新会话打开分析时生效。自动加载建议可能会在大数据集上让分析页面变慢。"

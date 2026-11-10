@@ -45,6 +45,18 @@ enum CalendarHeaderTool: String, CaseIterable, Identifiable {
     }
 }
 
+/// The tools offered anywhere: an archived feature that is switched off
+/// leaves the capsule, the overflow menu and the settings list together.
+func calendarHeaderAvailableTools(focusEnabled: Bool, todoStackEnabled: Bool) -> [CalendarHeaderTool] {
+    CalendarHeaderTool.allCases.filter { tool in
+        switch tool {
+        case .focus: return focusEnabled
+        case .todo: return todoStackEnabled
+        default: return true
+        }
+    }
+}
+
 func calendarHeaderExposedTools(from raw: String) -> Set<CalendarHeaderTool> {
     let ids = raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
     var result = Set<CalendarHeaderTool>()
@@ -86,6 +98,8 @@ func calendarRangeModeMenuLabel(for mode: RangeMode) -> String {
 struct AppleCalendarHeaderView: View {
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @AppStorage(AppSettingsKeys.calendarHeaderExposedTools) private var exposedToolsRaw = "create"
+    @AppStorage(AppSettingsKeys.archivedFocusEnabled) private var archivedFocusEnabled = false
+    @AppStorage(AppSettingsKeys.archivedTodoStackEnabled) private var archivedTodoStackEnabled = false
     @State private var didTriggerDateLongPress = false
 
     let selectedDate: Date
@@ -149,6 +163,10 @@ struct AppleCalendarHeaderView: View {
 
     private var exposedTools: Set<CalendarHeaderTool> {
         calendarHeaderExposedTools(from: exposedToolsRaw)
+    }
+
+    private var availableTools: [CalendarHeaderTool] {
+        calendarHeaderAvailableTools(focusEnabled: archivedFocusEnabled, todoStackEnabled: archivedTodoStackEnabled)
     }
 
     private func action(for tool: CalendarHeaderTool) {
@@ -281,7 +299,7 @@ struct AppleCalendarHeaderView: View {
                 HStack(spacing: 0) {
                     // Exposed tools (shown directly in the capsule)
                     // Single exposed tool: icon + label. Multiple: icon only.
-                    let exposed = CalendarHeaderTool.allCases.filter { exposedTools.contains($0) }
+                    let exposed = availableTools.filter { exposedTools.contains($0) }
                     let showLabels = exposed.count == 1
                     ForEach(Array(exposed.enumerated()), id: \.element.id) { index, tool in
                         if index > 0 {
@@ -321,7 +339,7 @@ struct AppleCalendarHeaderView: View {
                     }
 
                     // "..." menu with non-exposed tools + view mode
-                    let menuTools = CalendarHeaderTool.allCases.filter { !exposedTools.contains($0) }
+                    let menuTools = availableTools.filter { !exposedTools.contains($0) }
                     Menu {
                         ForEach(menuTools) { tool in
                             if tool == .view {
@@ -469,6 +487,8 @@ struct CalendarHeaderSettingsView: View {
     @AppStorage(AppSettingsKeys.calendarEventFontSize) private var eventFontSize: Double = 12
     @AppStorage(AppSettingsKeys.calendarEventShowTimeBelowTitle) private var eventShowTimeBelowTitle = true
     @AppStorage(AppSettingsKeys.focusConfirmBeforeTracking) private var focusConfirmBeforeTracking = false
+    @AppStorage(AppSettingsKeys.archivedFocusEnabled) private var archivedFocusEnabled = false
+    @AppStorage(AppSettingsKeys.archivedTodoStackEnabled) private var archivedTodoStackEnabled = false
 
     private var exposedTools: Set<CalendarHeaderTool> {
         calendarHeaderExposedTools(from: exposedToolsRaw)
@@ -501,7 +521,7 @@ struct CalendarHeaderSettingsView: View {
     var body: some View {
         settingsPage(L(.tabCalendar)) {
             settingsCard(L(.headerTools)) {
-                ForEach(CalendarHeaderTool.allCases) { tool in
+                ForEach(calendarHeaderAvailableTools(focusEnabled: archivedFocusEnabled, todoStackEnabled: archivedTodoStackEnabled)) { tool in
                     Toggle(isOn: Binding(
                         get: { exposedTools.contains(tool) },
                         set: { _ in toggleTool(tool) }
@@ -573,10 +593,12 @@ struct CalendarHeaderSettingsView: View {
                 settingsHintText(L(.hintEventBlock))
             }
 
-            settingsCard(L(.focusMode)) {
-                Toggle(L(.confirmBeforeTracking), isOn: $focusConfirmBeforeTracking)
+            if archivedFocusEnabled {
+                settingsCard(L(.focusMode)) {
+                    Toggle(L(.confirmBeforeTracking), isOn: $focusConfirmBeforeTracking)
 
-                settingsHintText(L(.hintFocusModeConfirm))
+                    settingsHintText(L(.hintFocusModeConfirm))
+                }
             }
         }
     }

@@ -1485,6 +1485,7 @@ struct TodoPutBackPeek: View {
         dragState.draggingEventID != nil
             && dragState.dragMode == .move
             && dragState.draggingEvent?.canReturnToStack == true
+            && UserDefaults.standard.bool(forKey: AppSettingsKeys.archivedTodoStackEnabled)
     }
 
     var body: some View {

@@ -647,6 +647,7 @@ struct DoneApp: App {
     // `.onChange(of: landscapeFocusModeEnabled)` in `body`.
     @StateObject private var orientationManager = OrientationManager(
         landscapeFocusEnabled: UserDefaults.standard.bool(forKey: AppSettingsKeys.landscapeFocusMode)
+            && UserDefaults.standard.bool(forKey: AppSettingsKeys.archivedFocusEnabled)
     )
     /// gh#197 SPIKE v2: app-level owner of armed spike runs and the single
     /// writer of the harness's instrumentation seams. Lives here, beside
@@ -687,6 +688,7 @@ struct DoneApp: App {
     /// users opt in. Manual entry via the calendar header focus button is
     /// always available regardless of this flag.
     @AppStorage(AppSettingsKeys.landscapeFocusMode) private var landscapeFocusModeEnabled = false
+    @AppStorage(AppSettingsKeys.archivedFocusEnabled) private var archivedFocusEnabled = false
     @AppStorage(AppSettingsKeys.landscapeFocusKeepAwake) private var landscapeFocusKeepAwakeEnabled = true
     @AppStorage(AppSettingsKeys.nearFutureHorizonDays) private var nearFutureHorizonDays: Int = EventZone.defaultHorizonDays
     @AppStorage(AppSettingsKeys.appearanceMode) private var appearanceModeRaw = AppAppearanceMode.system.rawValue
@@ -796,7 +798,13 @@ struct DoneApp: App {
                 syncOrientationLock(focusActive: active)
                 recordFocusUsage(active: active)
             }
-            .onChange(of: landscapeFocusModeEnabled) { _, enabled in
+            .onChange(of: archivedFocusEnabled) { _, enabled in
+                // gh#273 §6.3: archiving Focus ends a session without a
+                // gesture — `exit.system`, never `rotate`.
+                if !enabled { UsageProbe.noteExit(.focusSystem) }
+                if !enabled { orientationManager.endManualFocus() }
+            }
+            .onChange(of: effectiveLandscapeFocusEnabled) { _, enabled in
                 // gh#219: generation demand follows the setting. @AppStorage
                 // publishes on every write to the underlying defaults key, so
                 // this catches the settings toggle and a synced-settings
@@ -827,7 +835,13 @@ struct DoneApp: App {
     /// choice. `onExit` clears only the manual flag, so while this is
     /// true nothing the focus surface does can end the session.
     private var autoFocusTrigger: Bool {
-        orientationManager.isLandscape && landscapeFocusModeEnabled
+        orientationManager.isLandscape && effectiveLandscapeFocusEnabled
+    }
+
+    /// The user's landscape-focus choice, held off while Focus is archived
+    /// without overwriting it.
+    private var effectiveLandscapeFocusEnabled: Bool {
+        landscapeFocusModeEnabled && archivedFocusEnabled
     }
 
     private var focusActive: Bool {
@@ -838,15 +852,16 @@ struct DoneApp: App {
     /// The manual flag is the header button's (a user tap); without it the
     /// session was opened by rotation with the setting on. Leaving: the
     /// surface notes a swipe (or a recovered dismissal) just before it asks
-    /// to close, and that note wins; otherwise the setting still being on
-    /// means the device rotated back, and the setting being off means it was
-    /// switched off (here or by a synced write).
+    /// to close, and that note wins; otherwise landscape focus still being in
+    /// effect means the device rotated back, and it being off means it was
+    /// switched off — the landscape setting (here or by a synced write) or
+    /// Focus archived.
     private func recordFocusUsage(active: Bool) {
         if active {
             UsageProbe.enter(orientationManager.manualFocusActive ? .focusTap : .focusAuto)
         } else {
             UsageProbe.leave(.focusPrecreate)
-            UsageProbe.leave(.focus, via: landscapeFocusModeEnabled ? .focusRotate : .focusSystem)
+            UsageProbe.leave(.focus, via: effectiveLandscapeFocusEnabled ? .focusRotate : .focusSystem)
         }
     }
 
@@ -975,7 +990,7 @@ struct DoneApp: App {
     private var shouldDisableIdleTimer: Bool {
         doneShouldDisableIdleTimer(
             isLandscape: orientationManager.isLandscape,
-            landscapeFocusModeEnabled: landscapeFocusModeEnabled,
+            landscapeFocusModeEnabled: effectiveLandscapeFocusEnabled,
             landscapeFocusKeepAwakeEnabled: landscapeFocusKeepAwakeEnabled,
             manualFocusActive: orientationManager.manualFocusActive,
             showSplash: showSplash,

@@ -19,6 +19,13 @@ enum AppSettingsKeys {
     static let landscapeFocusKeepAwake = "workflowLandscapeFocusKeepAwake"
     static let analysisDefaultPeriod = "analysisDefaultPeriod"
     static let analysisAutoLoadSuggestions = "analysisAutoLoadSuggestions"
+    // Settings → Archived Features. Features on their way out of the app:
+    // off by default, and off means no entry point and no background work.
+    // The user's data for them is kept and keeps syncing.
+    static let archivedFocusEnabled = "archivedFocusEnabled"
+    static let archivedTodoStackEnabled = "archivedTodoStackEnabled"
+    static let archivedWannaEnabled = "archivedWannaEnabled"
+    static let archivedReportEnabled = "archivedReportEnabled"
     /// When true, calendar event blocks are rendered with effort-based
     /// opacity: events without an effort log are drawn at medium opacity
     /// (~0.7), high-effort events are fully opaque, low-effort events are
@@ -324,6 +331,10 @@ enum AppSettingsKeys {
         landscapeFocusKeepAwake,
         analysisDefaultPeriod,
         analysisAutoLoadSuggestions,
+        archivedFocusEnabled,
+        archivedTodoStackEnabled,
+        archivedWannaEnabled,
+        archivedReportEnabled,
         effortOpacityEnabled,
         experimentalMultiTypeEvents,
         experimentalMultiTypeMaxCount,
