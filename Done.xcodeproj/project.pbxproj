@@ -266,6 +266,7 @@
 		USAG10012FE8000000000002 /* UsageModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = USAG00012FE8000000000002 /* UsageModelTests.swift */; };
 		USAG10012FE8000000000003 /* UsageCenterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = USAG00012FE8000000000003 /* UsageCenterTests.swift */; };
 		USAG10012FE8000000000004 /* UsageSurfaceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = USAG00012FE8000000000004 /* UsageSurfaceTests.swift */; };
+		QAUS10012FE8000000000001 /* UsageDailyQATests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QAUS00012FE8000000000001 /* UsageDailyQATests.swift */; };
 		USAG10012FE8000000000005 /* UsagePerfMeasurementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = USAG00012FE8000000000005 /* UsagePerfMeasurementTests.swift */; };
 		FA57000000000000000B0002 /* SpikeRunStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0002 /* SpikeRunStore.swift */; };
 		FA57000000000000000B0003 /* SpikeSessionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA57000000000000000A0003 /* SpikeSessionCoordinator.swift */; };
@@ -778,6 +779,7 @@
 		USAG00012FE8000000000002 /* UsageModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageModelTests.swift; sourceTree = "<group>"; };
 		USAG00012FE8000000000003 /* UsageCenterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageCenterTests.swift; sourceTree = "<group>"; };
 		USAG00012FE8000000000004 /* UsageSurfaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageSurfaceTests.swift; sourceTree = "<group>"; };
+		QAUS00012FE8000000000001 /* UsageDailyQATests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageDailyQATests.swift; sourceTree = "<group>"; };
 		USAG00012FE8000000000005 /* UsagePerfMeasurementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsagePerfMeasurementTests.swift; sourceTree = "<group>"; };
 		FA57000000000000000A0002 /* SpikeRunStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeRunStore.swift; sourceTree = "<group>"; };
 		FA57000000000000000A0003 /* SpikeSessionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpikeSessionCoordinator.swift; sourceTree = "<group>"; };
@@ -1125,6 +1127,7 @@
 				USAG00012FE8000000000002 /* UsageModelTests.swift */,
 				USAG00012FE8000000000003 /* UsageCenterTests.swift */,
 				USAG00012FE8000000000004 /* UsageSurfaceTests.swift */,
+				QAUS00012FE8000000000001 /* UsageDailyQATests.swift */,
 				USAG00012FE8000000000005 /* UsagePerfMeasurementTests.swift */,
 				AGCT00012FFA000000000001 /* AgentToolContainmentTests.swift */,
 				CESC00012FFA000000000001 /* CalendarEffortScrubberCommitTests.swift */,
@@ -2108,6 +2111,7 @@
 				USAG10012FE8000000000002 /* UsageModelTests.swift in Sources */,
 				USAG10012FE8000000000003 /* UsageCenterTests.swift in Sources */,
 				USAG10012FE8000000000004 /* UsageSurfaceTests.swift in Sources */,
+				QAUS10012FE8000000000001 /* UsageDailyQATests.swift in Sources */,
 				USAG10012FE8000000000005 /* UsagePerfMeasurementTests.swift in Sources */,
 				AGCT10012FFA000000000001 /* AgentToolContainmentTests.swift in Sources */,
 				CESC10012FFA000000000001 /* CalendarEffortScrubberCommitTests.swift in Sources */,
