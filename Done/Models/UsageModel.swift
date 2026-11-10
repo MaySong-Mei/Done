@@ -57,6 +57,12 @@ enum UsageUse: UInt16, CaseIterable {
     case eventDetailPlan, eventDetailReflect, eventDetailTimelineNote, eventDetailTodo, eventDetailDelete
     case repeatForm, repeatDeleteSeries
     case allDayToggle
+    /// Settings → Archived Features, one per switch and direction. Counted
+    /// through `UsageProbe.switchToggled`, never `use(_:)` directly.
+    case archivedFocusOn, archivedFocusOff
+    case archivedTodoStackOn, archivedTodoStackOff
+    case archivedWannaOn, archivedWannaOff
+    case archivedReportOn, archivedReportOff
 }
 
 enum UsageDone: UInt16, CaseIterable {
@@ -77,6 +83,23 @@ enum UsageRoute: UInt16, CaseIterable {
 /// Counts that belong to a feature but to no visit.
 enum UsageEvent: UInt16, CaseIterable {
     case createAbandonBanner, createAIFallback
+}
+
+/// A per-device switch a feature sits behind (Settings → Archived Features).
+/// Each gate owns its feature's `available` key: the feature's denominator,
+/// since a switched-off feature reads zero whether or not anyone would use it.
+enum UsageGate: UInt16, CaseIterable {
+    case focus, todoStack, wanna, report
+
+    /// The Settings toggle tags for this switch.
+    var toggleTags: (on: UsageUse, off: UsageUse) {
+        switch self {
+        case .focus: return (.archivedFocusOn, .archivedFocusOff)
+        case .todoStack: return (.archivedTodoStackOn, .archivedTodoStackOff)
+        case .wanna: return (.archivedWannaOn, .archivedWannaOff)
+        case .report: return (.archivedReportOn, .archivedReportOff)
+        }
+    }
 }
 
 // MARK: - Declaration
@@ -107,13 +130,23 @@ struct UsageDeclaration {
     let routes: [Route]
     let routeStage: UsageRouteStage
     let events: [Tally]
+    /// The switch whose `available` key this feature OWNS (written as
+    /// `usage.<feature>.available`).
+    let gate: UsageGate?
+    /// The switch whose `available` key is every key's liveness: the owned
+    /// gate, or another feature's (focus_precreate shares focus's). nil:
+    /// the feature is always reachable and its liveness is `sessions`.
+    let livenessGate: UsageGate?
 
     /// A feature with an entry has visits: they settle `abandon` and `dwell`.
     var hasVisits: Bool { !entries.isEmpty }
 
     init(name: String, summary: String, sinceBuild: Int, entries: [Entry] = [], uses: [Use] = [],
          dones: [Done] = [], views: [View] = [], routes: [Route] = [],
-         routeStage: UsageRouteStage = .exit, events: [Tally] = []) {
+         routeStage: UsageRouteStage = .exit, events: [Tally] = [],
+         gate: UsageGate? = nil, livenessGate: UsageGate? = nil) {
+        self.gate = gate
+        self.livenessGate = livenessGate ?? gate
         self.name = name
         self.summary = summary
         self.sinceBuild = sinceBuild
@@ -137,6 +170,22 @@ enum UsageFeature: UInt16, CaseIterable {
     case create
     case repeatRule
     case allDay
+    /// Switch-gated features not wired in this slice beyond their denominator.
+    case todoStack
+    case wanna
+    case report
+    /// Settings → Archived Features itself: the switch flips.
+    case archived
+
+    /// The feature whose `available` key a gate writes.
+    static func owner(of gate: UsageGate) -> UsageFeature {
+        switch gate {
+        case .focus: return .focus
+        case .todoStack: return .todoStack
+        case .wanna: return .wanna
+        case .report: return .report
+        }
+    }
 
     /// The build this slice ships in; per feature so a later feature can
     /// carry its own.
@@ -161,9 +210,10 @@ enum UsageFeature: UInt16, CaseIterable {
                 routes: [
                     .init(tag: .focusSwipe, name: "swipe", what: "swiped the surface away"),
                     .init(tag: .focusRotate, name: "rotate", what: "rotated back to portrait"),
-                    .init(tag: .focusSystem, name: "system", what: "ended without a gesture (the setting went off, or a dismissal recovered on foreground)"),
+                    .init(tag: .focusSystem, name: "system", what: "ended without a gesture (landscape focus went off, Focus was archived, or a dismissal recovered on foreground)"),
                 ],
-                routeStage: .exit
+                routeStage: .exit,
+                gate: .focus
             )
         case .focusPrecreate:
             return UsageDeclaration(
@@ -173,7 +223,8 @@ enum UsageFeature: UInt16, CaseIterable {
                 ],
                 dones: [
                     .init(tag: .focusPrecreate, name: nil, what: "Begin"),
-                ]
+                ],
+                livenessGate: .focus
             )
         case .eventDetail:
             return UsageDeclaration(
@@ -241,6 +292,26 @@ enum UsageFeature: UInt16, CaseIterable {
                     .init(tag: .allDayToggle, name: nil, what: "the all-day switch in an event form flipped"),
                 ]
             )
+        case .todoStack:
+            return UsageDeclaration(name: "todo_stack", summary: "Todo stack", sinceBuild: build, gate: .todoStack)
+        case .wanna:
+            return UsageDeclaration(name: "wanna", summary: "Wanna", sinceBuild: build, gate: .wanna)
+        case .report:
+            return UsageDeclaration(name: "report", summary: "Report", sinceBuild: build, gate: .report)
+        case .archived:
+            return UsageDeclaration(
+                name: "archived", summary: "Settings - Archived Features", sinceBuild: build,
+                uses: [
+                    .init(tag: .archivedFocusOn, name: "focus_on", what: "the Focus switch turned on by the user"),
+                    .init(tag: .archivedFocusOff, name: "focus_off", what: "the Focus switch turned off by the user"),
+                    .init(tag: .archivedTodoStackOn, name: "todo_stack_on", what: "the Todo stack switch turned on by the user"),
+                    .init(tag: .archivedTodoStackOff, name: "todo_stack_off", what: "the Todo stack switch turned off by the user"),
+                    .init(tag: .archivedWannaOn, name: "wanna_on", what: "the Wanna switch turned on by the user"),
+                    .init(tag: .archivedWannaOff, name: "wanna_off", what: "the Wanna switch turned off by the user"),
+                    .init(tag: .archivedReportOn, name: "report_on", what: "the Report switch turned on by the user"),
+                    .init(tag: .archivedReportOff, name: "report_off", what: "the Report switch turned off by the user"),
+                ]
+            )
         }
     }
 }
@@ -260,6 +331,9 @@ struct UsageKey: Equatable {
     let slot: Int
     let sinceBuild: Int
     let description: String
+    /// The registry's `liveness_key`: the denominator a zero of this key is
+    /// read against. nil only for `sessions` itself.
+    let livenessKey: String?
 
     var slotCount: Int { kind == .histogram ? UsageDwell.bucketCount : 1 }
 
@@ -267,6 +341,11 @@ struct UsageKey: Equatable {
     /// the 016 checks fixture and every usage key's `liveness_key` name it.
     static let sessionsName = "sessions"
     static let prefix = "usage."
+
+    /// `usage.<feature>.available` for the feature that owns `gate`.
+    static func availableName(_ gate: UsageGate) -> String {
+        prefix + UsageFeature.owner(of: gate).declaration.name + ".available"
+    }
 
     static var all: [UsageKey] { UsageLayout.shared.keys }
 }
@@ -319,6 +398,8 @@ final class UsageLayout {
     let dwellSlot: [Int]
     let routeStage: [UsageRouteStage]
     let hasVisits: [Bool]
+    /// Per gate (by raw value): the slot of its `available` key.
+    let availableSlot: [Int]
 
     static let shared = UsageLayout()
     /// `sessions` is the first key laid out.
@@ -327,14 +408,17 @@ final class UsageLayout {
     private init() {
         var keys: [UsageKey] = []
         var next = 0
+        var liveness: String? = nil
         func add(_ name: String, _ kind: UsageKey.Kind, _ feature: UsageFeature?, _ since: Int, _ description: String) -> Int {
-            let key = UsageKey(name: name, kind: kind, feature: feature, slot: next, sinceBuild: since, description: description)
+            let key = UsageKey(name: name, kind: kind, feature: feature, slot: next, sinceBuild: since,
+                               description: description, livenessKey: liveness)
             keys.append(key)
             next += key.slotCount
             return key.slot
         }
         _ = add(UsageKey.sessionsName, .counter, nil, UsageFeature.firstUsageBuild,
                 "Usage denominator: foreground sessions on the day (the launch, each return from background, and a session already running when the record was minted). Control Center / Face ID do not count.")
+        var availableSlot = Array(repeating: -1, count: UsageGate.allCases.count)
 
         var entrySlot = Array(repeating: -1, count: UsageEntry.allCases.count)
         var entryFeature = Array(repeating: UsageFeature.focus, count: UsageEntry.allCases.count)
@@ -359,6 +443,12 @@ final class UsageLayout {
             let label = "Usage - \(d.summary)"
             routeStage[f] = d.routeStage
             hasVisits[f] = d.hasVisits
+            if let gate = d.gate {
+                liveness = UsageKey.sessionsName
+                availableSlot[Int(gate.rawValue)] = add(UsageKey.availableName(gate), .counter, feature, d.sinceBuild,
+                                                        "\(label) - available: the switch was on for a session (on at its start, or turned on during it); at most once per session, so <= sessions. The denominator of this feature's keys.")
+            }
+            liveness = d.livenessGate.map(UsageKey.availableName) ?? UsageKey.sessionsName
             for e in d.entries {
                 let i = Int(e.tag.rawValue)
                 entrySlot[i] = add(base + "enter." + e.name, .counter, feature, d.sinceBuild,
@@ -429,6 +519,7 @@ final class UsageLayout {
         self.dwellSlot = dwellSlot
         self.routeStage = routeStage
         self.hasVisits = hasVisits
+        self.availableSlot = availableSlot
     }
 
     /// Tags no feature declares (a slot of -1). Empty by construction when
@@ -559,6 +650,9 @@ struct UsageTracker: Equatable {
     /// Only such a session is carried into a newly minted record; one this
     /// process never counted (a test host's launch) is not.
     private(set) var runningSessionCounted = false
+    /// Per gate: its `available` was counted for the running session in the
+    /// current record — the "at most once per session" latch.
+    private(set) var availableCounted: [Bool] = Array(repeating: false, count: UsageGate.allCases.count)
 
     init() {}
 
@@ -646,6 +740,7 @@ struct UsageTracker: Equatable {
     mutating func enterBackground(at now: Double) {
         inForeground = false
         runningSessionCounted = false
+        clearAvailable()
         for f in visits.indices {
             guard var visit = visits[f], let since = visit.runningSince else { continue }
             visit.foregroundSeconds += max(0, now - since)
@@ -661,11 +756,12 @@ struct UsageTracker: Equatable {
     /// a `didBecomeActive` with no background before it (Control Center,
     /// Face ID, a system alert) counts nothing.
     @discardableResult
-    mutating func enterForeground(at now: Double) -> Bool {
+    mutating func enterForeground(at now: Double, available: Set<UsageGate> = []) -> Bool {
         guard !inForeground else { return false }
         inForeground = true
         runningSessionCounted = true
         bump(UsageLayout.sessionsSlot)
+        countAvailable(available)
         for f in visits.indices where visits[f] != nil && visits[f]!.runningSince == nil {
             visits[f]!.runningSince = now
         }
@@ -678,16 +774,45 @@ struct UsageTracker: Equatable {
     mutating func assumeForeground() {
         inForeground = true
         runningSessionCounted = false
+        clearAvailable()
+    }
+
+    /// The user flipped a switch in Settings → Archived Features: the toggle
+    /// key for that direction, and — turned on — the feature is available in
+    /// this session if it was not already counted as such.
+    mutating func switchToggled(_ gate: UsageGate, isOn: Bool) {
+        let tags = gate.toggleTags
+        use(isOn ? tags.on : tags.off)
+        if isOn { countAvailable([gate]) }
+    }
+
+    /// `available` once per gate per counted session (per record).
+    private mutating func countAvailable(_ gates: Set<UsageGate>) {
+        guard runningSessionCounted else { return }
+        let layout = UsageLayout.shared
+        for gate in gates {
+            let g = Int(gate.rawValue)
+            guard !availableCounted[g] else { continue }
+            availableCounted[g] = true
+            bump(layout.availableSlot[g])
+        }
+    }
+
+    private mutating func clearAvailable() {
+        for g in availableCounted.indices { availableCounted[g] = false }
     }
 
     /// A new record (day, owner, consent): the counts start over; open
     /// visits stay open and settle into the new record. A session already
-    /// in progress is counted once in the new record too, so a day reached
-    /// without a return from background still has a denominator.
-    mutating func resetCountsForNewRecord() {
+    /// in progress is counted once in the new record too, and so is each
+    /// switch that is on now, so a day reached without a return from
+    /// background still has its denominators.
+    mutating func resetCountsForNewRecord(available: Set<UsageGate> = []) {
         counts = UsageCounts()
         changeCount &+= 1
+        clearAvailable()
         if runningSessionCounted { bump(UsageLayout.sessionsSlot) }
+        countAvailable(available)
     }
 
     /// Relaunch seed: today's record as it was last written.
@@ -697,12 +822,14 @@ struct UsageTracker: Equatable {
     }
 
     /// Erase: the counts AND the open visits are the erased owner's.
-    mutating func forgetAll() {
+    mutating func forgetAll(available: Set<UsageGate> = []) {
         counts = UsageCounts()
         visits = Array(repeating: nil, count: UsageFeature.allCases.count)
         exitHints = Array(repeating: nil, count: UsageFeature.allCases.count)
         changeCount &+= 1
+        clearAvailable()
         if runningSessionCounted { bump(UsageLayout.sessionsSlot) }
+        countAvailable(available)
     }
 }
 
@@ -718,6 +845,7 @@ protocol UsageSink: AnyObject {
     func usageCount(_ event: UsageEvent)
     func usageNoteExit(_ route: UsageRoute)
     func usageLeave(_ feature: UsageFeature, via route: UsageRoute?)
+    func usageSwitchToggled(_ gate: UsageGate, isOn: Bool)
 }
 
 /// Placement rules (design §6.3): `enter` only inside the user action that
@@ -740,4 +868,7 @@ enum UsageProbe {
     /// The surface is about to ask to be closed, and says how.
     static func noteExit(_ route: UsageRoute) { sink?.usageNoteExit(route) }
     static func leave(_ feature: UsageFeature, via route: UsageRoute? = nil) { sink?.usageLeave(feature, via: route) }
+    /// Only from the Settings toggle's own action: a switch written any other
+    /// way (a reset, an erase, a test) is not the user deciding.
+    static func switchToggled(_ gate: UsageGate, isOn: Bool) { sink?.usageSwitchToggled(gate, isOn: isOn) }
 }

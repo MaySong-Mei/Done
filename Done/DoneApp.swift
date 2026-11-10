@@ -620,6 +620,25 @@ func doneShouldDisableIdleTimer(
     )
 }
 
+/// gh#273 §6.3: focus is entered and left in DoneApp's `onChange(of:
+/// focusActive)`, where both ways in meet. The manual flag is the header
+/// button's (a user tap); without it the session was opened by rotation with
+/// landscape focus in effect. Leaving: the surface notes a swipe (or a
+/// recovered dismissal) just before it asks to close, and that note wins;
+/// otherwise landscape focus still in effect means the device rotated back,
+/// and it being off means it was switched off — the landscape setting (here
+/// or by a synced write) or Focus archived. `landscapeFocusEffective` is the
+/// landscape setting AND the archive switch.
+@MainActor
+func doneRecordFocusUsage(active: Bool, manualFocusActive: Bool, landscapeFocusEffective: Bool) {
+    if active {
+        UsageProbe.enter(manualFocusActive ? .focusTap : .focusAuto)
+    } else {
+        UsageProbe.leave(.focusPrecreate)
+        UsageProbe.leave(.focus, via: landscapeFocusEffective ? .focusRotate : .focusSystem)
+    }
+}
+
 @MainActor
 func doneApplyIdleTimerPolicy(_ isDisabled: Bool) {
     UIApplication.shared.isIdleTimerDisabled = isDisabled
@@ -796,13 +815,15 @@ struct DoneApp: App {
                 // change here keeps the side effect out of the gate
                 // expression in `body`.
                 syncOrientationLock(focusActive: active)
-                recordFocusUsage(active: active)
+                doneRecordFocusUsage(active: active, manualFocusActive: orientationManager.manualFocusActive,
+                                     landscapeFocusEffective: effectiveLandscapeFocusEnabled)
             }
             .onChange(of: archivedFocusEnabled) { _, enabled in
+                guard !enabled else { return }
                 // gh#273 §6.3: archiving Focus ends a session without a
                 // gesture — `exit.system`, never `rotate`.
-                if !enabled { UsageProbe.noteExit(.focusSystem) }
-                if !enabled { orientationManager.endManualFocus() }
+                UsageProbe.noteExit(.focusSystem)
+                orientationManager.endManualFocus()
             }
             .onChange(of: effectiveLandscapeFocusEnabled) { _, enabled in
                 // gh#219: generation demand follows the setting. @AppStorage
@@ -846,23 +867,6 @@ struct DoneApp: App {
 
     private var focusActive: Bool {
         autoFocusTrigger || orientationManager.manualFocusActive
-    }
-
-    /// gh#273 §6.3: focus is entered and left HERE, where both ways in meet.
-    /// The manual flag is the header button's (a user tap); without it the
-    /// session was opened by rotation with the setting on. Leaving: the
-    /// surface notes a swipe (or a recovered dismissal) just before it asks
-    /// to close, and that note wins; otherwise landscape focus still being in
-    /// effect means the device rotated back, and it being off means it was
-    /// switched off — the landscape setting (here or by a synced write) or
-    /// Focus archived.
-    private func recordFocusUsage(active: Bool) {
-        if active {
-            UsageProbe.enter(orientationManager.manualFocusActive ? .focusTap : .focusAuto)
-        } else {
-            UsageProbe.leave(.focusPrecreate)
-            UsageProbe.leave(.focus, via: effectiveLandscapeFocusEnabled ? .focusRotate : .focusSystem)
-        }
     }
 
     private func syncOrientationLock(focusActive: Bool) {

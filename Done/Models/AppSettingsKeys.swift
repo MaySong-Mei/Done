@@ -26,6 +26,17 @@ enum AppSettingsKeys {
     static let archivedTodoStackEnabled = "archivedTodoStackEnabled"
     static let archivedWannaEnabled = "archivedWannaEnabled"
     static let archivedReportEnabled = "archivedReportEnabled"
+
+    /// gh#273 §6.3: the archive switches that are on, as usage's gates — the
+    /// resident center reads this at session starts for `available`.
+    static func archivedFeatureGatesOn(_ defaults: UserDefaults = .standard) -> Set<UsageGate> {
+        var on: Set<UsageGate> = []
+        if defaults.bool(forKey: archivedFocusEnabled) { on.insert(.focus) }
+        if defaults.bool(forKey: archivedTodoStackEnabled) { on.insert(.todoStack) }
+        if defaults.bool(forKey: archivedWannaEnabled) { on.insert(.wanna) }
+        if defaults.bool(forKey: archivedReportEnabled) { on.insert(.report) }
+        return on
+    }
     /// When true, calendar event blocks are rendered with effort-based
     /// opacity: events without an effort log are drawn at medium opacity
     /// (~0.7), high-effort events are fully opaque, low-effort events are

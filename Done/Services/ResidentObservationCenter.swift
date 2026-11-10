@@ -144,6 +144,9 @@ final class ResidentObservationCenter {
     let usageLaunchSeed: SpikeRunFileScan.TailRecord
     private let countsLaunchSession: Bool
     private let isAppForeground: @MainActor () -> Bool
+    /// The archive switches that are on right now. Read at session starts
+    /// and re-mints only — lifecycle edges, never the signal path.
+    private let availableGates: @MainActor () -> Set<UsageGate>
 
     private(set) var window: ResidentWindowModel?
     private var frameProbe: SpikeFrameProbe?
@@ -194,7 +197,8 @@ final class ResidentObservationCenter {
         verifiesSeed: Bool = !EventStorageLocation.isRunningUnderXCTest,
         seedTrail: @escaping (String) -> Void = { DiagnosticTrail.record("FixWatch", $0) },
         countsLaunchSession: Bool = !EventStorageLocation.isRunningUnderXCTest,
-        isAppForeground: @escaping @MainActor () -> Bool = { UIApplication.shared.applicationState != .background }
+        isAppForeground: @escaping @MainActor () -> Bool = { UIApplication.shared.applicationState != .background },
+        availableGates: @escaping @MainActor () -> Set<UsageGate> = { AppSettingsKeys.archivedFeatureGatesOn() }
     ) {
         self.coordinator = coordinator
         self.store = store
@@ -210,6 +214,7 @@ final class ResidentObservationCenter {
         self.seedTrail = seedTrail
         self.countsLaunchSession = countsLaunchSession
         self.isAppForeground = isAppForeground
+        self.availableGates = availableGates
         let followers = FollowerTimingRecorder(now: followerClock, isForeground: false)
         self.followers = followers
 
@@ -475,7 +480,7 @@ final class ResidentObservationCenter {
     private func resetCountsForNewDaily() {
         core.resetForNewDay()
         followers.resetDaily()
-        usage.resetCountsForNewRecord()
+        usage.resetCountsForNewRecord(available: availableGates())
     }
 
     // MARK: Activation
@@ -494,7 +499,7 @@ final class ResidentObservationCenter {
         UsageProbe.sink = self
         if isAppForeground() {
             if countsLaunchSession {
-                usage.enterForeground(at: mediaNow())
+                usage.enterForeground(at: mediaNow(), available: availableGates())
             } else {
                 usage.assumeForeground()
             }
@@ -873,7 +878,7 @@ final class ResidentObservationCenter {
         resetCountsForNewDaily()
         // The open usage visits are the erased owner's too: one settling
         // after the erase would count its abandonment into the next owner's day.
-        usage.forgetAll()
+        usage.forgetAll(available: availableGates())
         let currentNow = now()
         mintDailyRun(at: currentNow, bounds: rebaseDay(at: currentNow))
     }
@@ -1001,7 +1006,7 @@ final class ResidentObservationCenter {
     private func handleUsageForegroundEdge() {
         guard !usage.inForeground else { return }
         performRolloverFlushIfDue()
-        usage.enterForeground(at: mediaNow())
+        usage.enterForeground(at: mediaNow(), available: availableGates())
     }
 
     /// The signal path's day check, as the resident's: one compare, and a
@@ -1108,5 +1113,10 @@ extension ResidentObservationCenter: UsageSink {
     func usageLeave(_ feature: UsageFeature, via route: UsageRoute?) {
         noteUsageSignal()
         usage.leave(feature, via: route, at: mediaNow())
+    }
+
+    func usageSwitchToggled(_ gate: UsageGate, isOn: Bool) {
+        noteUsageSignal()
+        usage.switchToggled(gate, isOn: isOn)
     }
 }

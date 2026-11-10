@@ -67,7 +67,8 @@ final class UsageCenterTests: XCTestCase {
 
     private func makeCenter(
         clock: Box<Date>, media: Box<Double>, owner: Box<String?>? = nil,
-        countsLaunchSession: Bool = false, foreground: Bool = true, activate: Bool = true
+        countsLaunchSession: Bool = false, foreground: Bool = true, activate: Bool = true,
+        gates: Box<Set<UsageGate>> = Box([])
     ) -> ResidentObservationCenter {
         let ownerBox = owner ?? Box<String?>(uid)
         let center = ResidentObservationCenter(
@@ -76,7 +77,8 @@ final class UsageCenterTests: XCTestCase {
             makeFrameProbe: { SpikeFrameProbe() },
             ownerUID: { ownerBox.value }, stamp: { [unowned self] in self.stamp() },
             installsFollowerProbe: false, isAppActive: { foreground }, verifiesSeed: false,
-            seedTrail: { _ in }, countsLaunchSession: countsLaunchSession, isAppForeground: { foreground }
+            seedTrail: { _ in }, countsLaunchSession: countsLaunchSession, isAppForeground: { foreground },
+            availableGates: { gates.value }
         )
         centers.append(center)
         if activate { center.activate() }
@@ -303,6 +305,45 @@ final class UsageCenterTests: XCTestCase {
         post(UIApplication.didBecomeActiveNotification)
         center.flushDaily()
         XCTAssertEqual(n(try onlyUsageRecord(), "sessions"), 2, "positive control: a real return counts")
+    }
+
+    // MARK: Availability (design §6.3: a switch-gated feature's denominator)
+
+    /// Once per counted session, when the switch is on at the session's start
+    /// or turned on during it — so `available` never exceeds `sessions`.
+    func testAvailableIsCountedOncePerSessionWhileTheSwitchIsOnThroughTheLifecycle() throws {
+        let gates = Box<Set<UsageGate>>([.focus])
+        let center = makeCenter(clock: Box(morning), media: Box(0), countsLaunchSession: true, gates: gates)
+        post(UIApplication.willResignActiveNotification)     // Control Center
+        post(UIApplication.didBecomeActiveNotification)
+        post(UIApplication.willResignActiveNotification)     // Face ID
+        post(UIApplication.didBecomeActiveNotification)
+        XCTAssertEqual(center.usage.counts.count("usage.focus.available"), 1, "the launch's session, once")
+
+        post(UIApplication.didEnterBackgroundNotification)
+        post(UIApplication.willEnterForegroundNotification)
+        post(UIApplication.didBecomeActiveNotification)
+        XCTAssertEqual(center.usage.counts.count("usage.focus.available"), 2, "a return is a new session")
+
+        gates.value = []
+        post(UIApplication.didEnterBackgroundNotification)
+        post(UIApplication.willEnterForegroundNotification)
+        XCTAssertEqual(center.usage.counts.count("usage.focus.available"), 2, "off at this session's start")
+        XCTAssertEqual(center.usage.counts.count("usage.wanna.available"), 0)
+
+        UsageProbe.switchToggled(.wanna, isOn: true)          // turned on mid-session
+        UsageProbe.switchToggled(.wanna, isOn: false)
+        UsageProbe.switchToggled(.wanna, isOn: true)
+        center.flushDaily()
+        let usage = try onlyUsageRecord()
+        XCTAssertEqual(n(usage, "sessions"), 3)
+        XCTAssertEqual(n(usage, "usage.focus.available"), 2)
+        XCTAssertEqual(n(usage, "usage.wanna.available"), 1, "turned on during the session, counted once")
+        XCTAssertEqual(n(usage, "usage.archived.use.wanna_on"), 2)
+        XCTAssertEqual(n(usage, "usage.archived.use.wanna_off"), 1)
+        for key in ["usage.focus.available", "usage.wanna.available", "usage.todo_stack.available", "usage.report.available"] {
+            XCTAssertLessThanOrEqual(n(usage, key) ?? 0, n(usage, "sessions") ?? 0, "\(key) <= sessions")
+        }
     }
 
     func testALaunchIntoTheBackgroundCountsItsSessionAtTheFirstForeground() throws {

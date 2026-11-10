@@ -505,7 +505,7 @@ final class TelemetryWireConformanceTests: XCTestCase {
             coordinator: SpikeSessionCoordinator(), store: nil, location: location, calendar: la,
             now: { clock }, mediaNow: { media }, ownerUID: { Self.uid }, stamp: { [unowned self] in self.stamp(build: "29") },
             installsFollowerProbe: false, verifiesSeed: false, seedTrail: { _ in },
-            countsLaunchSession: true, isAppForeground: { true }
+            countsLaunchSession: true, isAppForeground: { true }, availableGates: { Set(UsageGate.allCases) }
         )
         centers.append(center)
         center.activate()

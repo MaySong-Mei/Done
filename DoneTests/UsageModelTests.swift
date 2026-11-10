@@ -39,7 +39,7 @@ final class UsageModelTests: XCTestCase {
         XCTAssertEqual(UsageKey.all.first?.slot, UsageLayout.sessionsSlot)
         // Every key but the denominator is `usage.<feature>.<stage>[.<sub>]`
         // with a stage from the design's vocabulary.
-        let stages: Set<String> = ["enter", "use", "done", "view", "exit", "abandon", "dwell"]
+        let stages: Set<String> = ["enter", "use", "done", "view", "exit", "abandon", "dwell", "available"]
         for key in UsageKey.all.dropFirst() {
             let parts = key.name.split(separator: ".").map(String.init)
             XCTAssertEqual(parts.first, "usage", key.name)
@@ -75,9 +75,15 @@ final class UsageModelTests: XCTestCase {
             "usage.create.abandon.swipe", "usage.create.abandon.banner", "usage.create.ai_fallback", "usage.create.dwell",
             "usage.repeat.enter.rule_editor", "usage.repeat.use.form", "usage.repeat.done", "usage.repeat.abandon",
             "usage.all_day.use",
+            "usage.focus.available", "usage.todo_stack.available", "usage.wanna.available", "usage.report.available",
+            "usage.archived.use.focus_on", "usage.archived.use.focus_off", "usage.archived.use.todo_stack_on",
+            "usage.archived.use.todo_stack_off", "usage.archived.use.wanna_on", "usage.archived.use.wanna_off",
+            "usage.archived.use.report_on", "usage.archived.use.report_off",
         ] {
             XCTAssertTrue(names.contains(expected), "missing \(expected)")
         }
+        // focus_precreate shares focus's switch: no second available key.
+        XCTAssertFalse(names.contains("usage.focus_precreate.available"))
         // create's abandonment is routed: there is no bare key to double count.
         XCTAssertFalse(names.contains("usage.create.abandon"))
         // all_day has no entry, so no visit keys.
@@ -86,6 +92,79 @@ final class UsageModelTests: XCTestCase {
         // Every entry is marked; only focus's rotation is not the user's.
         let auto = UsageFeature.allCases.flatMap { f in f.declaration.entries.filter { $0.source == .auto }.map(\.tag) }
         XCTAssertEqual(auto, [.focusAuto])
+    }
+
+    // MARK: Liveness (design §6.3: a switch-gated feature reads against its available)
+
+    func testSwitchGatedKeysReadAgainstTheirAvailableEverythingElseAgainstSessions() {
+        var violations: [String] = []
+        for key in UsageKey.all {
+            let expected: String?
+            if key.name == UsageKey.sessionsName {
+                expected = nil
+            } else if key.name.hasSuffix(".available") {
+                expected = UsageKey.sessionsName
+            } else if key.name.hasPrefix("usage.focus.") || key.name.hasPrefix("usage.focus_precreate.") {
+                expected = "usage.focus.available"
+            } else {
+                expected = UsageKey.sessionsName
+            }
+            if key.livenessKey != expected { violations.append("\(key.name): \(key.livenessKey ?? "nil"), want \(expected ?? "nil")") }
+        }
+        XCTAssertEqual(violations, [])
+        XCTAssertEqual(UsageKey.all.filter { $0.livenessKey == "usage.focus.available" }.count, 15,
+                       "liveness: focus's eleven keys and focus_precreate's four")
+    }
+
+    // MARK: Availability
+
+    func testAvailableCountsOncePerCountedSessionWhenTheSwitchIsOnAtItsStart() {
+        var tracker = UsageTracker()
+        tracker.enterForeground(at: 0, available: [.focus, .wanna])
+        XCTAssertFalse(tracker.enterForeground(at: 1, available: [.focus, .wanna]), "Control Center / Face ID")
+        tracker.switchToggled(.focus, isOn: false)
+        tracker.switchToggled(.focus, isOn: true)
+        XCTAssertEqual(count(tracker, "usage.focus.available"), 1, "once per session, however often it is flipped")
+        XCTAssertEqual(count(tracker, "usage.wanna.available"), 1)
+        XCTAssertEqual(count(tracker, "usage.report.available"), 0, "off at the start, never turned on")
+        tracker.enterBackground(at: 2)
+        tracker.enterForeground(at: 3, available: [.focus])
+        XCTAssertEqual(count(tracker, "usage.focus.available"), 2, "the next session counts again")
+        XCTAssertEqual(count(tracker, "usage.wanna.available"), 1, "switched off since: not available this session")
+        XCTAssertLessThanOrEqual(count(tracker, "usage.focus.available"), count(tracker, "sessions"))
+    }
+
+    func testTurningASwitchOnMidSessionMakesTheFeatureAvailableForThatSession() {
+        var tracker = UsageTracker()
+        tracker.enterForeground(at: 0, available: [])
+        XCTAssertEqual(count(tracker, "usage.todo_stack.available"), 0)
+        tracker.switchToggled(.todoStack, isOn: true)
+        XCTAssertEqual(count(tracker, "usage.todo_stack.available"), 1)
+        XCTAssertEqual(count(tracker, "usage.archived.use.todo_stack_on"), 1)
+        tracker.switchToggled(.todoStack, isOn: false)
+        XCTAssertEqual(count(tracker, "usage.archived.use.todo_stack_off"), 1, "off is its own key")
+        XCTAssertEqual(count(tracker, "usage.todo_stack.available"), 1, "turning it off does not take the session back")
+        tracker.switchToggled(.todoStack, isOn: true)
+        XCTAssertEqual(count(tracker, "usage.archived.use.todo_stack_on"), 2, "every flip is counted")
+        XCTAssertEqual(count(tracker, "usage.todo_stack.available"), 1, "but available once per session")
+    }
+
+    func testAvailableNeedsACountedSessionAndCarriesIntoANewRecordWithIt() {
+        var host = UsageTracker()
+        host.assumeForeground()
+        host.switchToggled(.report, isOn: true)
+        XCTAssertEqual(count(host, "usage.report.available"), 0, "a foreground this process never counted has no available")
+        XCTAssertEqual(count(host, "usage.archived.use.report_on"), 1, "the flip itself still happened")
+
+        var tracker = UsageTracker()
+        tracker.enterForeground(at: 0, available: [.focus])
+        tracker.resetCountsForNewRecord(available: [.focus])
+        XCTAssertEqual(tracker.counts.metrics, ["sessions": .number(1), "usage.focus.available": .number(1)],
+                       "midnight: the running session and the switch on now are the new day's denominators")
+        tracker.switchToggled(.focus, isOn: true)
+        XCTAssertEqual(count(tracker, "usage.focus.available"), 1, "already counted in this record")
+        tracker.resetCountsForNewRecord(available: [])
+        XCTAssertEqual(count(tracker, "usage.focus.available"), 0, "switched off by the next record: not carried")
     }
 
     // MARK: Dwell buckets
@@ -339,7 +418,7 @@ final class UsageRegistryTests: XCTestCase {
             "value_schema": key.kind == .histogram ? "fixed_string" : "number",
             "since_build": key.sinceBuild,
             "retired_build": NSNull(),
-            "liveness_key": key.name == UsageKey.sessionsName ? NSNull() as Any : UsageKey.sessionsName as Any,
+            "liveness_key": key.livenessKey.map { $0 as Any } ?? NSNull(),
             "spike_id": UsageRecordIDs.spikeID,
             "description": key.description,
         ]
@@ -462,9 +541,9 @@ enum UsageSourceScan {
         return tokens
     }
 
-    static func calls(in stripped: String, file: String) -> [Call] {
+    static func calls(in stripped: String, file: String, prefix: String = "UsageProbe.") -> [Call] {
         let chars = Array(stripped)
-        let needle = Array("UsageProbe.")
+        let needle = Array(prefix)
         var found: [Call] = []
         var i = 0
         while i + needle.count < chars.count {
@@ -553,14 +632,24 @@ final class UsageSourceScanTests: XCTestCase {
     }
 
     /// §5's dead-wire rule for the other stages: a declared key with no
-    /// emit site reads as "nobody used it" on the server.
+    /// emit site reads as "nobody used it" on the server. The archive
+    /// toggles and every `available` are emitted through `switchToggled`,
+    /// so each gate needs a toggle site.
     func testEveryDeclaredUseDoneViewRouteAndTallyHasASite() throws {
         let calls = try allCalls()
         func tokens(_ verbs: Set<String>) -> Set<String> {
             calls.filter { verbs.contains($0.verb) }.reduce(into: Set<String>()) { $0.formUnion($1.tokens) }
         }
         var violations: [String] = []
-        for tag in UsageUse.allCases where !tokens(["use"]).contains("\(tag)") { violations.append("use \(tag)") }
+        let toggleTags = Set(UsageGate.allCases.flatMap { [$0.toggleTags.on, $0.toggleTags.off] })
+        // `switchToggled` is reached only through the Settings toggles'
+        // `userToggle(_:_:)` setter; each gate needs its own toggle there.
+        XCTAssertFalse(calls.filter { $0.verb == "switchToggled" }.isEmpty, "liveness: the toggle setter calls the probe")
+        let toggleSites = try sources().flatMap { UsageSourceScan.calls(in: $0.stripped, file: $0.file, prefix: "Self.") }
+            .filter { $0.verb == "userToggle" }
+        let gatesWithToggle = toggleSites.reduce(into: Set<String>()) { $0.formUnion($1.tokens) }
+        for gate in UsageGate.allCases where !gatesWithToggle.contains("\(gate)") { violations.append("gate \(gate): no Settings toggle site") }
+        for tag in UsageUse.allCases where !toggleTags.contains(tag) && !tokens(["use"]).contains("\(tag)") { violations.append("use \(tag)") }
         for tag in UsageDone.allCases where !tokens(["done"]).contains("\(tag)") { violations.append("done \(tag)") }
         for tag in UsageView.allCases where !tokens(["view"]).contains("\(tag)") { violations.append("view \(tag)") }
         for tag in UsageRoute.allCases where !tokens(["leave", "noteExit"]).contains("\(tag)") { violations.append("route \(tag)") }
