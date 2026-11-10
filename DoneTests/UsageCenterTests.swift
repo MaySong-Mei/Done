@@ -523,6 +523,84 @@ final class UsageCenterTests: XCTestCase {
         expectAppendedOnly("the midnight hop", resident: true)
     }
 
+    /// The upload batch reads the record files off the main actor: it never
+    /// runs the main-actor whole-file read (`SpikeRunStore.loadRuns`).
+    func testTheUploadBatchDoesNotRunTheMainActorWholeFileRead() async throws {
+        let center = makeCenter(clock: Box(morning), media: Box(0), countsLaunchSession: true)
+        UsageProbe.use(.allDayToggle)
+        center.flushDaily()
+        let suite = "UsageUploadReadTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let server = SyncFakeServer(userId: uid)
+        let uploader = makeUploader(server: server, defaults: defaults)
+        let reads = SpikeRunStore.wholeFileReads
+        let outcome = await uploader.uploadNow(trigger: .deckOpen)
+        XCTAssertEqual(outcome, .uploaded(rows: 2), "positive control: the day's two lines were read and sent")
+        XCTAssertEqual(SpikeRunStore.wholeFileReads, reads, "no main-actor whole-file read in the batch")
+    }
+
+    /// "Switch off = zero requests" holds for a batch whose read is in flight:
+    /// a gate that closes during the read (the switch, consent, the account)
+    /// stops the batch before anything is sent. Positive control: nothing
+    /// changes during the read and the day goes up.
+    func testAGateThatClosesDuringTheBatchReadSendsNothing() async throws {
+        let center = makeCenter(clock: Box(morning), media: Box(0), countsLaunchSession: true)
+        UsageProbe.use(.allDayToggle)
+        center.flushDaily()
+        let cases: [(String, TelemetryUploadOutcome, @Sendable (UserDefaults, Box<Bool>) -> Void)] = [
+            ("switch off", .switchOff, { defaults, _ in defaults.set(false, forKey: AppSettingsKeys.telemetryUploadsEnabled) }),
+            ("consent gone", .noConsent, { defaults, _ in defaults.removeObject(forKey: AppSettingsKeys.telemetryConsentAt) }),
+            ("signed out", .signedOut, { _, signedIn in signedIn.value = false }),
+            ("nothing closes", .uploaded(rows: 2), { _, _ in }),
+        ]
+        for (name, expected, closeGate) in cases {
+            let suite = "UsageUploadGateTests-\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let server = SyncFakeServer(userId: uid)
+            let signedIn = Box(true)
+            let reads = Box(0)
+            var deps = TelemetryUploader.Dependencies()
+            deps.defaults = defaults
+            deps.location = location
+            let now = morning.addingTimeInterval(3600)
+            deps.now = { now }
+            deps.launchDelay = 0
+            deps.makeKeepAlive = { nil }
+            deps.bootstrapOwner = { nil }
+            deps.readRecords = { urls, retention in
+                reads.value += 1
+                closeGate(defaults, signedIn)
+                return urls.flatMap { SpikeRunStore.readRuns(at: $0, retention: retention) }
+            }
+            let uploader = TelemetryUploader(dependencies: deps)
+            let user = uid
+            uploader.attach(TelemetryUploader.Attachment(gateway: server, isBlockedByBuild: { false },
+                                                         currentUserID: { user }, isSignedIn: { signedIn.value }))
+            defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+            TelemetryConsentStore.recordGrant(defaults, at: morning.addingTimeInterval(-3600))
+            let outcome = await uploader.uploadNow(trigger: .deckOpen)
+            XCTAssertGreaterThanOrEqual(reads.value, 1, "\(name): rig: the gate closed inside a batch's read")
+            XCTAssertEqual(outcome, expected, name)
+            let upserts = server.requests.filter { $0.verb == .telemetryUpsert }.count
+            XCTAssertEqual(upserts, expected == .uploaded(rows: 2) ? 1 : 0, "\(name): requests sent")
+        }
+    }
+
+    /// The hop is what moves a parked signal into the new day; if the clock
+    /// went back before it ran, the parked signal lands in the current day.
+    func testAParkedSignalIsNeverLost() throws {
+        let clock = Box(morning)
+        let center = makeCenter(clock: clock, media: Box(0))
+        let dayEnd = la.date(byAdding: .day, value: 1, to: la.startOfDay(for: morning))!
+        clock.value = dayEnd.addingTimeInterval(5)
+        UsageProbe.use(.allDayToggle)
+        clock.value = dayEnd.addingTimeInterval(-5)
+        center.performRolloverFlushIfDue()
+        XCTAssertEqual(center.usage.counts.count("usage.all_day.use"), 1)
+    }
+
     /// A usage signal held for the rollover hop (after midnight, the app
     /// still in the foreground) and a backgrounding before the hop ran — the
     /// cycle's flush already done at the resign, before midnight. The edge
