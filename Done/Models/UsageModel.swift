@@ -17,7 +17,7 @@
 //  Cost contract (design §3 L0, §10): a signal is a static weak read, one
 //  Date read and one Double compare in the center (the day bound), an
 //  array subscript and an add. Opening a visit writes one small struct
-//  into a fixed array; closing one is at most three compares and two adds.
+//  into a fixed array; closing one is a few compares and adds.
 //  No dictionary, no string, no allocation on any of those paths — every
 //  table below is built once (the center touches `UsageLayout.shared` when
 //  it activates) and only read afterwards.
@@ -110,7 +110,14 @@ enum UsageGate: UInt16, CaseIterable {
 struct UsageDeclaration {
     struct Entry { let tag: UsageEntry; let name: String; let source: UsageEntrySource; let what: String }
     /// `name == nil` is the bare `use` key (a feature with one kind of use).
-    struct Use { let tag: UsageUse; let name: String?; let what: String }
+    /// `outsideVisit`: the use happens where the feature has no visit (repeat
+    /// picked in an event form), so it is never taken for a stray one.
+    struct Use {
+        let tag: UsageUse; let name: String?; let what: String; let outsideVisit: Bool
+        init(tag: UsageUse, name: String?, what: String, outsideVisit: Bool = false) {
+            self.tag = tag; self.name = name; self.what = what; self.outsideVisit = outsideVisit
+        }
+    }
     /// `name == nil` is the bare `done` key; a named done is an ATTRIBUTE of
     /// a done (a subset count, each ≤ the bare key), never a partition.
     struct Done { let tag: UsageDone; let name: String?; let what: String }
@@ -189,7 +196,7 @@ enum UsageFeature: UInt16, CaseIterable {
 
     /// The build this slice ships in; per feature so a later feature can
     /// carry its own.
-    static let firstUsageBuild = 29
+    static let firstUsageBuild = 31
 
     var declaration: UsageDeclaration {
         let build = Self.firstUsageBuild
@@ -278,7 +285,7 @@ enum UsageFeature: UInt16, CaseIterable {
                     .init(tag: .repeatRuleEditor, name: "rule_editor", source: .user, what: "Manage repeat in event detail"),
                 ],
                 uses: [
-                    .init(tag: .repeatForm, name: "form", what: "a repeat other than never picked in an event form (outside any rule-editor visit)"),
+                    .init(tag: .repeatForm, name: "form", what: "a repeat other than never picked in an event form (outside any rule-editor visit)", outsideVisit: true),
                     .init(tag: .repeatDeleteSeries, name: "delete_series", what: "Delete entire series in the rule editor"),
                 ],
                 dones: [
@@ -400,6 +407,8 @@ final class UsageLayout {
     let hasVisits: [Bool]
     /// Per gate (by raw value): the slot of its `available` key.
     let availableSlot: [Int]
+    /// Per use tag: declared as happening outside the feature's visits.
+    let useOutsideVisit: [Bool]
 
     static let shared = UsageLayout()
     /// `sessions` is the first key laid out.
@@ -423,6 +432,7 @@ final class UsageLayout {
         var entrySlot = Array(repeating: -1, count: UsageEntry.allCases.count)
         var entryFeature = Array(repeating: UsageFeature.focus, count: UsageEntry.allCases.count)
         var useSlot = Array(repeating: -1, count: UsageUse.allCases.count)
+        var useOutsideVisit = Array(repeating: false, count: UsageUse.allCases.count)
         var useFeature = Array(repeating: UsageFeature.focus, count: UsageUse.allCases.count)
         var doneSlot = Array(repeating: -1, count: UsageDone.allCases.count)
         var doneFeature = Array(repeating: UsageFeature.focus, count: UsageDone.allCases.count)
@@ -457,6 +467,7 @@ final class UsageLayout {
             }
             for u in d.uses {
                 let i = Int(u.tag.rawValue)
+                useOutsideVisit[i] = u.outsideVisit
                 useSlot[i] = add(base + "use" + (u.name.map { "." + $0 } ?? ""), .counter, feature, d.sinceBuild,
                                  "\(label) - used: \(u.what).")
                 useFeature[i] = feature
@@ -520,6 +531,7 @@ final class UsageLayout {
         self.routeStage = routeStage
         self.hasVisits = hasVisits
         self.availableSlot = availableSlot
+        self.useOutsideVisit = useOutsideVisit
     }
 
     /// Tags no feature declares (a slot of -1). Empty by construction when
@@ -653,6 +665,11 @@ struct UsageTracker: Equatable {
     /// Per gate: its `available` was counted for the running session in the
     /// current record — the "at most once per session" latch.
     private(set) var availableCounted: [Bool] = Array(repeating: false, count: UsageGate.allCases.count)
+    /// Per feature: its last visit has ended (settled, or dropped on an owner
+    /// change or erase) and no new one has begun. A use or done arriving in
+    /// that gap is a late write from a surface that is already gone — the
+    /// visit it belonged to was settled without it — and is not counted.
+    private(set) var closedAwaitingEnter: [Bool] = Array(repeating: false, count: UsageFeature.allCases.count)
 
     init() {}
 
@@ -674,20 +691,42 @@ struct UsageTracker: Equatable {
         // an abandonment.
         visits[f] = UsageVisit(foregroundSeconds: 0, runningSince: inForeground ? now : nil, touched: false)
         exitHints[f] = nil
+        closedAwaitingEnter[f] = false
     }
 
     mutating func use(_ use: UsageUse) {
         let layout = UsageLayout.shared
         let i = Int(use.rawValue)
+        let feature = layout.useFeature[i]
+        guard layout.useOutsideVisit[i] || !isStray(feature) else { return }
         bump(layout.useSlot[i])
-        touch(layout.useFeature[i])
+        touch(feature)
     }
 
     mutating func done(_ done: UsageDone) {
         let layout = UsageLayout.shared
         let i = Int(done.rawValue)
+        let feature = layout.doneFeature[i]
+        guard !isStray(feature) else { return }
         bump(layout.doneSlot[i])
-        touch(layout.doneFeature[i])
+        touch(feature)
+    }
+
+    /// A use or done for a feature whose visit has already ended.
+    private func isStray(_ feature: UsageFeature) -> Bool {
+        let f = Int(feature.rawValue)
+        return visits[f] == nil && closedAwaitingEnter[f]
+    }
+
+    /// An owner change: the open visits are the previous account's and must
+    /// not settle into the next one's record; a late use for them is stray.
+    /// Counts are not touched here (the re-mint resets them).
+    mutating func dropOpenVisits() {
+        for f in visits.indices where visits[f] != nil {
+            visits[f] = nil
+            closedAwaitingEnter[f] = true
+        }
+        for f in exitHints.indices { exitHints[f] = nil }
     }
 
     /// A sub-page was shown. Not a use: abandonment is untouched.
@@ -720,6 +759,7 @@ struct UsageTracker: Equatable {
         let f = Int(feature.rawValue)
         guard let visit = visits[f] else { return }
         visits[f] = nil
+        closedAwaitingEnter[f] = true
         let hinted = exitHints[f]
         exitHints[f] = nil
         var resolved = hinted ?? route
@@ -824,8 +864,7 @@ struct UsageTracker: Equatable {
     /// Erase: the counts AND the open visits are the erased owner's.
     mutating func forgetAll(available: Set<UsageGate> = []) {
         counts = UsageCounts()
-        visits = Array(repeating: nil, count: UsageFeature.allCases.count)
-        exitHints = Array(repeating: nil, count: UsageFeature.allCases.count)
+        dropOpenVisits()
         changeCount &+= 1
         clearAvailable()
         if runningSessionCounted { bump(UsageLayout.sessionsSlot) }

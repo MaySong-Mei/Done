@@ -378,7 +378,12 @@ final class UsageCenterTests: XCTestCase {
 
         clock.value = la.date(byAdding: .day, value: 1, to: la.startOfDay(for: morning))!.addingTimeInterval(60)
         media.value = 30
-        UsageProbe.leave(.focus, via: .focusRotate)   // after midnight, before the hop
+        // After midnight, before the rollover hop has run: the visit ends and
+        // a first signal of the new day arrives.
+        UsageProbe.leave(.focus, via: .focusRotate)
+        UsageProbe.use(.repeatForm)
+        XCTAssertTrue(center.usage.isVisitOpen(.focus), "the leave waits for the hop")
+        XCTAssertEqual(center.usage.counts.count("usage.focus.exit.rotate"), 0, "nothing went into yesterday's counts")
         center.performRolloverFlushIfDue()
         UsageProbe.use(.allDayToggle)
         center.flushDaily()
@@ -391,6 +396,61 @@ final class UsageCenterTests: XCTestCase {
         XCTAssertNotEqual(today.dayKey, closed.dayKey)
         XCTAssertEqual(n(today, "sessions"), 1, "the session running across midnight is the new day's denominator")
         XCTAssertEqual(n(today, "usage.all_day.use"), 1)
+
+        // A visit settles on the day it ends: entered on day N, its exit,
+        // abandonment and dwell are day N+1's.
+        XCTAssertEqual(n(closed, "usage.focus.enter.auto"), 1, "the enter stays on the day it entered")
+        XCTAssertNil(closed.metrics["usage.focus.exit.rotate"], "not yesterday's: the visit ended after midnight")
+        XCTAssertNil(closed.metrics["usage.focus.abandon"])
+        XCTAssertNil(closed.metrics["usage.focus.dwell"])
+        XCTAssertNil(closed.metrics["usage.repeat.use.form"], "the first signal after midnight is not yesterday's either")
+        XCTAssertEqual(n(today, "usage.focus.exit.rotate"), 1)
+        XCTAssertEqual(n(today, "usage.focus.abandon"), 1)
+        XCTAssertEqual(today.metrics["usage.focus.dwell"], .string("0 0 1 0"), "30 s of foreground, timed at the signal")
+        XCTAssertEqual(n(today, "usage.repeat.use.form"), 1)
+        XCTAssertNil(today.metrics["usage.focus.enter.auto"], "and the new day has the exit without the enter")
+    }
+
+    /// The hop is what moves a parked signal into the new day; if the clock
+    /// went back before it ran, the parked signal lands in the current day.
+    func testAParkedSignalIsNeverLost() throws {
+        let clock = Box(morning)
+        let center = makeCenter(clock: clock, media: Box(0))
+        let dayEnd = la.date(byAdding: .day, value: 1, to: la.startOfDay(for: morning))!
+        clock.value = dayEnd.addingTimeInterval(5)
+        UsageProbe.use(.allDayToggle)
+        clock.value = dayEnd.addingTimeInterval(-5)
+        center.performRolloverFlushIfDue()
+        XCTAssertEqual(center.usage.counts.count("usage.all_day.use"), 1)
+    }
+
+    /// A sign-out or account switch is noticed at the next flush. The open
+    /// visit is the previous account's: it must not settle into the next
+    /// account's row, and a late write for it is stray. Positive control: a
+    /// visit opened after the switch settles normally.
+    func testAnOwnerChangeDropsTheOpenVisitsSoTheyNeverSettleIntoTheNextAccount() throws {
+        let owner = Box<String?>(uid)
+        let center = makeCenter(clock: Box(morning), media: Box(0), owner: owner)
+        UsageProbe.enter(.eventDetailCanvas)
+        owner.value = TelemetryFixtures.otherUID
+        center.flushDaily()
+        UsageProbe.use(.eventDetailPlan)
+        UsageProbe.leave(.eventDetail)
+        center.flushDaily()
+        let byOwner = Dictionary(grouping: usageRecords(), by: { $0.ownerUID ?? "nil" })
+        let a = try XCTUnwrap(byOwner[uid]?.first)
+        let b = byOwner[TelemetryFixtures.otherUID]?.first
+        XCTAssertEqual(n(a, "usage.event_detail.enter.canvas"), 1)
+        XCTAssertNil(a.metrics["usage.event_detail.abandon"], "never settled")
+        XCTAssertNil(b?.metrics["usage.event_detail.abandon"], "A's visit did not settle into B's row")
+        XCTAssertNil(b?.metrics["usage.event_detail.dwell"])
+        XCTAssertNil(b?.metrics["usage.event_detail.use.plan"], "nor did its late write")
+
+        UsageProbe.enter(.eventDetailList)
+        UsageProbe.leave(.eventDetail)
+        center.flushDaily()
+        let b2 = try XCTUnwrap(usageRecords().first { $0.ownerUID == TelemetryFixtures.otherUID })
+        XCTAssertEqual(n(b2, "usage.event_detail.abandon"), 1, "B's own visit settles")
     }
 
     func testAnAccountSwitchClosesTheUsageLineUnderTheOldOwner() throws {

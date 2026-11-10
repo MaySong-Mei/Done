@@ -496,10 +496,10 @@ enum TelemetryRedactor {
     static let observatoryFixedFormatStringKeys: Set<String> =
         ResidentCounterSet.fixedFormatStringKeys.union(ResidentWindowAggregates.fixedFormatStringKeys)
 
-    /// Every `.string` metric the uploader lets through: the observatory's
-    /// and the usage dwell histograms (gh#273 §6.3).
-    static let fixedFormatStringKeys: Set<String> =
-        observatoryFixedFormatStringKeys.union(UsageKey.all.filter { $0.kind == .histogram }.map(\.name))
+    /// The usage dwell histograms (gh#273 §6.3): let through on `usage-daily`
+    /// rows only, never on another record's row.
+    static let usageFixedFormatStringKeys: Set<String> =
+        Set(UsageKey.all.filter { $0.kind == .histogram }.map(\.name))
 
     /// A usage row's metrics, judged against the usage registry rather than
     /// trusted: a key `UsageKey` does not declare is removed, a counter must
@@ -561,7 +561,8 @@ enum TelemetryRedactor {
             case "day_tz_offset_min", "app_build", "revision":
                 if let number = value as? NSNumber, !isBoolean(number) { out[key] = number }
             case "metrics":
-                var metrics = redactMetrics(value as? [String: Any] ?? [:], allowedStringKeys: allowedStringKeys)
+                let allowed = isUsageRow ? allowedStringKeys.union(usageFixedFormatStringKeys) : allowedStringKeys
+                var metrics = redactMetrics(value as? [String: Any] ?? [:], allowedStringKeys: allowed)
                 if isUsageRow {
                     metrics = metrics.filter { usageMetricAllowed(key: $0.key, value: $0.value) }
                 }

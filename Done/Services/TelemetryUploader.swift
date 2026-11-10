@@ -906,7 +906,7 @@ final class TelemetryUploader: ObservableObject {
                     TelemetryClaimKey.dayKey(forDayStart: calendar.startOfDay(for: startedAt), calendar: calendar)
                 },
                 noteOptIn: noteOptIn,
-                allowedStringKeys: TelemetryRedactor.fixedFormatStringKeys
+                allowedStringKeys: TelemetryRedactor.observatoryFixedFormatStringKeys
             )
         }
         let previewData = (try? JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys])) ?? Data()
