@@ -329,3 +329,466 @@ final class UsageFocusHookTests: XCTestCase {
         XCTAssertLessThan(note.lowerBound, end.lowerBound, "noted before the session is ended")
     }
 }
+
+// MARK: - Writes that run after the detail has gone, and programmatic page writes
+
+/// The detail pushed and popped the way a presenter does it (the
+/// `UsageDetailNavigationTests` rig). Two writes the detail defers until it
+/// disappears — the deadline scrub's coalesced commit, the name prompt's
+/// save of a typed but unsaved name — run AFTER the presenter's leave has
+/// settled the visit. The use must already be on the visit by then, counted
+/// at the user's action. And the route jump that rewrites the page on every
+/// return from a pushed page is not the user viewing it.
+@MainActor
+final class UsageDetailLateWriteTests: XCTestCase {
+    private var suiteName: String!
+    private var defaults: UserDefaults!
+    private var storage: EventStorageLocation!
+    private var location: SpikeRunStorageLocation!
+    private var center: ResidentObservationCenter?
+    private var displacedSink: UsageSink?
+    private let day = Date(timeIntervalSince1970: 1_770_000_000)
+
+    override func setUp() {
+        super.setUp()
+        suiteName = "UsageDetailLateWriteTests-\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suiteName)
+        storage = TestStorage.reset(suiteName)
+        location = .ephemeral(id: UUID())
+        displacedSink = UsageProbe.sink
+    }
+
+    override func tearDown() {
+        center?.deactivate()
+        center = nil
+        UsageProbe.sink = displacedSink
+        try? FileManager.default.removeItem(at: location.directory)
+        TestStorage.tearDown(suiteName)
+        super.tearDown()
+    }
+
+    private func count(_ name: String) -> Int { center?.usage.counts.count(name) ?? -1 }
+
+    private func settle() { UsageSurfaceHost.pump(1.0) }
+
+    /// Pumps until `condition` holds or `timeout` passes: a pop with the
+    /// keyboard up takes longer than a fixed wait reliably covers.
+    private func wait(upTo timeout: TimeInterval, for condition: () -> Bool) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition(), Date() < deadline { UsageSurfaceHost.pump(0.1) }
+    }
+
+    private func route(_ id: UUID, _ target: CalendarEventDetailJumpTarget) -> CalendarEventDetailRoute {
+        CalendarEventDetailRoute(
+            occurrence: CalendarEventOccurrenceContext(eventID: id, occurrenceDate: day, occurrenceID: nil,
+                                                       isAllDay: false, source: .timelineTap),
+            initialJumpTarget: target)
+    }
+
+    private func open(_ event: Event, _ target: CalendarEventDetailJumpTarget)
+        -> (store: EventStore, nav: UsageDetailNavigationTests.Nav, host: (window: UIWindow, displaced: UIWindow?)) {
+        center = UsageSurfaceHost.makeCenter(location: location, countsLaunchSession: false)
+        let store = EventStore(defaults: defaults, storage: storage, seedsSampleDataIfEmpty: false)
+        store.rawCalendarEvents = [event]
+        let nav = UsageDetailNavigationTests.Nav()
+        let host = UsageSurfaceHost.show(UsageDetailNavigationTests.Host(nav: nav, store: store))
+        UsageProbe.enter(.eventDetailCanvas)
+        nav.path = [.detail(route(event.id, target))]
+        settle()
+        return (store, nav, host)
+    }
+
+    func testADeadlineScrubIsAUseOfTheVisitEvenWhenItsCommitRunsAfterTheLeave() throws {
+        let deadline = day.addingTimeInterval(7_200)
+        let todo = Event(title: "Buy stamps", timeRanges: [.init(start: day, end: day.addingTimeInterval(3600))],
+                         deadline: deadline, type: "Study", kind: .todo)
+        let (store, nav, host) = open(todo, .meta)
+        defer { UsageSurfaceHost.hide(host) }
+        let picker = try XCTUnwrap(UsageSurfaceHost.views(UIDatePicker.self, in: host.window).first,
+                                   "the todo page's deadline picker")
+        picker.date = deadline.addingTimeInterval(3_600)
+        picker.sendActions(for: .valueChanged)
+        UsageSurfaceHost.pump(0.05)
+        XCTAssertEqual(count("usage.event_detail.use.todo"), 1, "the scrub is the use, at the scrub")
+
+        // Back within the coalescer's window: its commit runs on the way out.
+        nav.path = []
+        wait(upTo: 4) { store.findCalendarEvent(id: todo.id)?.deadline == deadline.addingTimeInterval(3_600) }
+        XCTAssertEqual(store.findCalendarEvent(id: todo.id)?.deadline, deadline.addingTimeInterval(3_600),
+                       "positive control: the coalesced commit did run, after the page went away")
+        XCTAssertEqual(count("usage.event_detail.abandon"), 0, "a visit with a scrub was not abandoned")
+        XCTAssertEqual(count("usage.event_detail.use.todo"), 1, "and the late commit adds no second, stray use")
+    }
+
+    func testANameTypedAndLeftUnsavedIsAUseOfTheVisitNotAStrayUseAfterIt() throws {
+        let event = Event(title: "Workout", timeRanges: [.init(start: day, end: day.addingTimeInterval(3600))], type: "Study")
+        AwaitingNameStore.shared.mark(event.id, title: event.title)
+        defer { AwaitingNameStore.shared.clear(event.id) }
+        let (store, nav, host) = open(event, .meta)
+        // Prune the mark against this test's store, not the host app's.
+        AwaitingNameStore.shared.attach(to: store)
+        defer { UsageSurfaceHost.hide(host) }
+        let field = try XCTUnwrap(UsageSurfaceHost.views(UITextField.self, in: host.window).first { $0.placeholder == "Workout" },
+                                  "the name prompt's field")
+        _ = field.becomeFirstResponder()
+        for character in "Lunch" {
+            field.insertText(String(character))
+            UsageSurfaceHost.pump(0.03)
+        }
+        XCTAssertEqual(count("usage.event_detail.use.plan"), 1, "typing the name is the use, once")
+
+        nav.path = []
+        wait(upTo: 4) { store.findCalendarEvent(id: event.id)?.title == "Lunch" }
+        XCTAssertEqual(store.findCalendarEvent(id: event.id)?.title, "Lunch",
+                       "positive control: the prompt saved the typed name on the way out")
+        XCTAssertEqual(count("usage.event_detail.abandon"), 0)
+        XCTAssertEqual(count("usage.event_detail.use.plan"), 1, "the save on the way out is not a second use")
+    }
+
+    /// The route replaced in place, as `navigationDestination(item:)` does
+    /// when its item changes: the detail's `onChange(of: route.id)` re-runs
+    /// the route jump — the same programmatic page write a return from the
+    /// chat page makes.
+    final class ItemNav: ObservableObject {
+        @Published var route: CalendarEventDetailRoute?
+    }
+
+    struct ItemHost: View {
+        @ObservedObject var nav: ItemNav
+        let store: EventStore
+        var body: some View {
+            NavigationStack {
+                Color.clear.navigationDestination(item: $nav.route) { route in
+                    CalendarEventDetailView(route: route).environmentObject(store)
+                }
+            }
+        }
+    }
+
+    /// Which page the detail shows: the pager's offset, in pages.
+    private func shownPage(in window: UIWindow) -> Int? {
+        guard let pager = UsageSurfaceHost.views(UICollectionView.self, in: window).first(where: { $0.isPagingEnabled }),
+              pager.bounds.width > 0 else { return nil }
+        return Int((pager.contentOffset.x / pager.bounds.width).rounded())
+    }
+
+    /// Opening straight onto the reflection page (Log, an occurrence row) is
+    /// a view: the user's entry chose the page. So is a new route replacing
+    /// the old one in place. What is not — the route re-asserting its page on
+    /// a re-appear — needs a finger first and is driven in
+    /// `UsageRouteJumpTests`.
+    func testTheRoutesOwnPageChoiceIsAView() throws {
+        center = UsageSurfaceHost.makeCenter(location: location, countsLaunchSession: false)
+        let store = EventStore(defaults: defaults, storage: storage, seedsSampleDataIfEmpty: false)
+        let event = Event(title: "Deep Work", timeRanges: [.init(start: day, end: day.addingTimeInterval(3600))], type: "Study")
+        store.rawCalendarEvents = [event]
+        let nav = ItemNav()
+        let host = UsageSurfaceHost.show(ItemHost(nav: nav, store: store))
+        defer { UsageSurfaceHost.hide(host) }
+
+        UsageProbe.enter(.eventDetailMenu)
+        nav.route = route(event.id, .log)
+        settle()
+        XCTAssertEqual(shownPage(in: host.window), 1, "rig: opened on the reflection page by the route")
+        XCTAssertEqual(count("usage.event_detail.view.reflection"), 1, "the entry chose the reflection page: a view")
+
+        nav.route = route(event.id, .meta)
+        settle()
+        XCTAssertEqual(shownPage(in: host.window), 0, "rig: the new route opened the overview")
+        XCTAssertEqual(count("usage.event_detail.view.reflection"), 1, "the overview is not the reflection page")
+        nav.route = route(event.id, .log)
+        settle()
+        XCTAssertEqual(shownPage(in: host.window), 1)
+        XCTAssertEqual(count("usage.event_detail.view.reflection"), 2, "a new route onto the reflection page is a view too")
+    }
+}
+
+// MARK: - Each presenter settles the detail's visit
+
+/// One anchor per presenter, comments stripped: a single surviving leave
+/// somewhere must not satisfy the other two.
+@MainActor
+final class UsageDetailPresenterAnchorTests: XCTestCase {
+    private func source(_ path: String) throws -> String {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(path)
+        return UsageSourceScan.stripCommentsAndStrings(try String(contentsOf: url, encoding: .utf8))
+    }
+
+    private func closures(after anchor: String, in code: String) -> [String] {
+        let chars = Array(code)
+        var found: [String] = []
+        var searchFrom = code.startIndex
+        while let range = code.range(of: anchor, range: searchFrom..<code.endIndex) {
+            var i = code.distance(from: code.startIndex, to: range.upperBound)
+            while i < chars.count, chars[i] != "{" { i += 1 }
+            if let body = UsageSourceScan.balanced(chars, from: i, "{", "}") {
+                found.append(String(chars[body]).split(whereSeparator: \.isWhitespace).joined(separator: " "))
+            }
+            searchFrom = range.upperBound
+        }
+        return found
+    }
+
+    private func assertLeaves(_ path: String, routeState: String, file: StaticString = #filePath, line: UInt = #line) throws {
+        let code = try source(path)
+        let bodies = closures(after: ".onChange(of: \(routeState))", in: code)
+        XCTAssertFalse(bodies.isEmpty, "\(path): no onChange of \(routeState)", file: file, line: line)
+        let leaves = bodies.filter { $0.contains("oldValue != nil, newValue == nil") && $0.contains("UsageProbe.leave(.eventDetail)") }
+        XCTAssertEqual(leaves.count, 1, "\(path): the route going away must settle the detail's visit", file: file, line: line)
+    }
+
+    func testTheCalendarPageSettlesTheDetailWhenItsRouteGoesAway() throws {
+        try assertLeaves("Done/Views/Calendar/CalendarPageView.swift", routeState: "selectedEventDetailRoute")
+    }
+
+    func testTheSearchSettlesTheDetailWhenItsRouteGoesAway() throws {
+        try assertLeaves("Done/Views/Calendar/CalendarSearchView.swift", routeState: "detailRoute")
+    }
+
+    func testTheListSettlesTheDetailWhenItsRouteGoesAway() throws {
+        try assertLeaves("Done/Views/Calendar/Components/CalendarListView.swift", routeState: "selectedEventDetailRoute")
+    }
+}
+
+// MARK: - Erase through the real eraser (design §11 item 7)
+
+@MainActor
+final class UsageEraseThroughTheEraserTests: XCTestCase {
+    private let uid = TelemetryFixtures.uid
+    private let bundleID = Bundle.main.bundleIdentifier ?? "wordless.shiqiliuyifanmei.app"
+    private let pool = SpikeRunStorageLocation.production
+    private var savedStandard: [String: Any]?
+    private var suite = ""
+    private var defaults: UserDefaults!
+    private var store: EventStore!
+    private var center: ResidentObservationCenter?
+    private var displacedSink: UsageSink?
+    private var scratch: [URL] = []
+
+    override func setUp() {
+        super.setUp()
+        savedStandard = UserDefaults.standard.persistentDomain(forName: bundleID)
+        SpikeRunStore.wipe(location: pool)
+        suite = "UsageEraseThroughTheEraserTests-\(UUID().uuidString)"
+        let location = TestStorage.reset(suite)
+        defaults = UserDefaults(suiteName: suite)!
+        store = EventStore(defaults: defaults, storage: location, seedsSampleDataIfEmpty: false)
+        displacedSink = UsageProbe.sink
+    }
+
+    override func tearDown() {
+        center?.deactivate()
+        center = nil
+        UsageProbe.sink = displacedSink
+        SpikeRunStore.wipe(location: pool)
+        UserDefaults.standard.setPersistentDomain(savedStandard ?? [:], forName: bundleID)
+        for url in scratch { try? FileManager.default.removeItem(at: url) }
+        TestStorage.tearDown(suite)
+        super.tearDown()
+    }
+
+    private func temporaryDirectory(_ name: String) -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("UsageEraseThroughTheEraserTests-\(name)-\(UUID().uuidString)", isDirectory: true)
+        scratch.append(url)
+        return url
+    }
+
+    /// The same eraser `SpikeEraseWritebackTests` drives.
+    private func makeEraser() -> LocalDataEraser {
+        let types = EventTypeTemplateStore(defaults: defaults)
+        let skills = SkillInsightStore(defaults: defaults)
+        let prefs = AgentPreferenceStore(directoryURL: temporaryDirectory("prefs"))
+        let service = SupabaseSyncService(gateway: SyncFakeServer(userId: uid).connection(), userId: uid,
+                                          defaults: .standard, scheduler: SyncManualScheduler(start: Date()),
+                                          environment: .local)
+        let expiresAt = Date().addingTimeInterval(3_600).timeIntervalSince1970
+        let session = #"{"access_token":"at-1","refresh_token":"r-1","user_id":"\#(uid)","email":"erase@example.com","expires_at":\#(expiresAt)}"#
+        let auth = AuthService(url: "https://stub.invalid", projectAPIKey: "test-publishable-key", defaults: defaults,
+                               sessionStore: InMemorySessionStore(),
+                               transport: { request in
+                                   XCTFail("no auth request may go out; got \(request.url?.absoluteString ?? "?")")
+                                   throw URLError(.notConnectedToInternet)
+                               },
+                               launchEnvironment: ["SYNC_DEBUG_SESSION": session], syncEnvironment: .local)
+        let snapshotDirectory = temporaryDirectory("snapshot")
+        try? FileManager.default.createDirectory(at: snapshotDirectory, withIntermediateDirectories: true)
+        let snapshots = BackupSnapshotService()
+        snapshots.snapshotFileURLOverride = snapshotDirectory.appendingPathComponent("backup-snapshot.json")
+        return LocalDataEraser(store: store, skillStore: skills,
+                               agentRuntime: AgentRuntime(eventTypeTemplateStore: types, preferenceStore: prefs),
+                               authService: auth, calendarState: CalendarViewState(defaults: defaults),
+                               syncService: service, imageBackupCoordinator: ImageBackupCoordinator(defaults: defaults),
+                               backupSnapshotService: snapshots)
+    }
+
+    func testTheEraseForgetsTheUsageCountsAndTheOpenVisits() throws {
+        let user = uid
+        let made = ResidentObservationCenter(
+            coordinator: SpikeSessionCoordinator(), store: nil, location: pool,
+            ownerUID: { user }, installsFollowerProbe: false, verifiesSeed: false, seedTrail: { _ in },
+            countsLaunchSession: true, isAppForeground: { true }, availableGates: { [] }
+        )
+        made.activate()
+        center = made
+        XCTAssertTrue(ResidentObservationCenter.shared === made, "fixture: the eraser reaches this center")
+        UsageProbe.enter(.createDrag)
+        UsageProbe.use(.repeatForm)
+        made.flushDaily()
+        XCTAssertEqual(SpikeRunStore.loadRuns(spikeID: UsageRecordIDs.spikeID, location: pool).count, 1,
+                       "fixture: the pre-erase day is on disk")
+
+        makeEraser().resetAllLocalData(keepingSession: true)
+
+        UsageProbe.done(.create)                         // a late write for the erased owner's visit
+        UsageProbe.leave(.create, via: .createCancel)    // and that visit's end
+        made.flushDaily()
+        let after = try XCTUnwrap(SpikeRunStore.loadRuns(spikeID: UsageRecordIDs.spikeID, location: pool).first)
+        XCTAssertEqual(SpikeRunStore.loadRuns(spikeID: UsageRecordIDs.spikeID, location: pool).count, 1, "only the new day's line")
+        XCTAssertEqual(after.metrics, ["sessions": .number(1)],
+                       "nothing from before the erase; the open visit settled nothing; the session the erase ran in is the new record's denominator")
+    }
+}
+
+// MARK: - Effort: the user's release is the use, not the commit
+
+/// Three paths reach the effort commit: the user's release (or tap), a
+/// gesture cancelled mid-drag (Home pressed, the scroll view winning), and
+/// the backgrounding flush of a drag in progress. Only the first is the user
+/// deciding; an interrupted drag is not a use even though its value is
+/// written. A live gesture cannot be driven from a test, so each path is
+/// driven through its own seam: the scrubber's `handleEnded` (only `.onEnded`
+/// calls it) and `handleDragActiveChanged` (the reset a cancellation also
+/// delivers), and the control's `commitDrag` (the scrubber's commit and the
+/// flush) vs `handleRelease`.
+@MainActor
+final class UsageEffortReleaseTests: XCTestCase {
+    private final class Recorder {
+        var value: Int?
+        var commits: [Int] = []
+        var releases: [Int] = []
+        init(_ value: Int?) { self.value = value }
+    }
+
+    private var location: SpikeRunStorageLocation!
+    private var center: ResidentObservationCenter?
+    private var displacedSink: UsageSink?
+
+    override func setUp() {
+        super.setUp()
+        location = .ephemeral(id: UUID())
+        displacedSink = UsageProbe.sink
+    }
+
+    override func tearDown() {
+        center?.deactivate()
+        center = nil
+        UsageProbe.sink = displacedSink
+        try? FileManager.default.removeItem(at: location.directory)
+        super.tearDown()
+    }
+
+    private func scrubber(_ recorder: Recorder) -> CalendarEffortScrubber {
+        CalendarEffortScrubber(value: Binding(get: { recorder.value }, set: { recorder.value = $0 }),
+                               onCommit: { recorder.commits.append($0) },
+                               onRelease: { recorder.releases.append($0) })
+    }
+
+    func testTheScrubberReportsTheUsersReleaseAndNeverACancellation() {
+        let released = Recorder(2)
+        let drag = scrubber(released)
+        drag.handleChanged(locationX: 70, trackWidth: 100)
+        drag.handleEnded(locationX: 100, trackWidth: 100)          // .onEnded: the finger lifted
+        drag.handleDragActiveChanged(wasActive: true, isActive: false)
+        XCTAssertEqual(released.releases, [5], "the release, with the released value")
+        XCTAssertEqual(released.commits, [5], "positive control: and the commit")
+
+        let cancelled = Recorder(2)
+        let interrupted = scrubber(cancelled)
+        interrupted.handleChanged(locationX: 70, trackWidth: 100)
+        interrupted.handleDragActiveChanged(wasActive: true, isActive: false)   // no .onEnded for a cancellation
+        XCTAssertEqual(cancelled.commits, [4], "the cancelled drag still commits its value")
+        XCTAssertEqual(cancelled.releases, [], "but it is not a release")
+    }
+
+    func testOnlyTheReleaseCountsTheEffortUseNeitherTheCancelNorTheFlushCommit() {
+        center = UsageSurfaceHost.makeCenter(location: location, countsLaunchSession: false)
+        let count = { self.center?.usage.counts.count("usage.event_detail.use.reflect") ?? -1 }
+        var commits = 0
+        let control = CalendarEffortQuickControl(storedEffort: 2, tint: .blue, onCommit: { _ in commits += 1 })
+        control.commitDrag(4)            // a cancelled drag's commit
+        control.commitDrag(4)            // the backgrounding flush: the same call
+        XCTAssertEqual(commits, 2, "fixture: both reached the durable commit")
+        XCTAssertEqual(count(), 0, "an interrupted drag is not a use")
+
+        control.handleRelease(2)
+        XCTAssertEqual(count(), 0, "released on the stored value: nothing changed")
+        control.handleRelease(4)
+        XCTAssertEqual(count(), 1, "positive control: the user's release that moves the value is one use")
+    }
+
+    /// The wiring a direct-construction test cannot reach, as a comment-blind
+    /// anchor: the release is what counts, and no commit path does.
+    func testNoCommitPathCountsAndTheScrubbersReleaseIsWiredToTheControl() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        func code(_ path: String) throws -> String {
+            UsageSourceScan.stripCommentsAndStrings(try String(contentsOf: root.appendingPathComponent(path), encoding: .utf8))
+        }
+        func body(of signature: String, in source: String) throws -> String {
+            let chars = Array(source)
+            let range = try XCTUnwrap(source.range(of: signature), "\(signature) not found")
+            var i = source.distance(from: source.startIndex, to: range.upperBound)
+            while i < chars.count, chars[i] != "{" { i += 1 }
+            let inner = try XCTUnwrap(UsageSourceScan.balanced(chars, from: i, "{", "}"))
+            return String(chars[inner]).split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        }
+        let glass = try code("Done/Views/Calendar/Components/GlassCardView.swift")
+        let control = try code("Done/Views/Calendar/Components/CalendarEffortQuickControl.swift")
+        let detail = try code("Done/Views/Calendar/CalendarEventDetailView.swift")
+        for (signature, source) in [("func handleDragActiveChanged(", glass), ("func commitDrag(", control), ("func commitEffortDrag(", detail)] {
+            XCTAssertFalse(try body(of: signature, in: source).contains("UsageProbe."), "\(signature) is a shared commit: it must not count")
+        }
+        XCTAssertTrue(try body(of: "func handleRelease(", in: control).contains("UsageProbe.use(.eventDetailReflect)"))
+        XCTAssertTrue(try body(of: "func handleEnded(", in: glass).contains("onRelease?(finalValue)"), "only .onEnded's handler releases")
+        XCTAssertTrue(control.contains("onRelease: handleRelease"), "the control hands the scrubber its release handler")
+    }
+}
+
+// MARK: - The route jump's page writes
+
+/// The re-appear rewrite needs a finger to have left the route's page first,
+/// which a test cannot do on the real view: the decision the view calls is
+/// driven here instead. The open-onto-reflection case is also on the real
+/// view (`UsageDetailLateWriteTests`).
+@MainActor
+final class UsageRouteJumpTests: XCTestCase {
+    func testTheFirstJumpIsTheEntrysChoiceAndARejumpOnReappearIsNot() {
+        let open = DetailPageViewUsage.routeJump(force: true, didHandleInitialJump: false, selected: .overview, target: .reflection)
+        XCTAssertEqual(open, .init(runs: true, write: .reflection, reasserted: false))
+        XCTAssertTrue(DetailPageViewUsage.isView(page: .reflection, reasserted: open.reasserted), "Log opened it: a view")
+
+        // The user swiped to the overview, opened the chat, came back.
+        let reappear = DetailPageViewUsage.routeJump(force: true, didHandleInitialJump: true, selected: .overview, target: .reflection)
+        XCTAssertEqual(reappear, .init(runs: true, write: .reflection, reasserted: true))
+        XCTAssertFalse(DetailPageViewUsage.isView(page: .reflection, reasserted: reappear.reasserted), "the route re-asserting its page")
+
+        XCTAssertEqual(DetailPageViewUsage.routeJump(force: false, didHandleInitialJump: true, selected: .overview, target: .reflection),
+                       .init(runs: false, write: nil, reasserted: false), "an unforced jump after the first does nothing")
+        XCTAssertEqual(DetailPageViewUsage.routeJump(force: true, didHandleInitialJump: true, selected: .reflection, target: .reflection).write,
+                       nil, "already there: no write, so nothing to mark")
+        XCTAssertTrue(DetailPageViewUsage.isView(page: .reflection, reasserted: false), "the user's own swipe")
+        XCTAssertFalse(DetailPageViewUsage.isView(page: .overview, reasserted: false))
+    }
+
+    /// The view uses the decision rather than restating it.
+    func testTheDetailWiresItsRouteJumpThroughTheDecision() throws {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Done/Views/Calendar/CalendarEventDetailView.swift")
+        let code = UsageSourceScan.stripCommentsAndStrings(try String(contentsOf: url, encoding: .utf8))
+            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        XCTAssertTrue(code.contains("let plan = DetailPageViewUsage.routeJump(force: force, didHandleInitialJump: didHandleInitialJump, selected: selectedPage, target: target)"))
+        XCTAssertTrue(code.contains("usageProgrammaticPageWrite = plan.reasserted selectedPage = page"))
+        XCTAssertTrue(code.contains("if DetailPageViewUsage.isView(page: page, reasserted: reasserted) { UsageProbe.view(.eventDetailReflection) }"))
+    }
+}

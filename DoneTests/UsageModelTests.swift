@@ -72,7 +72,7 @@ final class UsageModelTests: XCTestCase {
             "usage.create.enter.drag", "usage.create.enter.plus", "usage.create.enter.resume_draft",
             "usage.create.enter.reminder_ai", "usage.create.done", "usage.create.done.repeat",
             "usage.create.done.all_day", "usage.create.done.note", "usage.create.abandon.cancel",
-            "usage.create.abandon.swipe", "usage.create.abandon.banner", "usage.create.ai_fallback", "usage.create.dwell",
+            "usage.create.abandon.dismiss", "usage.create.abandon.banner", "usage.create.ai_fallback", "usage.create.dwell",
             "usage.repeat.enter.rule_editor", "usage.repeat.use.form", "usage.repeat.done", "usage.repeat.abandon",
             "usage.all_day.use",
             "usage.focus.available", "usage.todo_stack.available", "usage.wanna.available", "usage.report.available",
@@ -167,6 +167,25 @@ final class UsageModelTests: XCTestCase {
         XCTAssertEqual(count(tracker, "usage.focus.available"), 0, "switched off by the next record: not carried")
     }
 
+    // MARK: Redactor scope
+
+    /// The dwell histograms are usage keys: on any other record's row they
+    /// are removed like any unknown string metric.
+    func testTheDwellHistogramsPassOnlyOnUsageRows() {
+        func metrics(spike: String) -> [String: Any] {
+            let row: [String: Any] = ["spike_id": spike,
+                                      "metrics": ["usage.focus.dwell": "1 2 3 4", "tapLagBuckets": "0 1 2 3 4 5 6 7", "sessions": 3]]
+            return TelemetryRedactor.redact(row: row, noteOptIn: false,
+                                            allowedStringKeys: TelemetryRedactor.observatoryFixedFormatStringKeys)["metrics"] as? [String: Any] ?? [:]
+        }
+        let resident = metrics(spike: FixObservationRegistry.residentDailySpikeID)
+        XCTAssertNil(resident["usage.focus.dwell"], "not a resident-daily key")
+        XCTAssertEqual(resident["tapLagBuckets"] as? String, "0 1 2 3 4 5 6 7", "positive control: the row's own histogram passes")
+        let usage = metrics(spike: UsageRecordIDs.spikeID)
+        XCTAssertEqual(usage["usage.focus.dwell"] as? String, "1 2 3 4")
+        XCTAssertNil(usage["tapLagBuckets"], "and an observatory key is not a usage key")
+    }
+
     // MARK: Dwell buckets
 
     func testDwellBucketsAreThreeThirtyThreeHundredWithExclusiveUpperBounds() {
@@ -258,6 +277,52 @@ final class UsageModelTests: XCTestCase {
         XCTAssertEqual(count(tracker, "usage.create.abandon.cancel"), 1)
     }
 
+    /// A use or done arriving after its visit settled — a write the surface
+    /// deferred until it was gone — is not counted: the visit was already
+    /// settled without it. A use declared as happening outside the feature's
+    /// visits (repeat picked in an event form) is not stray.
+    func testAUseAfterTheVisitSettledIsStrayAndNotCounted() {
+        var tracker = UsageTracker()
+        tracker.enterForeground(at: 0)
+        tracker.enter(.eventDetailCanvas, at: 0)
+        tracker.leave(.eventDetail, via: nil, at: 1)
+        tracker.use(.eventDetailTodo)
+        tracker.use(.eventDetailPlan)
+        XCTAssertEqual(count(tracker, "usage.event_detail.use.todo"), 0, "after the settle: stray")
+        XCTAssertEqual(count(tracker, "usage.event_detail.use.plan"), 0)
+        XCTAssertEqual(count(tracker, "usage.event_detail.abandon"), 1)
+
+        tracker.enter(.createPlus, at: 2)
+        tracker.leave(.create, via: .createDismiss, at: 3)
+        tracker.done(.create)
+        XCTAssertEqual(count(tracker, "usage.create.done"), 0, "a done after the settle is stray too")
+
+        tracker.enter(.repeatRuleEditor, at: 4)
+        tracker.leave(.repeatRule, via: nil, at: 5)
+        tracker.use(.repeatForm)
+        XCTAssertEqual(count(tracker, "usage.repeat.use.form"), 1, "a form pick is not inside an editor visit")
+
+        // Positive control: the next visit counts its uses again, and a
+        // feature never entered in this process is not judged stray.
+        tracker.enter(.eventDetailSearch, at: 6)
+        tracker.use(.eventDetailTodo)
+        XCTAssertEqual(count(tracker, "usage.event_detail.use.todo"), 1)
+        var fresh = UsageTracker()
+        fresh.use(.focusExtend)
+        XCTAssertEqual(count(fresh, "usage.focus.use.extend"), 1)
+    }
+
+    func testDroppingTheOpenVisitsMakesTheirLateWritesStrayAndSettlesNothing() {
+        var tracker = UsageTracker()
+        tracker.enterForeground(at: 0)
+        tracker.enter(.eventDetailMenu, at: 0)
+        tracker.noteExit(.focusSwipe)
+        tracker.dropOpenVisits()
+        tracker.use(.eventDetailReflect)
+        tracker.leave(.eventDetail, via: nil, at: 9)
+        XCTAssertEqual(tracker.counts.metrics, ["sessions": .number(1), "usage.event_detail.enter.menu": .number(1)])
+    }
+
     func testAViewIsNotAUse() {
         var tracker = UsageTracker()
         tracker.enterForeground(at: 0)
@@ -279,11 +344,11 @@ final class UsageModelTests: XCTestCase {
 
         tracker.enter(.createDrag, at: 10)
         tracker.done(.create)
-        tracker.leave(.create, via: .createSwipe, at: 11)
-        XCTAssertEqual(count(tracker, "usage.create.abandon.swipe"), 0, "a done visit is not routed into abandonment")
+        tracker.leave(.create, via: .createDismiss, at: 11)
+        XCTAssertEqual(count(tracker, "usage.create.abandon.dismiss"), 0, "a done visit is not routed into abandonment")
         tracker.enter(.createDrag, at: 20)
-        tracker.leave(.create, via: .createSwipe, at: 21)
-        XCTAssertEqual(count(tracker, "usage.create.abandon.swipe"), 1)
+        tracker.leave(.create, via: .createDismiss, at: 21)
+        XCTAssertEqual(count(tracker, "usage.create.abandon.dismiss"), 1)
     }
 
     func testANotedExitWinsAndAnotherFeaturesRouteIsIgnored() {

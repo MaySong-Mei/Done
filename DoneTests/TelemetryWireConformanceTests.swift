@@ -239,7 +239,7 @@ final class TelemetryWireConformanceTests: XCTestCase {
                 TelemetryClaimKey.dayKey(forDayStart: calendar.startOfDay(for: startedAt), calendar: calendar)
             },
             noteOptIn: noteOptIn,
-            allowedStringKeys: TelemetryRedactor.fixedFormatStringKeys
+            allowedStringKeys: TelemetryRedactor.observatoryFixedFormatStringKeys
         )
     }
 
@@ -529,10 +529,14 @@ final class TelemetryWireConformanceTests: XCTestCase {
                 media += 10
                 UsageProbe.leave(feature, via: declaration.routes.first?.tag)
             }
+            // Uses and dones belong to a visit: one more, used, for a
+            // feature that has visits (a use after a settle is stray).
+            if declaration.hasVisits { UsageProbe.enter(declaration.entries[0].tag) }
             declaration.uses.forEach { UsageProbe.use($0.tag) }
             declaration.dones.forEach { UsageProbe.done($0.tag) }
             declaration.views.forEach { UsageProbe.view($0.tag) }
             declaration.events.forEach { UsageProbe.count($0.tag) }
+            if declaration.hasVisits { UsageProbe.leave(feature, via: declaration.routes.first?.tag) }
         }
         center.flushDaily()
         center.deactivate()
@@ -565,13 +569,14 @@ final class TelemetryWireConformanceTests: XCTestCase {
         }
         XCTAssertEqual(violations, [])
         // Hand-computed on this fixture. Focus: two entry visits of 1 s, three
-        // route visits of 40 s, one of 400 s and one of 10 s. Create: four
-        // entry visits of 1 s, two route visits of 40 s, one of 400 s, one of
-        // 10 s.
-        XCTAssertEqual(metrics["usage.focus.dwell"] as? String, "2 1 3 1")
-        XCTAssertEqual(metrics["usage.create.dwell"] as? String, "4 1 2 1")
-        XCTAssertEqual((metrics["usage.focus.abandon"] as? NSNumber)?.intValue, 7, "no visit there used anything")
-        XCTAssertEqual((metrics["usage.focus.exit.swipe"] as? NSNumber)?.intValue, 5, "the entry visits and the two extra left by the first route, plus its own")
+        // route visits of 40 s, one of 400 s, one of 10 s, and the used one of
+        // 0 s. Create: four entry visits of 1 s, two route visits of 40 s, one
+        // of 400 s, one of 10 s, and the used one.
+        XCTAssertEqual(metrics["usage.focus.dwell"] as? String, "3 1 3 1")
+        XCTAssertEqual(metrics["usage.create.dwell"] as? String, "5 1 2 1")
+        XCTAssertEqual((metrics["usage.focus.abandon"] as? NSNumber)?.intValue, 7, "every visit but the used one")
+        XCTAssertEqual((metrics["usage.focus.exit.swipe"] as? NSNumber)?.intValue, 6,
+                       "the entry visits, the two extra and the used one left by the first route, plus its own")
         XCTAssertEqual((metrics["sessions"] as? NSNumber)?.intValue, 1, "the launch")
     }
 

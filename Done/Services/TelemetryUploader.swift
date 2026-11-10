@@ -883,9 +883,19 @@ final class TelemetryUploader: ObservableObject {
         let installID = SpikeRunStore.installID(location: location)
         var cursor = SpikeRunStore.loadUploadCursor(location: location)
 
-        var records: [SpikeRun] = []
-        for spikeID in SpikeRunStore.spikeIDsOnDisk(location: location) {
-            records.append(contentsOf: SpikeRunStore.loadRuns(spikeID: spikeID, location: location))
+        // The record files are read and decoded off the main thread: a file
+        // near its cap is a whole-file decode far too long for a frame (see
+        // UsagePerfMeasurementTests), and this runs at launch +2 s, on deck
+        // open and on rollover, with the user looking at the app. An erase
+        // during the read makes the batch stale before anything else happens.
+        let urls = SpikeRunStore.spikeIDsOnDisk(location: location).map { SpikeRunStore.fileURL(spikeID: $0, location: location) }
+        let retention = SpikeRunStore.maxRunsPerSpike
+        let records = await Task.detached(priority: .utility) {
+            urls.flatMap { SpikeRunStore.readRuns(at: $0, retention: retention) }
+        }.value
+        guard !LocalDataEraseEpoch.isStale(eraseToken) else {
+            DiagnosticTrail.record("Telemetry", "upload.stale_after_erase rows=0")
+            return .staleAfterErase
         }
         // In TestFlight every consent backfills (①): the stored moment is the
         // App Store's watermark only.
@@ -906,7 +916,7 @@ final class TelemetryUploader: ObservableObject {
                     TelemetryClaimKey.dayKey(forDayStart: calendar.startOfDay(for: startedAt), calendar: calendar)
                 },
                 noteOptIn: noteOptIn,
-                allowedStringKeys: TelemetryRedactor.fixedFormatStringKeys
+                allowedStringKeys: TelemetryRedactor.observatoryFixedFormatStringKeys
             )
         }
         let previewData = (try? JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys])) ?? Data()

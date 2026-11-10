@@ -312,6 +312,9 @@ struct CalendarEventDetailView: View {
     /// gh#273 §6.3: typing into the reflection note or picking a template is
     /// counted as ONE use per detail page, not per keystroke.
     @State private var usageCountedReflectionEdit = false
+    /// gh#273 §6.3: set by the route jump just before it writes the page, so
+    /// the page change that follows is not counted as the user's.
+    @State private var usageProgrammaticPageWrite = false
     /// gh#219: the deadline wheel commits once on release, not per detent.
     /// Held per view session so the pending value survives re-renders during a
     /// scrub; flushed on disappear and on backgrounding below.
@@ -773,7 +776,6 @@ private extension CalendarEventDetailView {
     }
 
     private func updateDeadline(_ newValue: Date?, eventID: UUID) {
-        UsageProbe.use(.eventDetailTodo)
         editOccurrence(eventID: eventID) { $0.deadline = newValue }
     }
 
@@ -838,6 +840,7 @@ private extension CalendarEventDetailView {
                 // scrub — drop it so its trailing write cannot resurrect the
                 // value the user just turned off.
                 if !isOn { deadlineScrubCoalescer.cancel() }
+                UsageProbe.use(.eventDetailTodo)
                 updateDeadline(isOn ? (current ?? Date()) : nil, eventID: eventID)
             }
         )
@@ -858,6 +861,10 @@ private extension CalendarEventDetailView {
                     ?? Date()
             },
             set: { newValue in
+                // gh#273 §6.3: the use is the scrub — its first detent — not
+                // the coalesced write, which can run after the page has gone
+                // (a flush on disappear) and its visit has settled.
+                if deadlineScrubCoalescer.value(for: eventID) == nil { UsageProbe.use(.eventDetailTodo) }
                 deadlineScrubCoalescer.scrub(id: eventID, to: newValue) { id, value in
                     updateDeadline(value, eventID: id)
                 }
@@ -999,7 +1006,14 @@ private extension CalendarEventDetailView {
             }
             // gh#273 §6.3: the reflection page was shown — a view, not a use.
             .onChange(of: selectedPage) { _, page in
-                if page == .reflection { UsageProbe.view(.eventDetailReflection) }
+                // A view: the user's swipe, or the page the user's entry
+                // chose (Log opens on it). Not the route re-asserting its
+                // page on a re-appear (every return from the chat page).
+                let reasserted = usageProgrammaticPageWrite
+                usageProgrammaticPageWrite = false
+                if DetailPageViewUsage.isView(page: page, reasserted: reasserted) {
+                    UsageProbe.view(.eventDetailReflection)
+                }
             }
             // gh#273 §6.3: the note / template as the USER changed them. The
             // load that fills them from the record flips `loaded` in the same
@@ -3578,7 +3592,6 @@ private extension CalendarEventDetailView {
     /// "untouched" nil.
     func commitEffortDrag(_ finalValue: Int) {
         guard calendarEffortDragShouldCommit(finalValue: finalValue, currentStoreValue: quickEffortValue) else { return }
-        UsageProbe.use(.eventDetailReflect)
         applyQuickEffort(finalValue)
     }
 
@@ -3598,7 +3611,6 @@ private extension CalendarEventDetailView {
     /// The naming prompt's answer (`AwaitingNameStore.answer`).
     func nameAwaitingEvent(_ name: String?) {
         guard let event = currentEvent else { return }
-        UsageProbe.use(.eventDetailPlan)
         awaitingNames.answer(event.id, name: name, in: store)
     }
 
@@ -3734,8 +3746,6 @@ private extension CalendarEventDetailView {
     }
 
     func handleRouteJump(force: Bool = false) {
-        guard force || !didHandleInitialJump else { return }
-        didHandleInitialJump = true
         // Pick the initial page based on which target the caller asked for.
         // .meta → overview (passive read).  .log / .selfEval → reflection
         // (active recording).  Default to overview when nothing specified.
@@ -3746,8 +3756,13 @@ private extension CalendarEventDetailView {
         case .meta, .none:
             target = .overview
         }
-        if selectedPage != target {
-            selectedPage = target
+        let plan = DetailPageViewUsage.routeJump(force: force, didHandleInitialJump: didHandleInitialJump,
+                                                 selected: selectedPage, target: target)
+        guard plan.runs else { return }
+        didHandleInitialJump = true
+        if let page = plan.write {
+            usageProgrammaticPageWrite = plan.reasserted
+            selectedPage = page
         }
     }
 
@@ -6057,6 +6072,10 @@ struct CalendarAwaitingNamePrompt: View {
 
     @State private var text = ""
     @State private var answered = false
+    /// gh#273 §6.3: answering is one use, counted at the user's action — the
+    /// first keystroke, or Keep — never at the save on the way out, which
+    /// runs after the page's visit has settled.
+    @State private var usageCounted = false
     @FocusState private var focused: Bool
 
     private var typed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -6083,6 +6102,7 @@ struct CalendarAwaitingNamePrompt: View {
                 .accessibilityIdentifier("awaitingName.field")
             HStack {
                 Button(String(format: L(.awaitingNameKeepFormat), currentTitle)) {
+                    countUse()
                     answered = true
                     onName(nil)
                 }
@@ -6111,11 +6131,20 @@ struct CalendarAwaitingNamePrompt: View {
             try? await Task.sleep(for: .milliseconds(650))
             focused = true
         }
+        .onChange(of: text) {
+            countUse()
+        }
         .onDisappear {
             guard !answered, !typed.isEmpty else { return }
             answered = true
             onName(typed)
         }
+    }
+
+    private func countUse() {
+        guard !usageCounted else { return }
+        usageCounted = true
+        UsageProbe.use(.eventDetailPlan)
     }
 
     private func save() {
@@ -6176,6 +6205,33 @@ func calendarEventDetailTimeSummary(
 }
 
 // MARK: - Usage (gh#273 §6.3)
+
+/// The detail's route jump and which page changes are a view of the
+/// reflection page. Pure, so the case a test cannot drive on the real view —
+/// the re-appear, which needs a finger to have left the route's page first —
+/// is still pinned.
+enum DetailPageViewUsage {
+    struct RouteJump: Equatable {
+        /// False: a non-forced jump after the first does nothing.
+        let runs: Bool
+        /// The page to write, nil when already on it.
+        let write: CalendarEventDetailPage?
+        /// The write only re-asserts the route's page (a forced re-jump on
+        /// re-appear, every return from the chat page): not a view. The first
+        /// jump for a route lands where the user's entry chose: a view.
+        let reasserted: Bool
+    }
+
+    static func routeJump(force: Bool, didHandleInitialJump: Bool,
+                          selected: CalendarEventDetailPage, target: CalendarEventDetailPage) -> RouteJump {
+        guard force || !didHandleInitialJump else { return RouteJump(runs: false, write: nil, reasserted: false) }
+        return RouteJump(runs: true, write: selected == target ? nil : target, reasserted: didHandleInitialJump)
+    }
+
+    static func isView(page: CalendarEventDetailPage, reasserted: Bool) -> Bool {
+        !reasserted && page == .reflection
+    }
+}
 
 /// What the reflection editors hold, for telling a user's edit from the
 /// load that fills them.

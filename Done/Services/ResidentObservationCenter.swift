@@ -147,6 +147,14 @@ final class ResidentObservationCenter {
     /// The archive switches that are on right now. Read at session starts
     /// and re-mints only — lifecycle edges, never the signal path.
     private let availableGates: @MainActor () -> Set<UsageGate>
+    /// Usage signals that arrived after the day ended and before the rollover
+    /// hop ran. They belong to the new day (a visit settles on the day it
+    /// ends), so they wait here — in memory, capacity reserved up front — and
+    /// the hop replays them in order once the new day's record is minted.
+    private var parkedUsage: [ParkedUsageSignal] = []
+    static let parkedUsageCapacity = 32
+    /// True only inside a lifecycle-edge flush; see `handleLifecycleEdge`.
+    private var usageWriteMayCompact = false
 
     private(set) var window: ResidentWindowModel?
     private var frameProbe: SpikeFrameProbe?
@@ -170,6 +178,11 @@ final class ResidentObservationCenter {
     /// state the claim rules already produce (see init).
     static let seedTailBytes = 32 * 1024
     static let seedMaxDecodes = 8
+    /// The usage seed's decode budget. Under the center's own writes today's
+    /// usage line is the file's last; the first launch of a day finds none,
+    /// and every decode then is wasted main-thread time at launch. A miss
+    /// mints a fresh same-day id, a state the claim rules already produce.
+    static let usageSeedMaxDecodes = 2
 
     /// What the launch seed found in the tail (tests and the verification).
     let launchSeed: SpikeRunFileScan.TailRecord
@@ -287,7 +300,7 @@ final class ResidentObservationCenter {
         // so a same-day relaunch keeps one id per claim and day.
         let usageSeed = SpikeRunFileScan.newestMatch(
             in: SpikeRunStore.fileURL(spikeID: UsageRecordIDs.spikeID, location: location),
-            maxBytes: Self.seedTailBytes, maxDecodes: Self.seedMaxDecodes
+            maxBytes: Self.seedTailBytes, maxDecodes: Self.usageSeedMaxDecodes
         ) { bounds.contains($0.startedAt) && TelemetryClaimKey(run: $0) == claim }
         var seededUsage = UsageTracker()
         if case .found(let todays, _) = usageSeed {
@@ -311,6 +324,7 @@ final class ResidentObservationCenter {
         }
         usage = seededUsage
         usageLaunchSeed = usageSeed
+        parkedUsage.reserveCapacity(Self.parkedUsageCapacity)
 
         if verifiesSeed {
             verifyLaunchSeed(seed, seedMs: seedMs, bounds: bounds, claim: claim)
@@ -760,6 +774,11 @@ final class ResidentObservationCenter {
         guard !lifecycleEdgeFlushed else { return }
         lifecycleEdgeFlushed = true
         closeWindow(outcome: .completed, closedByResign: true)
+        // The usage file is compacted here and only here: the app is leaving,
+        // so the rewrite (see UsagePerfMeasurementTests) is never on a frame
+        // the user is looking at.
+        usageWriteMayCompact = true
+        defer { usageWriteMayCompact = false }
         flushDailyRecord()
         // gh#273 §7.1 edge 4: the records are on disk; the uploader wraps
         // what follows in a background task and sends event records plus
@@ -780,18 +799,30 @@ final class ResidentObservationCenter {
         writeDailyRecord()
     }
 
-    private func scheduleRolloverFlush() {
+    private func scheduleRolloverFlush(after delay: TimeInterval = 0) {
         guard !rolloverFlushScheduled else { return }
         rolloverFlushScheduled = true
-        DispatchQueue.main.async { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             self?.performRolloverFlushIfDue()
         }
     }
+
+    /// A return to the foreground after midnight does not roll the day over
+    /// inside the notification: the rollover's writes would land on the
+    /// return itself. The foreground edge is parked instead and the hop runs
+    /// this long after, with every usage signal of the meantime parked
+    /// behind it; the resident's own signals of the meantime land on the old
+    /// day, the imprecision its midnight hop already accepts.
+    static let foregroundRolloverDelay: TimeInterval = 2
 
     /// Internal (not private) so tests can drive the deferred hop
     /// deterministically with an injected clock.
     func performRolloverFlushIfDue() {
         rolloverFlushScheduled = false
+        // Whatever the signal path parked goes into the day that holds now —
+        // after the rollover below when it is due, at once when it is not
+        // (the clock went back before the hop ran).
+        defer { replayParkedUsage() }
         let currentNow = now()
         guard currentNow.timeIntervalSinceReferenceDate >= dayEndSinceReference else { return }
         // Close any window across midnight first — its record belongs to
@@ -879,6 +910,7 @@ final class ResidentObservationCenter {
         // The open usage visits are the erased owner's too: one settling
         // after the erase would count its abandonment into the next owner's day.
         usage.forgetAll(available: availableGates())
+        parkedUsage.removeAll(keepingCapacity: true)
         let currentNow = now()
         mintDailyRun(at: currentNow, bounds: rebaseDay(at: currentNow))
     }
@@ -928,6 +960,9 @@ final class ResidentObservationCenter {
                 appendUsageRecord(endedAt: endedAt ?? now(), claim: dailyClaim)
             }
             resetCountsForNewDaily()
+            // An open visit is the previous owner's: it must not settle into
+            // the next owner's record. (A day or consent re-mint keeps it.)
+            usage.dropOpenVisits()
             mintDailyRun(at: now(), bounds: dayBounds)
             return
         }
@@ -960,7 +995,8 @@ final class ResidentObservationCenter {
 
     private func appendUsageRecord(endedAt: Date, claim: TelemetryClaimKey) {
         if SpikeRunStore.finishRun(makeUsageRecord(endedAt: endedAt, claim: claim),
-                                   owner: .explicit(claim.ownerUID), location: location) {
+                                   owner: .explicit(claim.ownerUID), location: location,
+                                   compactsWhenFull: usageWriteMayCompact) {
             usageWrittenChange = usage.changeCount
             usageWrittenStartedAt = usageRunStartedAt
         }
@@ -1005,15 +1041,49 @@ final class ResidentObservationCenter {
     /// midnight counts on the new day.
     private func handleUsageForegroundEdge() {
         guard !usage.inForeground else { return }
-        performRolloverFlushIfDue()
-        usage.enterForeground(at: mediaNow(), available: availableGates())
+        let at = mediaNow()
+        if now().timeIntervalSinceReferenceDate >= dayEndSinceReference {
+            // Past midnight: the session is the new day's, counted by the
+            // hop after it rolls the day over (see `foregroundRolloverDelay`).
+            park(.foreground(at: at))
+            scheduleRolloverFlush(after: Self.foregroundRolloverDelay)
+            return
+        }
+        usage.enterForeground(at: at, available: availableGates())
     }
 
-    /// The signal path's day check, as the resident's: one compare, and a
-    /// scheduled hop when midnight has passed.
-    private func noteUsageSignal() {
-        if now().timeIntervalSinceReferenceDate >= dayEndSinceReference {
-            scheduleRolloverFlush()
+    /// The signal path's day check: one compare. Past the day end it
+    /// schedules the rollover hop (no I/O here) and tells the caller to park
+    /// the signal for it.
+    private func usageDayHasEnded() -> Bool {
+        guard now().timeIntervalSinceReferenceDate >= dayEndSinceReference else { return false }
+        scheduleRolloverFlush()
+        return true
+    }
+
+    private func park(_ signal: ParkedUsageSignal) {
+        parkedUsage.append(signal)
+    }
+
+    private func replayParkedUsage() {
+        guard !parkedUsage.isEmpty else { return }
+        for signal in parkedUsage {
+            apply(signal)
+        }
+        parkedUsage.removeAll(keepingCapacity: true)
+    }
+
+    private func apply(_ signal: ParkedUsageSignal) {
+        switch signal {
+        case .enter(let entry, let at): usage.enter(entry, at: at)
+        case .use(let use): usage.use(use)
+        case .done(let done): usage.done(done)
+        case .view(let view): usage.view(view)
+        case .count(let event): usage.count(event)
+        case .noteExit(let route): usage.noteExit(route)
+        case .leave(let feature, let route, let at): usage.leave(feature, via: route, at: at)
+        case .toggled(let gate, let isOn): usage.switchToggled(gate, isOn: isOn)
+        case .foreground(let at): usage.enterForeground(at: at, available: availableGates())
         }
     }
 
@@ -1079,44 +1149,57 @@ final class ResidentObservationCenter {
 // MARK: - UsageProbe's sink
 
 /// Every call: the day check (one Date read, one compare), then the
-/// tracker's O(1) bump. `enter` and `leave` also read the media clock.
+/// tracker's O(1) bump — or, past the day end, a copy into the parked
+/// signals for the rollover hop. `enter` and `leave` also read the media
+/// clock, at the signal, so a parked visit keeps its true times.
 extension ResidentObservationCenter: UsageSink {
     func usageEnter(_ entry: UsageEntry) {
-        noteUsageSignal()
-        usage.enter(entry, at: mediaNow())
+        let at = mediaNow()
+        let signal = ParkedUsageSignal.enter(entry, at: at)
+        if usageDayHasEnded() { park(signal) } else { apply(signal) }
     }
 
     func usageUse(_ use: UsageUse) {
-        noteUsageSignal()
-        usage.use(use)
+        if usageDayHasEnded() { park(.use(use)) } else { usage.use(use) }
     }
 
     func usageDone(_ done: UsageDone) {
-        noteUsageSignal()
-        usage.done(done)
+        if usageDayHasEnded() { park(.done(done)) } else { usage.done(done) }
     }
 
     func usageView(_ view: UsageView) {
-        noteUsageSignal()
-        usage.view(view)
+        if usageDayHasEnded() { park(.view(view)) } else { usage.view(view) }
     }
 
     func usageCount(_ event: UsageEvent) {
-        noteUsageSignal()
-        usage.count(event)
+        if usageDayHasEnded() { park(.count(event)) } else { usage.count(event) }
     }
 
     func usageNoteExit(_ route: UsageRoute) {
-        usage.noteExit(route)
+        if usageDayHasEnded() { park(.noteExit(route)) } else { usage.noteExit(route) }
     }
 
     func usageLeave(_ feature: UsageFeature, via route: UsageRoute?) {
-        noteUsageSignal()
-        usage.leave(feature, via: route, at: mediaNow())
+        let at = mediaNow()
+        if usageDayHasEnded() { park(.leave(feature, route, at: at)) } else { usage.leave(feature, via: route, at: at) }
     }
 
     func usageSwitchToggled(_ gate: UsageGate, isOn: Bool) {
-        noteUsageSignal()
-        usage.switchToggled(gate, isOn: isOn)
+        if usageDayHasEnded() { park(.toggled(gate, isOn)) } else { usage.switchToggled(gate, isOn: isOn) }
     }
+}
+
+/// One usage signal waiting for the rollover hop: tags and media times only,
+/// so parking is a copy into reserved storage.
+enum ParkedUsageSignal: Equatable {
+    case enter(UsageEntry, at: Double)
+    case use(UsageUse)
+    case done(UsageDone)
+    case view(UsageView)
+    case count(UsageEvent)
+    case noteExit(UsageRoute)
+    case leave(UsageFeature, UsageRoute?, at: Double)
+    case toggled(UsageGate, Bool)
+    /// A return from background after midnight (never parked by a view).
+    case foreground(at: Double)
 }

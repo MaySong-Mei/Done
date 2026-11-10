@@ -124,7 +124,8 @@ struct CreateCalendarEventView: View {
                 // gh#273 §6.3: the form's session end is the create visit's
                 // end. Done and Cancel both end explicitly (no snapshot); a
                 // Done already marked the visit used, so only Cancel abandons.
-                UsageProbe.leave(.create, via: pendingSnapshot == nil ? .createCancel : .createSwipe)
+                // Any other end is a dismissal (a swipe down, a tap outside).
+                UsageProbe.leave(.create, via: pendingSnapshot == nil ? .createCancel : .createDismiss)
             }
         ) { form in
             let event = EventLogTemplateAdvisor().applySuggestion(to: form.toEvent())
