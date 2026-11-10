@@ -404,7 +404,7 @@ final class SpikeRunStoreCompactionTests: XCTestCase {
             .appendingPathComponent("Done/Services/SpikeRunStore.swift")
         let src = try String(contentsOf: url, encoding: .utf8)
         let body = try XCTUnwrap(
-            src.range(of: "private static func compactIfNeeded").map { String(src[$0.lowerBound...]) }
+            src.range(of: "static func compactIfNeeded(spikeID").map { String(src[$0.lowerBound...]) }
         )
         let stat = try XCTUnwrap(body.range(of: "attributesOfItem"))
         let guardLine = try XCTUnwrap(body.range(of: "guard size >= compactAtBytes else { return }"))

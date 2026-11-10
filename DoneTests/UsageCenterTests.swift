@@ -413,65 +413,114 @@ final class UsageCenterTests: XCTestCase {
 
     // MARK: Disk paths kept off what the user is looking at
 
-    private func usageLineCount() -> Int {
-        let url = SpikeRunStore.fileURL(spikeID: UsageRecordIDs.spikeID, location: location)
-        guard let data = try? Data(contentsOf: url) else { return 0 }
-        return data.split(separator: 0x0A).count
-    }
-
-    private func usageFileBytes() -> Int {
-        let url = SpikeRunStore.fileURL(spikeID: UsageRecordIDs.spikeID, location: location)
+    private func fileBytes(_ spikeID: String) -> Int {
+        let url = SpikeRunStore.fileURL(spikeID: spikeID, location: location)
         return (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
     }
 
-    /// A return after midnight writes nothing inside the foreground
-    /// notification: the session waits, parked, for the rollover hop, which
-    /// then closes yesterday's line and counts the session on the new day.
-    func testAReturnAfterMidnightWritesNothingInsideTheForegroundNotification() throws {
+    private let usageFile = UsageRecordIDs.spikeID
+    private let residentFile = FixObservationRegistry.residentDailySpikeID
+
+    /// Older days appended without compaction until the file is past the cap:
+    /// the next append allowed to compact would rewrite it. Long lines, so
+    /// the whole file stays under the readers' count cap.
+    private func fillPastTheCap(_ spikeID: String) {
+        var metrics: [String: SpikeMetricValue] = [:]
+        for key in UsageKey.all { metrics[key.name] = key.kind == .histogram ? .string("1 2 3 4") : .number(7) }
+        var day = 2
+        while fileBytes(spikeID) <= SpikeRunStore.compactAtBytes {
+            let run = TelemetryFixtures.run(spikeID: spikeID, scenarioID: "daily-rollup",
+                                            startedAt: morning.addingTimeInterval(Double(-day) * 86_400), appBuild: "31",
+                                            metrics: metrics, dayKey: nil)
+            SpikeRunStore.finishRun(run, owner: .explicit(uid), location: location, compactsWhenFull: false)
+            day += 1
+        }
+    }
+
+    /// The center's own usage lines (the fill's are build 31).
+    private func centerUsageRecords() -> [SpikeRun] {
+        usageRecords().filter { $0.appBuild == "29" }.sorted { $0.startedAt < $1.startedAt }
+    }
+
+    /// A return after midnight rolls the day over inside the foreground
+    /// notification, before the session is counted — yesterday's line closes
+    /// at its day end with yesterday's unwritten counts, and the return is
+    /// the new day's session — and compacts neither daily file, though both
+    /// are past the cap. Resigning active compacts nothing either; the
+    /// background edge compacts both (positive control).
+    func testAReturnAfterMidnightRollsTheDayOverInTheNotificationAndCompactsNothing() throws {
         let clock = Box(morning)
         let center = makeCenter(clock: clock, media: Box(0), countsLaunchSession: true)
         UsageProbe.use(.allDayToggle)
         post(UIApplication.willResignActiveNotification)
         post(UIApplication.didEnterBackgroundNotification)
         UsageProbe.use(.repeatForm)                                   // dirty again, unwritten
-        let lines = usageLineCount()
-        clock.value = la.date(byAdding: .day, value: 1, to: la.startOfDay(for: morning))!.addingTimeInterval(600)
+        fillPastTheCap(usageFile)
+        fillPastTheCap(residentFile)
+        let usageBytes = fileBytes(usageFile)
+        let residentBytes = fileBytes(residentFile)
+        let dayEnd = la.date(byAdding: .day, value: 1, to: la.startOfDay(for: morning))!
+        clock.value = dayEnd.addingTimeInterval(600)
+
         post(UIApplication.willEnterForegroundNotification)
+        let closed = try XCTUnwrap(centerUsageRecords().first, "yesterday's line")
+        XCTAssertEqual(closed.endedAt, dayEnd, "closed at its day end inside the notification")
+        XCTAssertEqual(n(closed, "sessions"), 1, "yesterday: the launch")
+        XCTAssertEqual(n(closed, "usage.repeat.use.form"), 1, "yesterday's unwritten count went with yesterday's line")
+        XCTAssertEqual(center.usage.counts.count("sessions"), 1, "the return is the new day's session")
+        XCTAssertGreaterThan(fileBytes(usageFile), usageBytes, "the rollover appended to the usage file, no rewrite")
+        XCTAssertGreaterThan(fileBytes(residentFile), residentBytes, "and to the resident file, no rewrite")
+
         post(UIApplication.didBecomeActiveNotification)
-        XCTAssertEqual(usageLineCount(), lines, "no rollover write inside the return to the foreground")
-
-        center.performRolloverFlushIfDue()                            // the hop, a moment later
         center.flushDaily()
-        let records = usageRecords().sorted { $0.startedAt < $1.startedAt }
+        let records = centerUsageRecords()
         XCTAssertEqual(records.count, 2)
-        XCTAssertEqual(n(records[0], "sessions"), 1, "yesterday: the launch")
-        XCTAssertEqual(n(records[0], "usage.repeat.use.form"), 1, "yesterday's unwritten count went with yesterday's line")
-        XCTAssertEqual(n(records[1], "sessions"), 1, "the return after midnight is the new day's session, once")
-    }
-
-    /// The usage file is rewritten (compacted) only at a lifecycle edge,
-    /// never by a flush the user is looking at (deck open, rollover hop).
-    func testTheUsageFileCompactsOnlyAtALifecycleEdge() throws {
-        let clock = Box(morning)
-        let center = makeCenter(clock: clock, media: Box(0))
-        // Older lines up to just under the cap.
-        let cap = SpikeRunStore.compactAtBytes
-        var day = 1
-        while usageFileBytes() < cap - 100 {
-            let run = TelemetryFixtures.run(spikeID: UsageRecordIDs.spikeID, scenarioID: UsageRecordIDs.scenarioID,
-                                            startedAt: morning.addingTimeInterval(Double(-day) * 86_400), appBuild: "31",
-                                            metrics: ["sessions": .number(Double(day)), "usage.all_day.use": .number(1)])
-            SpikeRunStore.finishRun(run, owner: .explicit(uid), location: location, compactsWhenFull: false)
-            day += 1
-        }
-        XCTAssertLessThan(usageFileBytes(), cap + 1_024, "fixture: at the cap, not far past it")
-        for gate in UsageGate.allCases { UsageProbe.switchToggled(gate, isOn: true); UsageProbe.switchToggled(gate, isOn: false) }
-        center.flushDaily()                                           // the deck's flush
-        XCTAssertGreaterThan(usageFileBytes(), cap, "past the cap and not rewritten in the foreground")
+        XCTAssertEqual(records.last.flatMap { n($0, "sessions") }, 1, "the return after midnight, once")
 
         UsageProbe.use(.allDayToggle)
-        post(UIApplication.willResignActiveNotification)              // the app leaving
-        XCTAssertLessThan(usageFileBytes(), cap, "positive control: the lifecycle edge's write compacts")
+        post(UIApplication.willResignActiveNotification)
+        XCTAssertGreaterThan(fileBytes(usageFile), SpikeRunStore.compactAtBytes, "resigning active compacts nothing")
+        XCTAssertGreaterThan(fileBytes(residentFile), SpikeRunStore.compactAtBytes)
+        post(UIApplication.didEnterBackgroundNotification)
+        XCTAssertLessThan(fileBytes(usageFile), SpikeRunStore.compactAtBytes, "positive control: the background edge compacts")
+        XCTAssertLessThan(fileBytes(residentFile), SpikeRunStore.compactAtBytes,
+                          "the resident file too, though its flush ran at the resign")
+    }
+
+    /// No flush the user is looking at rewrites either daily file: the deck's,
+    /// "Upload now"'s, the consent re-mint's and the midnight hop's appends
+    /// leave both past the cap. (The resident line is rewritten only when the
+    /// resident has something new: at the first flush, the re-mint and the
+    /// hop.)
+    func testNoFlushTheUserIsLookingAtCompactsEitherDailyFile() throws {
+        let clock = Box(morning)
+        let center = makeCenter(clock: clock, media: Box(0), countsLaunchSession: true)
+        fillPastTheCap(usageFile)
+        fillPastTheCap(residentFile)
+        var usageBytes = fileBytes(usageFile)
+        var residentBytes = fileBytes(residentFile)
+        func expectAppendedOnly(_ what: String, resident: Bool) {
+            XCTAssertGreaterThan(fileBytes(usageFile), usageBytes, "\(what): appended to the usage file, no rewrite")
+            if resident {
+                XCTAssertGreaterThan(fileBytes(residentFile), residentBytes, "\(what): appended to the resident file, no rewrite")
+            }
+            XCTAssertGreaterThan(fileBytes(residentFile), SpikeRunStore.compactAtBytes, "\(what): the resident file is not rewritten")
+            usageBytes = fileBytes(usageFile)
+            residentBytes = fileBytes(residentFile)
+        }
+        UsageProbe.use(.allDayToggle)
+        center.flushDaily()
+        expectAppendedOnly("the deck's flush", resident: true)
+        UsageProbe.use(.allDayToggle)
+        center.flushForManualUpload()
+        expectAppendedOnly("Upload now's flush", resident: false)
+        UsageProbe.use(.allDayToggle)
+        center.remintDailyForConsent()
+        expectAppendedOnly("the consent re-mint", resident: true)
+        UsageProbe.use(.allDayToggle)
+        clock.value = la.date(byAdding: .day, value: 1, to: la.startOfDay(for: morning))!.addingTimeInterval(5)
+        center.performRolloverFlushIfDue()
+        expectAppendedOnly("the midnight hop", resident: true)
     }
 
     /// The upload batch reads the record files off the main actor: it never
@@ -491,6 +540,54 @@ final class UsageCenterTests: XCTestCase {
         XCTAssertEqual(SpikeRunStore.wholeFileReads, reads, "no main-actor whole-file read in the batch")
     }
 
+    /// "Switch off = zero requests" holds for a batch whose read is in flight:
+    /// a gate that closes during the read (the switch, consent, the account)
+    /// stops the batch before anything is sent. Positive control: nothing
+    /// changes during the read and the day goes up.
+    func testAGateThatClosesDuringTheBatchReadSendsNothing() async throws {
+        let center = makeCenter(clock: Box(morning), media: Box(0), countsLaunchSession: true)
+        UsageProbe.use(.allDayToggle)
+        center.flushDaily()
+        let cases: [(String, TelemetryUploadOutcome, @Sendable (UserDefaults, Box<Bool>) -> Void)] = [
+            ("switch off", .switchOff, { defaults, _ in defaults.set(false, forKey: AppSettingsKeys.telemetryUploadsEnabled) }),
+            ("consent gone", .noConsent, { defaults, _ in defaults.removeObject(forKey: AppSettingsKeys.telemetryConsentAt) }),
+            ("signed out", .signedOut, { _, signedIn in signedIn.value = false }),
+            ("nothing closes", .uploaded(rows: 2), { _, _ in }),
+        ]
+        for (name, expected, closeGate) in cases {
+            let suite = "UsageUploadGateTests-\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let server = SyncFakeServer(userId: uid)
+            let signedIn = Box(true)
+            let reads = Box(0)
+            var deps = TelemetryUploader.Dependencies()
+            deps.defaults = defaults
+            deps.location = location
+            let now = morning.addingTimeInterval(3600)
+            deps.now = { now }
+            deps.launchDelay = 0
+            deps.makeKeepAlive = { nil }
+            deps.bootstrapOwner = { nil }
+            deps.readRecords = { urls, retention in
+                reads.value += 1
+                closeGate(defaults, signedIn)
+                return urls.flatMap { SpikeRunStore.readRuns(at: $0, retention: retention) }
+            }
+            let uploader = TelemetryUploader(dependencies: deps)
+            let user = uid
+            uploader.attach(TelemetryUploader.Attachment(gateway: server, isBlockedByBuild: { false },
+                                                         currentUserID: { user }, isSignedIn: { signedIn.value }))
+            defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+            TelemetryConsentStore.recordGrant(defaults, at: morning.addingTimeInterval(-3600))
+            let outcome = await uploader.uploadNow(trigger: .deckOpen)
+            XCTAssertGreaterThanOrEqual(reads.value, 1, "\(name): rig: the gate closed inside a batch's read")
+            XCTAssertEqual(outcome, expected, name)
+            let upserts = server.requests.filter { $0.verb == .telemetryUpsert }.count
+            XCTAssertEqual(upserts, expected == .uploaded(rows: 2) ? 1 : 0, "\(name): requests sent")
+        }
+    }
+
     /// The hop is what moves a parked signal into the new day; if the clock
     /// went back before it ran, the parked signal lands in the current day.
     func testAParkedSignalIsNeverLost() throws {
@@ -502,6 +599,64 @@ final class UsageCenterTests: XCTestCase {
         clock.value = dayEnd.addingTimeInterval(-5)
         center.performRolloverFlushIfDue()
         XCTAssertEqual(center.usage.counts.count("usage.all_day.use"), 1)
+    }
+
+    /// A usage signal held for the rollover hop (after midnight, the app
+    /// still in the foreground) and a backgrounding before the hop ran — the
+    /// cycle's flush already done at the resign, before midnight. The edge
+    /// rolls the day over first, so the held signal goes into the new day
+    /// while the session running across midnight is still in the foreground:
+    /// the new day's record carries that session and its switch-on gate.
+    func testASignalHeldForTheHopGoesIntoTheNewDayBeforeTheBackgroundEdgeEndsTheSession() throws {
+        let clock = Box(morning)
+        let media = Box(0.0)
+        let center = makeCenter(clock: clock, media: media, countsLaunchSession: true, gates: Box([.focus]))
+        UsageProbe.use(.allDayToggle)
+        post(UIApplication.willResignActiveNotification)          // the cycle's flush, before midnight
+        clock.value = la.date(byAdding: .day, value: 1, to: la.startOfDay(for: morning))!.addingTimeInterval(1)
+        media.value = 10
+        UsageProbe.use(.repeatForm)
+        XCTAssertEqual(center.usage.counts.count("usage.repeat.use.form"), 0, "fixture: held, the hop has not run")
+        post(UIApplication.didEnterBackgroundNotification)        // before the hop
+        center.performRolloverFlushIfDue()                        // the hop, late
+        center.flushDaily()
+
+        let records = usageRecords().sorted { $0.startedAt < $1.startedAt }
+        XCTAssertEqual(records.count, 2)
+        XCTAssertEqual(n(records[0], "usage.all_day.use"), 1)
+        XCTAssertNil(records[0].metrics["usage.repeat.use.form"], "the held signal is not yesterday's")
+        XCTAssertEqual(n(records[1], "usage.repeat.use.form"), 1, "it is the new day's")
+        XCTAssertEqual(n(records[1], "sessions"), 1, "and the new day carries the session it happened in")
+        XCTAssertEqual(n(records[1], "usage.focus.available"), 1, "with that session's switch-on gate")
+    }
+
+    /// The consent re-mint is a re-mint like the others: an owner change it
+    /// is the first to notice drops the open visits, so none settles into the
+    /// next owner's record. Positive controls: the next owner's own visit
+    /// settles; with no owner change, a consent re-mint keeps the visit.
+    func testAConsentReMintAfterAnOwnerChangeDropsTheOpenVisits() throws {
+        let owner = Box<String?>(uid)
+        let center = makeCenter(clock: Box(morning), media: Box(0), owner: owner)
+        UsageProbe.enter(.eventDetailCanvas)
+        owner.value = TelemetryFixtures.otherUID
+        center.remintDailyForConsent()            // before any flush noticed the switch
+        UsageProbe.leave(.eventDetail)
+        center.flushDaily()
+        let byOwner = Dictionary(grouping: usageRecords(), by: { $0.ownerUID ?? "nil" })
+        let a = try XCTUnwrap(byOwner[uid]?.first)
+        XCTAssertEqual(n(a, "usage.event_detail.enter.canvas"), 1)
+        XCTAssertNil(a.metrics["usage.event_detail.abandon"], "never settled")
+        let b = byOwner[TelemetryFixtures.otherUID]?.first
+        XCTAssertNil(b?.metrics["usage.event_detail.abandon"], "A's visit did not settle into B's row")
+        XCTAssertNil(b?.metrics["usage.event_detail.dwell"])
+
+        UsageProbe.enter(.eventDetailList)
+        center.remintDailyForConsent()            // the same owner: the visit is kept
+        UsageProbe.leave(.eventDetail)
+        center.flushDaily()
+        let bAbandons = usageRecords().filter { $0.ownerUID == TelemetryFixtures.otherUID }
+            .compactMap { n($0, "usage.event_detail.abandon") }.reduce(0, +)
+        XCTAssertEqual(bAbandons, 1, "B's own visit settles, across B's own re-mint")
     }
 
     /// A sign-out or account switch is noticed at the next flush. The open

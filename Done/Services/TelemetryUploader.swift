@@ -432,6 +432,14 @@ final class TelemetryUploader: ObservableObject {
         /// §16 rule 2: where this install came from (review P1-2). The
         /// provisioning check and StoreKit in the app; tests hand in an answer.
         var distribution: @MainActor () async -> TelemetryDistribution = { await TelemetryDistributionDetector.live() }
+        /// The batch's read of the record files (`runBatch`): off the main
+        /// actor in the app. Tests hand in one that changes the world while
+        /// the read is in flight.
+        var readRecords: @Sendable (_ urls: [URL], _ retention: Int) async -> [SpikeRun] = { urls, retention in
+            await Task.detached(priority: .utility) {
+                urls.flatMap { SpikeRunStore.readRuns(at: $0, retention: retention) }
+            }.value
+        }
     }
 
     let dependencies: Dependencies
@@ -865,15 +873,32 @@ final class TelemetryUploader: ObservableObject {
 
     // MARK: One batch
 
+    /// What a batch may send under, or the gate that stops it.
+    private enum UploadClearance {
+        case cleared(attachment: Attachment, consentAt: Date, userID: String)
+        case refused(TelemetryUploadOutcome)
+    }
+
+    /// THE may-upload predicate: the switch, the default policy, the
+    /// attachment and its build, consent, a signed-in account. A batch asks
+    /// it before its read and again after it — the read is an await, and a
+    /// switch turned off, consent revoked or a sign-out while it runs must
+    /// still mean zero requests.
+    private func uploadClearance() -> UploadClearance {
+        let defaults = dependencies.defaults
+        guard defaults.bool(forKey: AppSettingsKeys.telemetryUploadsEnabled) else { return .refused(.switchOff) }
+        guard TelemetryDefaultPolicy.mayUpload(enabledByDefault: TelemetryConsentStore.isEnabledByDefault(defaults),
+                                               distribution: distribution) else { return .refused(.defaultNotConfirmed) }
+        guard let attachment else { return .refused(.notAttached) }
+        guard !attachment.isBlockedByBuild() else { return .refused(.blockedByBuild) }
+        guard let consentAt = TelemetryConsentStore.consentAt(defaults) else { return .refused(.noConsent) }
+        guard attachment.isSignedIn(), let userID = attachment.currentUserID() else { return .refused(.signedOut) }
+        return .cleared(attachment: attachment, consentAt: consentAt, userID: userID)
+    }
+
     private func runBatch(trigger: TelemetryTrigger, lastDailyUploadAt: Date?) async -> TelemetryUploadOutcome {
         let defaults = dependencies.defaults
-        guard defaults.bool(forKey: AppSettingsKeys.telemetryUploadsEnabled) else { return .switchOff }
-        guard TelemetryDefaultPolicy.mayUpload(enabledByDefault: TelemetryConsentStore.isEnabledByDefault(defaults),
-                                               distribution: distribution) else { return .defaultNotConfirmed }
-        guard let attachment else { return .notAttached }
-        guard !attachment.isBlockedByBuild() else { return .blockedByBuild }
-        guard let consentAt = TelemetryConsentStore.consentAt(defaults) else { return .noConsent }
-        guard attachment.isSignedIn(), let userID = attachment.currentUserID() else { return .signedOut }
+        if case .refused(let gate) = uploadClearance() { return gate }
 
         // Before the FIRST await (design §7.5): a cursor written after an
         // erase would describe records that no longer exist.
@@ -887,15 +912,20 @@ final class TelemetryUploader: ObservableObject {
         // near its cap is a whole-file decode far too long for a frame (see
         // UsagePerfMeasurementTests), and this runs at launch +2 s, on deck
         // open and on rollover, with the user looking at the app. An erase
-        // during the read makes the batch stale before anything else happens.
+        // during the read makes the batch stale before anything else happens;
+        // any other gate that closed during it stops the batch the same way
+        // it would have stopped it before the read, and what goes out is
+        // sent under the answer given after the read.
         let urls = SpikeRunStore.spikeIDsOnDisk(location: location).map { SpikeRunStore.fileURL(spikeID: $0, location: location) }
-        let retention = SpikeRunStore.maxRunsPerSpike
-        let records = await Task.detached(priority: .utility) {
-            urls.flatMap { SpikeRunStore.readRuns(at: $0, retention: retention) }
-        }.value
+        let records = await dependencies.readRecords(urls, SpikeRunStore.maxRunsPerSpike)
         guard !LocalDataEraseEpoch.isStale(eraseToken) else {
             DiagnosticTrail.record("Telemetry", "upload.stale_after_erase rows=0")
             return .staleAfterErase
+        }
+        let attachment: Attachment, consentAt: Date, userID: String
+        switch uploadClearance() {
+        case .refused(let gate): return gate
+        case .cleared(let cleared, let at, let user): (attachment, consentAt, userID) = (cleared, at, user)
         }
         // In TestFlight every consent backfills (①): the stored moment is the
         // App Store's watermark only.

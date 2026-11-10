@@ -153,8 +153,6 @@ final class ResidentObservationCenter {
     /// the hop replays them in order once the new day's record is minted.
     private var parkedUsage: [ParkedUsageSignal] = []
     static let parkedUsageCapacity = 32
-    /// True only inside a lifecycle-edge flush; see `handleLifecycleEdge`.
-    private var usageWriteMayCompact = false
 
     private(set) var window: ResidentWindowModel?
     private var frameProbe: SpikeFrameProbe?
@@ -473,10 +471,20 @@ final class ResidentObservationCenter {
 
     /// A fresh same-day (or new-day) id under the current claim, with the
     /// civil day minted from the boundary's own zone (B·F17).
+    ///
+    /// Every re-mint comes through here — the day, an owner change, consent,
+    /// the erase — and so does the one owner rule: when the new id's owner is
+    /// not the old one's, the open usage visits and their exit hints are the
+    /// previous owner's and are dropped, so none settles into the next
+    /// owner's record.
     private func mintDailyRun(at date: Date, bounds: ResidentDayBounds) {
+        let claim = Self.currentClaim(stamp: stamp(), ownerUID: ownerUID())
+        if claim.ownerUID != dailyClaim.ownerUID {
+            usage.dropOpenVisits()
+        }
         dailyRunID = UUID()
         dailyRunStartedAt = date
-        dailyClaim = Self.currentClaim(stamp: stamp(), ownerUID: ownerUID())
+        dailyClaim = claim
         dailyDay = TelemetryClaimKey.dayKey(forDayStart: bounds.dayStart, calendar: calendar)
         lastWrittenCounters = nil
         lastWrittenStartedAt = nil
@@ -559,14 +567,13 @@ final class ResidentObservationCenter {
                 }
             })
         }
-        // Usage visits: the clock stops only in the background — Control
-        // Center and Face ID resign active without leaving the surface.
+        // Registered after the lifecycle edge above, so on a backgrounding it
+        // runs after that edge's flush.
         lifecycleObservers.append(center.addObserver(
             forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self else { return }
-                self.usage.enterBackground(at: self.mediaNow())
+                self?.handleBackgroundEdge()
             }
         })
         // A return from background is ONE session whichever of the two
@@ -774,11 +781,6 @@ final class ResidentObservationCenter {
         guard !lifecycleEdgeFlushed else { return }
         lifecycleEdgeFlushed = true
         closeWindow(outcome: .completed, closedByResign: true)
-        // The usage file is compacted here and only here: the app is leaving,
-        // so the rewrite (see UsagePerfMeasurementTests) is never on a frame
-        // the user is looking at.
-        usageWriteMayCompact = true
-        defer { usageWriteMayCompact = false }
         flushDailyRecord()
         // gh#273 §7.1 edge 4: the records are on disk; the uploader wraps
         // what follows in a background task and sends event records plus
@@ -799,21 +801,27 @@ final class ResidentObservationCenter {
         writeDailyRecord()
     }
 
-    private func scheduleRolloverFlush(after delay: TimeInterval = 0) {
+    private func scheduleRolloverFlush() {
         guard !rolloverFlushScheduled else { return }
         rolloverFlushScheduled = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+        DispatchQueue.main.async { [weak self] in
             self?.performRolloverFlushIfDue()
         }
     }
 
-    /// A return to the foreground after midnight does not roll the day over
-    /// inside the notification: the rollover's writes would land on the
-    /// return itself. The foreground edge is parked instead and the hop runs
-    /// this long after, with every usage signal of the meantime parked
-    /// behind it; the resident's own signals of the meantime land on the old
-    /// day, the imprecision its midnight hop already accepts.
-    static let foregroundRolloverDelay: TimeInterval = 2
+    /// `didEnterBackground`. A usage signal held for a rollover hop that has
+    /// not run yet replays first — into the new day, while the visits are
+    /// still in the foreground — and only then do the visits' clocks stop.
+    /// Then the one place the center's two daily files are compacted: the
+    /// app is off screen, so the rewrite (see UsagePerfMeasurementTests) is
+    /// never on a frame the user is looking at. Not `willResignActive`:
+    /// Control Center and Face ID resign with the app still visible.
+    private func handleBackgroundEdge() {
+        performRolloverFlushIfDue()
+        usage.enterBackground(at: mediaNow())
+        SpikeRunStore.compactIfNeeded(spikeID: FixObservationRegistry.residentDailySpikeID, location: location)
+        SpikeRunStore.compactIfNeeded(spikeID: UsageRecordIDs.spikeID, location: location)
+    }
 
     /// Internal (not private) so tests can drive the deferred hop
     /// deterministically with an injected clock.
@@ -960,9 +968,6 @@ final class ResidentObservationCenter {
                 appendUsageRecord(endedAt: endedAt ?? now(), claim: dailyClaim)
             }
             resetCountsForNewDaily()
-            // An open visit is the previous owner's: it must not settle into
-            // the next owner's record. (A day or consent re-mint keeps it.)
-            usage.dropOpenVisits()
             mintDailyRun(at: now(), bounds: dayBounds)
             return
         }
@@ -996,7 +1001,7 @@ final class ResidentObservationCenter {
     private func appendUsageRecord(endedAt: Date, claim: TelemetryClaimKey) {
         if SpikeRunStore.finishRun(makeUsageRecord(endedAt: endedAt, claim: claim),
                                    owner: .explicit(claim.ownerUID), location: location,
-                                   compactsWhenFull: usageWriteMayCompact) {
+                                   compactsWhenFull: false) {
             usageWrittenChange = usage.changeCount
             usageWrittenStartedAt = usageRunStartedAt
         }
@@ -1036,20 +1041,14 @@ final class ResidentObservationCenter {
     // MARK: Usage signals (UsageSink)
 
     /// A return from background (or the first foreground of a process that
-    /// came up in the background). The day rolls over FIRST — a lifecycle
-    /// edge, not a body pass, so the flush may run here — so a return after
-    /// midnight counts on the new day.
+    /// came up in the background). The day rolls over FIRST, here in the
+    /// notification, so a return after midnight counts on the new day: the
+    /// rollover is two appends and no compaction (both files compact only
+    /// at the background edge) — see UsagePerfMeasurementTests.
     private func handleUsageForegroundEdge() {
         guard !usage.inForeground else { return }
-        let at = mediaNow()
-        if now().timeIntervalSinceReferenceDate >= dayEndSinceReference {
-            // Past midnight: the session is the new day's, counted by the
-            // hop after it rolls the day over (see `foregroundRolloverDelay`).
-            park(.foreground(at: at))
-            scheduleRolloverFlush(after: Self.foregroundRolloverDelay)
-            return
-        }
-        usage.enterForeground(at: at, available: availableGates())
+        performRolloverFlushIfDue()
+        usage.enterForeground(at: mediaNow(), available: availableGates())
     }
 
     /// The signal path's day check: one compare. Past the day end it
@@ -1083,7 +1082,6 @@ final class ResidentObservationCenter {
         case .noteExit(let route): usage.noteExit(route)
         case .leave(let feature, let route, let at): usage.leave(feature, via: route, at: at)
         case .toggled(let gate, let isOn): usage.switchToggled(gate, isOn: isOn)
-        case .foreground(let at): usage.enterForeground(at: at, available: availableGates())
         }
     }
 
@@ -1102,7 +1100,9 @@ final class ResidentObservationCenter {
         let (run, followerDay, followerOverflow) = makeDailyRecord(endedAt: endedAt, claim: claim)
         // The claim's owner, explicitly — a nil (signed-out) claim closes
         // out as nil even while the provider knows the next account (P1-1).
-        if SpikeRunStore.finishRun(run, owner: .explicit(claim.ownerUID), location: location) {
+        // Compacted only at the background edge (`handleBackgroundEdge`).
+        if SpikeRunStore.finishRun(run, owner: .explicit(claim.ownerUID), location: location,
+                                   compactsWhenFull: false) {
             lastWrittenCounters = core.counters
             lastWrittenStartedAt = dailyRunStartedAt
             lastWrittenFollowers = followerDay
@@ -1200,6 +1200,4 @@ enum ParkedUsageSignal: Equatable {
     case noteExit(UsageRoute)
     case leave(UsageFeature, UsageRoute?, at: Double)
     case toggled(UsageGate, Bool)
-    /// A return from background after midnight (never parked by a view).
-    case foreground(at: Double)
 }

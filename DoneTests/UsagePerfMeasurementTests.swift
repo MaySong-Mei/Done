@@ -11,9 +11,10 @@
 //      upload batch over that file, which now decodes off the main thread;
 //    * the launch seed's tail read of that file (32 KB, at most 8 decodes);
 //    * the rollover a return from background after midnight runs inside the
-//      foreground notification (its appends, below the cap);
-//    * the compaction an append that crosses the cap runs — the worst case
-//      for any flush, the rollover's included, is the two added.
+//      foreground notification, with both daily files (resident and usage)
+//      full — past the cap, so a compacting append would rewrite them — and
+//      the background edge that then does compact both, off screen;
+//    * the compaction alone, an append that crosses the cap.
 //  The file is written through the real store with lines shaped like the
 //  center's (one id per day, re-appended at each dirty flush). Results are
 //  printed as one `USAGE_PERF` line per path: median and max over the trials.
@@ -58,11 +59,13 @@ final class UsagePerfMeasurementTests: XCTestCase {
         return metrics
     }
 
-    /// Fills `location`'s usage file with day records re-appended per flush
-    /// until it is just under `targetBytes`; returns the last day's start.
+    /// Fills `location`'s `spikeID` file (the usage file by default) with day
+    /// records re-appended per flush until it reaches `targetBytes`, never
+    /// compacting; returns the last day's start.
     @discardableResult
-    private func fill(_ location: SpikeRunStorageLocation, toBytes targetBytes: Int, start: Date) -> Date {
-        let url = SpikeRunStore.fileURL(spikeID: UsageRecordIDs.spikeID, location: location)
+    private func fill(_ location: SpikeRunStorageLocation, spikeID: String = UsageRecordIDs.spikeID,
+                      toBytes targetBytes: Int, start: Date) -> Date {
+        let url = SpikeRunStore.fileURL(spikeID: spikeID, location: location)
         var day = 0
         var dayStart = start
         while true {
@@ -71,18 +74,18 @@ final class UsagePerfMeasurementTests: XCTestCase {
             for flush in 0..<40 {
                 let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
                 if size >= targetBytes { return dayStart }
-                var run = TelemetryFixtures.run(id: id, spikeID: UsageRecordIDs.spikeID, scenarioID: UsageRecordIDs.scenarioID,
+                var run = TelemetryFixtures.run(id: id, spikeID: spikeID, scenarioID: UsageRecordIDs.scenarioID,
                                                 startedAt: dayStart, endedAt: dayStart.addingTimeInterval(Double(flush) * 600),
                                                 appBuild: "31", metrics: dayMetrics(flush))
                 run.dayKey = nil
-                SpikeRunStore.finishRun(run, owner: .explicit(TelemetryFixtures.uid), location: location)
+                SpikeRunStore.finishRun(run, owner: .explicit(TelemetryFixtures.uid), location: location, compactsWhenFull: false)
             }
             day += 1
         }
     }
 
-    private func fileBytes(_ location: SpikeRunStorageLocation) -> Int {
-        let url = SpikeRunStore.fileURL(spikeID: UsageRecordIDs.spikeID, location: location)
+    private func fileBytes(_ location: SpikeRunStorageLocation, spikeID: String = UsageRecordIDs.spikeID) -> Int {
+        let url = SpikeRunStore.fileURL(spikeID: spikeID, location: location)
         return (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
     }
 
@@ -116,12 +119,13 @@ final class UsagePerfMeasurementTests: XCTestCase {
                                              maxDecodes: ResidentObservationCenter.usageSeedMaxDecodes) { _ in false }
         } })
 
-        // 3. The return after midnight: the foreground notification itself,
-        //    and the rollover hop that runs after it.
-        func rolloverTrial(fileBytes target: Int) -> (notification: Double, hop: Double) {
+        // 3. The return after midnight: the foreground notification, which
+        //    rolls the day over, with both daily files full; then the
+        //    background edge that compacts them.
+        let resident = FixObservationRegistry.residentDailySpikeID
+        func rolloverTrial() -> (notification: Double, background: Double) {
             let location = SpikeRunStorageLocation.ephemeral(id: UUID())
             scratch.append(location)
-            fill(location, toBytes: target, start: start.addingTimeInterval(-40 * 86_400))
             var calendar = Calendar(identifier: .gregorian)
             calendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!
             var clock = calendar.date(bySettingHour: 23, minute: 50, second: 0, of: start)!
@@ -136,15 +140,28 @@ final class UsagePerfMeasurementTests: XCTestCase {
             UsageProbe.use(.eventDetailPlan)
             NotificationCenter.default.post(name: UIApplication.willResignActiveNotification, object: nil)
             NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
+            // Full files, filled after the edge that would have compacted them.
+            fill(location, toBytes: cap + 1, start: start.addingTimeInterval(-40 * 86_400))
+            fill(location, spikeID: resident, toBytes: cap + 1, start: start.addingTimeInterval(-40 * 86_400))
             UsageProbe.use(.allDayToggle)       // counted but not yet written: the rollover writes it
             clock = clock.addingTimeInterval(20 * 60)
+            let usageBefore = fileBytes(location)
+            let residentBefore = fileBytes(location, spikeID: resident)
             let notification = ms { NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil) }
-            let hop = ms { center.performRolloverFlushIfDue() }
-            return (notification, hop)
+            XCTAssertGreaterThan(fileBytes(location), usageBefore, "rig: the notification rolled the day over, appending")
+            XCTAssertGreaterThan(fileBytes(location, spikeID: resident), residentBefore, "rig: and appended to the resident file")
+            NotificationCenter.default.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+            UsageProbe.use(.allDayToggle)
+            NotificationCenter.default.post(name: UIApplication.willResignActiveNotification, object: nil)
+            let background = ms { NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: nil) }
+            XCTAssertLessThan(fileBytes(location), cap, "rig: the background edge compacted the usage file")
+            XCTAssertLessThan(fileBytes(location, spikeID: resident), cap, "rig: and the resident file")
+            NotificationCenter.default.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+            return (notification, background)
         }
-        let trials = (0..<15).map { _ in rolloverTrial(fileBytes: cap / 2) }
-        report("foregroundNotification(after midnight)", trials.map(\.notification))
-        report("rolloverHop", trials.map(\.hop))
+        let trials = (0..<15).map { _ in rolloverTrial() }
+        report("foregroundNotification(after midnight, both files full)", trials.map(\.notification))
+        report("backgroundEdge(compacts both files, off screen)", trials.map(\.background))
 
         // 4. The compaction alone: one append that crosses the cap. The line
         //    carries every key, longer than the room left under the cap.
