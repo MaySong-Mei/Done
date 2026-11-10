@@ -411,6 +411,86 @@ final class UsageCenterTests: XCTestCase {
         XCTAssertNil(today.metrics["usage.focus.enter.auto"], "and the new day has the exit without the enter")
     }
 
+    // MARK: Disk paths kept off what the user is looking at
+
+    private func usageLineCount() -> Int {
+        let url = SpikeRunStore.fileURL(spikeID: UsageRecordIDs.spikeID, location: location)
+        guard let data = try? Data(contentsOf: url) else { return 0 }
+        return data.split(separator: 0x0A).count
+    }
+
+    private func usageFileBytes() -> Int {
+        let url = SpikeRunStore.fileURL(spikeID: UsageRecordIDs.spikeID, location: location)
+        return (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+    }
+
+    /// A return after midnight writes nothing inside the foreground
+    /// notification: the session waits, parked, for the rollover hop, which
+    /// then closes yesterday's line and counts the session on the new day.
+    func testAReturnAfterMidnightWritesNothingInsideTheForegroundNotification() throws {
+        let clock = Box(morning)
+        let center = makeCenter(clock: clock, media: Box(0), countsLaunchSession: true)
+        UsageProbe.use(.allDayToggle)
+        post(UIApplication.willResignActiveNotification)
+        post(UIApplication.didEnterBackgroundNotification)
+        UsageProbe.use(.repeatForm)                                   // dirty again, unwritten
+        let lines = usageLineCount()
+        clock.value = la.date(byAdding: .day, value: 1, to: la.startOfDay(for: morning))!.addingTimeInterval(600)
+        post(UIApplication.willEnterForegroundNotification)
+        post(UIApplication.didBecomeActiveNotification)
+        XCTAssertEqual(usageLineCount(), lines, "no rollover write inside the return to the foreground")
+
+        center.performRolloverFlushIfDue()                            // the hop, a moment later
+        center.flushDaily()
+        let records = usageRecords().sorted { $0.startedAt < $1.startedAt }
+        XCTAssertEqual(records.count, 2)
+        XCTAssertEqual(n(records[0], "sessions"), 1, "yesterday: the launch")
+        XCTAssertEqual(n(records[0], "usage.repeat.use.form"), 1, "yesterday's unwritten count went with yesterday's line")
+        XCTAssertEqual(n(records[1], "sessions"), 1, "the return after midnight is the new day's session, once")
+    }
+
+    /// The usage file is rewritten (compacted) only at a lifecycle edge,
+    /// never by a flush the user is looking at (deck open, rollover hop).
+    func testTheUsageFileCompactsOnlyAtALifecycleEdge() throws {
+        let clock = Box(morning)
+        let center = makeCenter(clock: clock, media: Box(0))
+        // Older lines up to just under the cap.
+        let cap = SpikeRunStore.compactAtBytes
+        var day = 1
+        while usageFileBytes() < cap - 100 {
+            let run = TelemetryFixtures.run(spikeID: UsageRecordIDs.spikeID, scenarioID: UsageRecordIDs.scenarioID,
+                                            startedAt: morning.addingTimeInterval(Double(-day) * 86_400), appBuild: "31",
+                                            metrics: ["sessions": .number(Double(day)), "usage.all_day.use": .number(1)])
+            SpikeRunStore.finishRun(run, owner: .explicit(uid), location: location, compactsWhenFull: false)
+            day += 1
+        }
+        XCTAssertLessThan(usageFileBytes(), cap + 1_024, "fixture: at the cap, not far past it")
+        for gate in UsageGate.allCases { UsageProbe.switchToggled(gate, isOn: true); UsageProbe.switchToggled(gate, isOn: false) }
+        center.flushDaily()                                           // the deck's flush
+        XCTAssertGreaterThan(usageFileBytes(), cap, "past the cap and not rewritten in the foreground")
+
+        UsageProbe.use(.allDayToggle)
+        post(UIApplication.willResignActiveNotification)              // the app leaving
+        XCTAssertLessThan(usageFileBytes(), cap, "positive control: the lifecycle edge's write compacts")
+    }
+
+    /// The upload batch reads the record files off the main actor: it never
+    /// runs the main-actor whole-file read (`SpikeRunStore.loadRuns`).
+    func testTheUploadBatchDoesNotRunTheMainActorWholeFileRead() async throws {
+        let center = makeCenter(clock: Box(morning), media: Box(0), countsLaunchSession: true)
+        UsageProbe.use(.allDayToggle)
+        center.flushDaily()
+        let suite = "UsageUploadReadTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let server = SyncFakeServer(userId: uid)
+        let uploader = makeUploader(server: server, defaults: defaults)
+        let reads = SpikeRunStore.wholeFileReads
+        let outcome = await uploader.uploadNow(trigger: .deckOpen)
+        XCTAssertEqual(outcome, .uploaded(rows: 2), "positive control: the day's two lines were read and sent")
+        XCTAssertEqual(SpikeRunStore.wholeFileReads, reads, "no main-actor whole-file read in the batch")
+    }
+
     /// The hop is what moves a parked signal into the new day; if the clock
     /// went back before it ran, the parked signal lands in the current day.
     func testAParkedSignalIsNeverLost() throws {

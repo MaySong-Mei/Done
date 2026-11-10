@@ -6,8 +6,9 @@
 //  runner is started with TEST_RUNNER_USAGE_PERF=1, and meant to be built
 //  with optimization on (SWIFT_OPTIMIZATION_LEVEL=-O). It times, on the main
 //  thread, the usage-daily paths that touch the disk:
-//    * the whole-file read + decode the uploader's batch runs per record file
-//      (`SpikeRunStore.loadRuns`), on a usage file just under its 256 KB cap;
+//    * the whole-file read + decode of a usage file just under its 256 KB cap
+//      (`SpikeRunStore.loadRuns`), and the longest main-thread stall of a real
+//      upload batch over that file, which now decodes off the main thread;
 //    * the launch seed's tail read of that file (32 KB, at most 8 decodes);
 //    * the rollover a return from background after midnight runs inside the
 //      foreground notification (its appends, below the cap);
@@ -106,14 +107,18 @@ final class UsagePerfMeasurementTests: XCTestCase {
             _ = SpikeRunFileScan.newestMatch(in: url, maxBytes: ResidentObservationCenter.seedTailBytes,
                                              maxDecodes: ResidentObservationCenter.seedMaxDecodes) { _ in true }
         } })
-        report("seedTail(miss)", (0..<25).map { _ in ms {
+        report("seedTail(miss, resident budget)", (0..<25).map { _ in ms {
             _ = SpikeRunFileScan.newestMatch(in: url, maxBytes: ResidentObservationCenter.seedTailBytes,
                                              maxDecodes: ResidentObservationCenter.seedMaxDecodes) { _ in false }
         } })
+        report("seedTail(miss, usage budget)", (0..<25).map { _ in ms {
+            _ = SpikeRunFileScan.newestMatch(in: url, maxBytes: ResidentObservationCenter.seedTailBytes,
+                                             maxDecodes: ResidentObservationCenter.usageSeedMaxDecodes) { _ in false }
+        } })
 
-        // 3. The rollover inside the foreground notification: a center on day
-        //    N with counts in memory, backgrounded, back after midnight.
-        func rolloverTrial(fileBytes target: Int) -> Double {
+        // 3. The return after midnight: the foreground notification itself,
+        //    and the rollover hop that runs after it.
+        func rolloverTrial(fileBytes target: Int) -> (notification: Double, hop: Double) {
             let location = SpikeRunStorageLocation.ephemeral(id: UUID())
             scratch.append(location)
             fill(location, toBytes: target, start: start.addingTimeInterval(-40 * 86_400))
@@ -133,9 +138,13 @@ final class UsagePerfMeasurementTests: XCTestCase {
             NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
             UsageProbe.use(.allDayToggle)       // counted but not yet written: the rollover writes it
             clock = clock.addingTimeInterval(20 * 60)
-            return ms { NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil) }
+            let notification = ms { NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil) }
+            let hop = ms { center.performRolloverFlushIfDue() }
+            return (notification, hop)
         }
-        report("foregroundRollover", (0..<15).map { _ in rolloverTrial(fileBytes: cap / 2) })
+        let trials = (0..<15).map { _ in rolloverTrial(fileBytes: cap / 2) }
+        report("foregroundNotification(after midnight)", trials.map(\.notification))
+        report("rolloverHop", trials.map(\.hop))
 
         // 4. The compaction alone: one append that crosses the cap. The line
         //    carries every key, longer than the room left under the cap.
@@ -154,5 +163,68 @@ final class UsagePerfMeasurementTests: XCTestCase {
             XCTAssertLessThan(fileBytes(location), before, "the append did compact")
             return elapsed
         })
+
+        // 5. A real upload batch over the full file: the longest gap between
+        //    beats of a 1 ms main-queue heartbeat is the longest main-thread
+        //    stall the batch caused. Two controls bracket it: the heartbeat
+        //    with nothing running (its own noise), and the heartbeat around
+        //    the on-main whole-file decode the batch used to run (a stall the
+        //    instrument must see).
+        func heartbeat(_ work: (@escaping () -> Void) -> Void) -> Double {
+            var last = DispatchTime.now().uptimeNanoseconds
+            var longest: UInt64 = 0
+            let beat = Timer(timeInterval: 0.001, repeats: true) { _ in
+                let t = DispatchTime.now().uptimeNanoseconds
+                longest = max(longest, t - last)
+                last = t
+            }
+            RunLoop.main.add(beat, forMode: .common)
+            let done = expectation(description: "work")
+            work { done.fulfill() }
+            wait(for: [done], timeout: 30)
+            beat.invalidate()
+            return Double(longest) / 1e6
+        }
+        let idle = (0..<8).map { _ in heartbeat { finish in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { finish() }
+        } }
+        report("heartbeat(idle control)", idle, extra: "all=\(idle.map { String(format: "%.1f", $0) })")
+        let onMain = (0..<8).map { _ in heartbeat { finish in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                _ = SpikeRunStore.loadRuns(spikeID: UsageRecordIDs.spikeID, location: full)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { finish() }
+            }
+        } }
+        report("heartbeat(on-main decode control)", onMain, extra: "all=\(onMain.map { String(format: "%.1f", $0) })")
+        let suite = "UsagePerfMeasurementTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var stalls: [Double] = []
+        for _ in 0..<8 {
+            let pool = SpikeRunStorageLocation.ephemeral(id: UUID())
+            scratch.append(pool)
+            fill(pool, toBytes: cap - 4_096, start: start)
+            var deps = TelemetryUploader.Dependencies()
+            deps.defaults = defaults
+            deps.location = pool
+            deps.now = { start.addingTimeInterval(500 * 86_400) }
+            deps.launchDelay = 0
+            deps.makeKeepAlive = { nil }
+            deps.bootstrapOwner = { nil }
+            let uploader = TelemetryUploader(dependencies: deps)
+            uploader.attach(TelemetryUploader.Attachment(gateway: SyncFakeServer(userId: TelemetryFixtures.uid),
+                                                         isBlockedByBuild: { false },
+                                                         currentUserID: { TelemetryFixtures.uid }, isSignedIn: { true }))
+            defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+            TelemetryConsentStore.recordGrant(defaults, at: start.addingTimeInterval(-86_400))
+            stalls.append(heartbeat { finish in
+                Task { @MainActor in
+                    _ = await uploader.uploadNow(trigger: .launch)
+                    finish()
+                }
+            })
+        }
+        report("uploadBatch(longest main-thread stall)", stalls,
+               extra: "file=\(fullBytes)B all=\(stalls.map { String(format: "%.1f", $0) })")
     }
 }
