@@ -72,7 +72,7 @@ final class UsageModelTests: XCTestCase {
             "usage.create.enter.drag", "usage.create.enter.plus", "usage.create.enter.resume_draft",
             "usage.create.enter.reminder_ai", "usage.create.done", "usage.create.done.repeat",
             "usage.create.done.all_day", "usage.create.done.note", "usage.create.abandon.cancel",
-            "usage.create.abandon.swipe", "usage.create.abandon.banner", "usage.create.ai_fallback", "usage.create.dwell",
+            "usage.create.abandon.dismiss", "usage.create.abandon.banner", "usage.create.ai_fallback", "usage.create.dwell",
             "usage.repeat.enter.rule_editor", "usage.repeat.use.form", "usage.repeat.done", "usage.repeat.abandon",
             "usage.all_day.use",
             "usage.focus.available", "usage.todo_stack.available", "usage.wanna.available", "usage.report.available",
@@ -293,7 +293,7 @@ final class UsageModelTests: XCTestCase {
         XCTAssertEqual(count(tracker, "usage.event_detail.abandon"), 1)
 
         tracker.enter(.createPlus, at: 2)
-        tracker.leave(.create, via: .createSwipe, at: 3)
+        tracker.leave(.create, via: .createDismiss, at: 3)
         tracker.done(.create)
         XCTAssertEqual(count(tracker, "usage.create.done"), 0, "a done after the settle is stray too")
 
@@ -344,11 +344,11 @@ final class UsageModelTests: XCTestCase {
 
         tracker.enter(.createDrag, at: 10)
         tracker.done(.create)
-        tracker.leave(.create, via: .createSwipe, at: 11)
-        XCTAssertEqual(count(tracker, "usage.create.abandon.swipe"), 0, "a done visit is not routed into abandonment")
+        tracker.leave(.create, via: .createDismiss, at: 11)
+        XCTAssertEqual(count(tracker, "usage.create.abandon.dismiss"), 0, "a done visit is not routed into abandonment")
         tracker.enter(.createDrag, at: 20)
-        tracker.leave(.create, via: .createSwipe, at: 21)
-        XCTAssertEqual(count(tracker, "usage.create.abandon.swipe"), 1)
+        tracker.leave(.create, via: .createDismiss, at: 21)
+        XCTAssertEqual(count(tracker, "usage.create.abandon.dismiss"), 1)
     }
 
     func testANotedExitWinsAndAnotherFeaturesRouteIsIgnored() {

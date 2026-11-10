@@ -157,7 +157,7 @@ acceptance?:修复验收方向(键、方向、阈值)— 本期不实现字段,�
 
 **一致性检查(服务端)**:按设备、在 30 天窗口内求和后比较,不按单日比较——访问在离开那天结算,跨午夜的访问会把放弃 / 停留记在 enter 为 0 的次日;窗口两端各允许差一次访问。同一 (install, 30 天窗口, 功能):`abandon ≤ enter 合计`;停留各档之和 ≤ `enter` 合计;有 `enter` 阶段的功能出现 `use + done > 0` 而 `enter = 0` → 标 `missing_enter`(漏了入口)。这三条进 `v_usage_suspicious`。
 
-**成本**:每次信号仍是 1 次下标 + 1 次加;每个打开中的界面在内存里放一个访问记录(进入时刻 + 有没有动过手),离开时几次比较与加法。本片登记 60 个键(清单见 §6.3.1);值为 0 的键不写进记录(服务端 `counter_long` 按注册表把缺失读成 0,契约 §4)。**落盘要按重写算,不按一行算**:每个有新计数的退后台边沿把当天整条 usage 行再追加一次(典型约 1.2 KB,60 个键全有约 2.5 KB),一天 30–60 次会话约 36–72 KB,文件约一周碰到 256 KB 上限并压实。这些代价不放在用户看着的帧上:usage 文件只在离开前台的生命周期边沿压实;上传批次的整文件读与解码在主线程之外;午夜后回前台的跨天写延到通知之后再做。实测见 `UsagePerfMeasurementTests`(数字只在那里,不抄进正文)。
+**成本**:每次信号仍是 1 次下标 + 1 次加;每个打开中的界面在内存里放一个访问记录(进入时刻 + 有没有动过手),离开时几次比较与加法。本片登记 60 个键(清单见 §6.3.1);值为 0 的键不写进记录(服务端 `counter_long` 按注册表把缺失读成 0,契约 §4)。**落盘要按重写算,不按一行算**:每个有新计数的退后台边沿把当天整条 usage 行再追加一次;一行的大小随非零键数增长,每个非零键约 40 B,登记到计划中的约 150 个键后,忙碌的一天一行会过 2 KB。一天的落盘 = 有新计数的退后台次数 × 行长,文件按 256 KB 上限压实。这些代价不放在用户看着的帧上:usage 文件只在离开前台的生命周期边沿压实;上传批次的整文件读与解码在主线程之外;午夜后回前台的跨天写延到通知之后再做。实测见 `UsagePerfMeasurementTests`(数字只在那里,不抄进正文)。
 
 **隐私**:不变。只有整数和固定档位,不记标题、内容、时间点。
 
@@ -170,9 +170,9 @@ acceptance?:修复验收方向(键、方向、阈值)— 本期不实现字段,�
 | 功能(键前缀) | 进入 | 用了 | 完成 | 放弃 / 离开 | 注意 |
 |---|---|---|---|---|---|
 | Tab(`tab.calendar` / `tab.report` / `tab.me`) | 点 Tab 栏:`CT:371` 的 `onChange(selectedTab)`,排除程序写入 | — | — | 停留 | 启动选 Tab(`CT:297`,还会随视图重建再跑)和「我」页跳日历(`AV:829`)都会写 `selectedTab`,写之前打标记 |
-| 事件详情 `event_detail` | 细分 `canvas`(`handleTimelineEventTap`,时间线块与全天条都走它)· `menu`(浮动菜单的查看详情 / 记录)· `list`(`CalendarListView`)· `search`(`openEvent` / `openOccurrenceLog`,四个按钮都汇到这里) | 细分 `plan`(类型、时长、重复、改名、编辑)· `reflect`(完成、精力、标签、备注 / 模板)· `timeline_note`(保存、删除、长按开始编辑)· `todo`(完成、释放、截止、放回待办栈;todo 页上的备注编辑也记这里)· `delete` | 无保存按钮;动过手即「留下」 | 离开 = 三个呈现者(PV、搜索、列表)的路由绑定变成 nil(返回、侧滑、内部 dismiss 都经过);`abandon` = 没动手就走 | 另记 `view.reflection`(新加 `onChange(selectedPage)`,不算动手);DV 自己的 `onAppear` / `onDisappear` 一律不记(推聊天页、从聊天页返回都会触发);备注 / 模板编辑每页只记一次,加载不算编辑 |
-| 新建 `create` | 细分 `drag`(PV `handleCreateEvent`)· `plus`(PV 顶栏 +)· `resume_draft`(PV 恢复横幅)· `reminder_ai`(PV `scheduleReminder`;访问从点按开始,停留含等 AI) | — | Done;另记属性 `done.repeat` / `done.all_day` / `done.note`(保存的事件带了这项,是 `done` 的子集,不能按前缀求和)。记在 `CreateCalendarEventView` 的保存闭包里,不在 FV:FV 也是编辑表单 | `abandon.cancel` / `abandon.swipe`:表单会话结束(`onDraftSessionEnd`)时,没 Done 才记,无裸 `abandon`。`abandon.banner`(横幅丢弃已存草稿)不是一次访问的结算,`abandon ≤ enter` 只用前两个 | 会话结束时有快照 = 下滑,无快照 = Done / Cancel(`draftSession.endedExplicitly`);AI 关或失败的回退另记 `create.ai_fallback` |
-| 重复规则 `repeat` | 新建表单里打不开观察(Menu);详情里的规则编辑器(「管理重复」按钮,同时记 `event_detail.use.plan`) | `use.form`:表单里选了非「不重复」(新加 `onChange`;草稿恢复走初始值,不触发)· `use.delete_series` | 规则编辑器 Save;新建时见 `create.done.repeat` | 编辑器 sheet 的 `onDismiss`(Save / Cancel / 删除系列 / 下滑都经过);没 Save 就是放弃 | `use.form` 不在任何编辑器访问内,`missing_enter` 要排除它 |
+| 事件详情 `event_detail` | 细分 `canvas`(`handleTimelineEventTap`,时间线块与全天条都走它)· `menu`(浮动菜单的查看详情 / 记录)· `list`(`CalendarListView`)· `search`(`openEvent` / `openOccurrenceLog`,四个按钮都汇到这里) | 细分 `plan`(类型、时长、重复、改名、编辑)· `reflect`(完成、精力、标签、备注 / 模板)· `timeline_note`(保存、删除、长按开始编辑)· `todo`(完成、释放、截止、放回待办栈;todo 页上的备注编辑也记这里)· `delete` | 无保存按钮;动过手即「留下」 | 离开 = 三个呈现者(PV、搜索、列表)的路由绑定变成 nil(返回、侧滑、内部 dismiss 都经过);`abandon` = 没动手就走 | 另记 `view.reflection`(新加 `onChange(selectedPage)`,不算动手):用户翻到反思页算;直接打开到反思页(记录、发生行)也算,入口本身选了这一页;只有路由在详情重新出现时(从聊天页返回)把页面改回去不算;DV 自己的 `onAppear` / `onDisappear` 一律不记(推聊天页、从聊天页返回都会触发);备注 / 模板编辑每页只记一次,加载不算编辑 |
+| 新建 `create` | 细分 `drag`(PV `handleCreateEvent`)· `plus`(PV 顶栏 +)· `resume_draft`(PV 恢复横幅)· `reminder_ai`(PV `scheduleReminder`;访问从点按开始,停留含等 AI) | — | Done;另记属性 `done.repeat` / `done.all_day` / `done.note`(保存的事件带了这项,是 `done` 的子集,不能按前缀求和)。记在 `CreateCalendarEventView` 的保存闭包里,不在 FV:FV 也是编辑表单 | `abandon.cancel` / `abandon.dismiss`(下滑,或点半屏外的暗处):表单会话结束(`onDraftSessionEnd`)时,没 Done 才记,无裸 `abandon`。`abandon.banner`(横幅丢弃已存草稿)不是一次访问的结算,`abandon ≤ enter` 只用前两个 | 会话结束时有快照 = 关掉(下滑 / 点外面),无快照 = Done / Cancel(`draftSession.endedExplicitly`);AI 关或失败的回退另记 `create.ai_fallback` |
+| 重复规则 `repeat` | 新建表单里打不开观察(Menu);详情里的规则编辑器(「管理重复」按钮,同时记 `event_detail.use.plan`) | `use.form`:表单里选了非「不重复」(新加 `onChange`;草稿恢复走初始值,不触发)· `use.delete_series` | 规则编辑器 Save;新建时见 `create.done.repeat` | 编辑器 sheet 的 `onDismiss`(Save / Cancel / 删除系列 / 下滑都经过);没 Save 也没删除系列才是放弃(删除系列记 `use.delete_series`) | `use.form` 不在任何编辑器访问内,`missing_enter` 要排除它 |
 | 全天 `all_day` | — | 开关 FV:595(仅事件类型显示) | 见 `create.done.all_day` | — | |
 | 照片 `photo` | 系统相册选择器不报打开 | 选了图:DV:2360(反思页)、DV:4772(时间线备注);只在新数量 > 0 时记 | 反思页图片立即保存(2376);备注图片随备注保存(4730) | 不可观察 | 选完重置选择(2367 / 4812)会让数量 `onChange` 再触发一次 |
 | 待办栈 `todo_stack` | PV:3131 | 展开 TS:881 · 新增 TS:820 · 开始拖 TS:935 | 拖到画布成功 TS:194-201 | `drag_cancel`(TS:203 / 207)· 关闭 X 777 / 背景 61 / 下滑 689 | 进 Focus 时自动关(TS:115),不算放弃;`onDisappear`(503)会存半截标题,不算新增。门控(`archivedTodoStackEnabled`),本片只有 `available` |
@@ -471,9 +471,13 @@ RLS:authenticated `select / insert / update` 自己的行(`user_id = (select aut
 **第三轮(2026-11-09)**
 - 午夜之后、跨天 hop 之前到达的 usage 信号先停放(内存里,预留容量,只存标签与媒体时刻),hop 铸出新一天的记录后按序回放:访问在离开那天结算,信号路径上没有 I/O。
 - 延后执行的写(截止时间滚轮的合并提交、命名卡片离开时的保存)不算使用:使用记在用户动作上(滚轮的第一格、开关、第一下键入、Keep)。追踪器另外丢弃「访问已结束、新访问还没开始」时到达的 use / done(声明在访问外发生的除外,即表单里选重复)。
-- `view.reflection` 只记用户翻页;路由跳页(打开时、路由原地替换、每次从聊天页返回)自己标注,不计。
+- `view.reflection`:路由在详情重新出现时改回页面(每次从聊天页返回)自己标注,不计;打开时与路由原地替换的跳页是入口的选择,计(第四轮拍板)。判断在纯函数 `DetailPageViewUsage` 里,真视图上够不着的重新出现情形由单测驱动。
 - 换账号 / 登出的重铸丢弃打开的访问与离开提示(上一个账号的访问不结算进下一个账号的行);跨天与同意重铸照旧保留。
 - 午夜后回前台:前台边沿停放,跨天 hop 延后 `foregroundRolloverDelay` 再做,不在通知里同步写。usage 文件只在生命周期边沿(离开前台)压实。上传批次的记录文件读与解码移出主线程。usage 启动种子的解码预算降为 2。
+
+**第四轮(2026-11-10)**
+- 精力滑杆的使用只在用户松手(或点按)时记:`CalendarEffortScrubber.onRelease`,只有 `.onEnded` 调它;手势被取消与退后台 flush 也会走到提交,但都不算使用。
+- `create.abandon.swipe` 更名为 `create.abandon.dismiss`(点半屏外的暗处也算),尚未发布,注册表同步。
 
 **已知局限**
 - 详情页还在导航栈里时切到别的 Tab,访问不结束,停留含在别的 Tab 的时间;推到聊天页的时间同样算在详情页里(聊天被视为详情的一部分)。

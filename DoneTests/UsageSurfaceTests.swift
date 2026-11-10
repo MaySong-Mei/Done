@@ -472,13 +472,12 @@ final class UsageDetailLateWriteTests: XCTestCase {
         return Int((pager.contentOffset.x / pager.bounds.width).rounded())
     }
 
-    /// Only the user's swipe is a view of the reflection page. The route
-    /// jump — on open, on a route change in place, on every return from the
-    /// chat page — writes the page itself and is not. (A real swipe cannot
-    /// be driven from here: SwiftUI's pager ignores offsets and delegate
-    /// calls made from outside a touch, so the positive control is the
-    /// mutant that counts every page change.)
-    func testTheRouteJumpsPageWriteIsNotAView() throws {
+    /// Opening straight onto the reflection page (Log, an occurrence row) is
+    /// a view: the user's entry chose the page. So is a new route replacing
+    /// the old one in place. What is not — the route re-asserting its page on
+    /// a re-appear — needs a finger first and is driven in
+    /// `UsageRouteJumpTests`.
+    func testTheRoutesOwnPageChoiceIsAView() throws {
         center = UsageSurfaceHost.makeCenter(location: location, countsLaunchSession: false)
         let store = EventStore(defaults: defaults, storage: storage, seedsSampleDataIfEmpty: false)
         let event = Event(title: "Deep Work", timeRanges: [.init(start: day, end: day.addingTimeInterval(3600))], type: "Study")
@@ -491,15 +490,16 @@ final class UsageDetailLateWriteTests: XCTestCase {
         nav.route = route(event.id, .log)
         settle()
         XCTAssertEqual(shownPage(in: host.window), 1, "rig: opened on the reflection page by the route")
-        XCTAssertEqual(count("usage.event_detail.view.reflection"), 0, "the route's own page write on open")
+        XCTAssertEqual(count("usage.event_detail.view.reflection"), 1, "the entry chose the reflection page: a view")
 
         nav.route = route(event.id, .meta)
         settle()
-        XCTAssertEqual(shownPage(in: host.window), 0, "rig: the route change jumped to the overview in place")
+        XCTAssertEqual(shownPage(in: host.window), 0, "rig: the new route opened the overview")
+        XCTAssertEqual(count("usage.event_detail.view.reflection"), 1, "the overview is not the reflection page")
         nav.route = route(event.id, .log)
         settle()
-        XCTAssertEqual(shownPage(in: host.window), 1, "rig: and back to the reflection page")
-        XCTAssertEqual(count("usage.event_detail.view.reflection"), 0, "nor the jump back")
+        XCTAssertEqual(shownPage(in: host.window), 1)
+        XCTAssertEqual(count("usage.event_detail.view.reflection"), 2, "a new route onto the reflection page is a view too")
     }
 }
 
@@ -648,5 +648,147 @@ final class UsageEraseThroughTheEraserTests: XCTestCase {
         XCTAssertEqual(SpikeRunStore.loadRuns(spikeID: UsageRecordIDs.spikeID, location: pool).count, 1, "only the new day's line")
         XCTAssertEqual(after.metrics, ["sessions": .number(1)],
                        "nothing from before the erase; the open visit settled nothing; the session the erase ran in is the new record's denominator")
+    }
+}
+
+// MARK: - Effort: the user's release is the use, not the commit
+
+/// Three paths reach the effort commit: the user's release (or tap), a
+/// gesture cancelled mid-drag (Home pressed, the scroll view winning), and
+/// the backgrounding flush of a drag in progress. Only the first is the user
+/// deciding; an interrupted drag is not a use even though its value is
+/// written. A live gesture cannot be driven from a test, so each path is
+/// driven through its own seam: the scrubber's `handleEnded` (only `.onEnded`
+/// calls it) and `handleDragActiveChanged` (the reset a cancellation also
+/// delivers), and the control's `commitDrag` (the scrubber's commit and the
+/// flush) vs `handleRelease`.
+@MainActor
+final class UsageEffortReleaseTests: XCTestCase {
+    private final class Recorder {
+        var value: Int?
+        var commits: [Int] = []
+        var releases: [Int] = []
+        init(_ value: Int?) { self.value = value }
+    }
+
+    private var location: SpikeRunStorageLocation!
+    private var center: ResidentObservationCenter?
+    private var displacedSink: UsageSink?
+
+    override func setUp() {
+        super.setUp()
+        location = .ephemeral(id: UUID())
+        displacedSink = UsageProbe.sink
+    }
+
+    override func tearDown() {
+        center?.deactivate()
+        center = nil
+        UsageProbe.sink = displacedSink
+        try? FileManager.default.removeItem(at: location.directory)
+        super.tearDown()
+    }
+
+    private func scrubber(_ recorder: Recorder) -> CalendarEffortScrubber {
+        CalendarEffortScrubber(value: Binding(get: { recorder.value }, set: { recorder.value = $0 }),
+                               onCommit: { recorder.commits.append($0) },
+                               onRelease: { recorder.releases.append($0) })
+    }
+
+    func testTheScrubberReportsTheUsersReleaseAndNeverACancellation() {
+        let released = Recorder(2)
+        let drag = scrubber(released)
+        drag.handleChanged(locationX: 70, trackWidth: 100)
+        drag.handleEnded(locationX: 100, trackWidth: 100)          // .onEnded: the finger lifted
+        drag.handleDragActiveChanged(wasActive: true, isActive: false)
+        XCTAssertEqual(released.releases, [5], "the release, with the released value")
+        XCTAssertEqual(released.commits, [5], "positive control: and the commit")
+
+        let cancelled = Recorder(2)
+        let interrupted = scrubber(cancelled)
+        interrupted.handleChanged(locationX: 70, trackWidth: 100)
+        interrupted.handleDragActiveChanged(wasActive: true, isActive: false)   // no .onEnded for a cancellation
+        XCTAssertEqual(cancelled.commits, [4], "the cancelled drag still commits its value")
+        XCTAssertEqual(cancelled.releases, [], "but it is not a release")
+    }
+
+    func testOnlyTheReleaseCountsTheEffortUseNeitherTheCancelNorTheFlushCommit() {
+        center = UsageSurfaceHost.makeCenter(location: location, countsLaunchSession: false)
+        let count = { self.center?.usage.counts.count("usage.event_detail.use.reflect") ?? -1 }
+        var commits = 0
+        let control = CalendarEffortQuickControl(storedEffort: 2, tint: .blue, onCommit: { _ in commits += 1 })
+        control.commitDrag(4)            // a cancelled drag's commit
+        control.commitDrag(4)            // the backgrounding flush: the same call
+        XCTAssertEqual(commits, 2, "fixture: both reached the durable commit")
+        XCTAssertEqual(count(), 0, "an interrupted drag is not a use")
+
+        control.handleRelease(2)
+        XCTAssertEqual(count(), 0, "released on the stored value: nothing changed")
+        control.handleRelease(4)
+        XCTAssertEqual(count(), 1, "positive control: the user's release that moves the value is one use")
+    }
+
+    /// The wiring a direct-construction test cannot reach, as a comment-blind
+    /// anchor: the release is what counts, and no commit path does.
+    func testNoCommitPathCountsAndTheScrubbersReleaseIsWiredToTheControl() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        func code(_ path: String) throws -> String {
+            UsageSourceScan.stripCommentsAndStrings(try String(contentsOf: root.appendingPathComponent(path), encoding: .utf8))
+        }
+        func body(of signature: String, in source: String) throws -> String {
+            let chars = Array(source)
+            let range = try XCTUnwrap(source.range(of: signature), "\(signature) not found")
+            var i = source.distance(from: source.startIndex, to: range.upperBound)
+            while i < chars.count, chars[i] != "{" { i += 1 }
+            let inner = try XCTUnwrap(UsageSourceScan.balanced(chars, from: i, "{", "}"))
+            return String(chars[inner]).split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        }
+        let glass = try code("Done/Views/Calendar/Components/GlassCardView.swift")
+        let control = try code("Done/Views/Calendar/Components/CalendarEffortQuickControl.swift")
+        let detail = try code("Done/Views/Calendar/CalendarEventDetailView.swift")
+        for (signature, source) in [("func handleDragActiveChanged(", glass), ("func commitDrag(", control), ("func commitEffortDrag(", detail)] {
+            XCTAssertFalse(try body(of: signature, in: source).contains("UsageProbe."), "\(signature) is a shared commit: it must not count")
+        }
+        XCTAssertTrue(try body(of: "func handleRelease(", in: control).contains("UsageProbe.use(.eventDetailReflect)"))
+        XCTAssertTrue(try body(of: "func handleEnded(", in: glass).contains("onRelease?(finalValue)"), "only .onEnded's handler releases")
+        XCTAssertTrue(control.contains("onRelease: handleRelease"), "the control hands the scrubber its release handler")
+    }
+}
+
+// MARK: - The route jump's page writes
+
+/// The re-appear rewrite needs a finger to have left the route's page first,
+/// which a test cannot do on the real view: the decision the view calls is
+/// driven here instead. The open-onto-reflection case is also on the real
+/// view (`UsageDetailLateWriteTests`).
+@MainActor
+final class UsageRouteJumpTests: XCTestCase {
+    func testTheFirstJumpIsTheEntrysChoiceAndARejumpOnReappearIsNot() {
+        let open = DetailPageViewUsage.routeJump(force: true, didHandleInitialJump: false, selected: .overview, target: .reflection)
+        XCTAssertEqual(open, .init(runs: true, write: .reflection, reasserted: false))
+        XCTAssertTrue(DetailPageViewUsage.isView(page: .reflection, reasserted: open.reasserted), "Log opened it: a view")
+
+        // The user swiped to the overview, opened the chat, came back.
+        let reappear = DetailPageViewUsage.routeJump(force: true, didHandleInitialJump: true, selected: .overview, target: .reflection)
+        XCTAssertEqual(reappear, .init(runs: true, write: .reflection, reasserted: true))
+        XCTAssertFalse(DetailPageViewUsage.isView(page: .reflection, reasserted: reappear.reasserted), "the route re-asserting its page")
+
+        XCTAssertEqual(DetailPageViewUsage.routeJump(force: false, didHandleInitialJump: true, selected: .overview, target: .reflection),
+                       .init(runs: false, write: nil, reasserted: false), "an unforced jump after the first does nothing")
+        XCTAssertEqual(DetailPageViewUsage.routeJump(force: true, didHandleInitialJump: true, selected: .reflection, target: .reflection).write,
+                       nil, "already there: no write, so nothing to mark")
+        XCTAssertTrue(DetailPageViewUsage.isView(page: .reflection, reasserted: false), "the user's own swipe")
+        XCTAssertFalse(DetailPageViewUsage.isView(page: .overview, reasserted: false))
+    }
+
+    /// The view uses the decision rather than restating it.
+    func testTheDetailWiresItsRouteJumpThroughTheDecision() throws {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Done/Views/Calendar/CalendarEventDetailView.swift")
+        let code = UsageSourceScan.stripCommentsAndStrings(try String(contentsOf: url, encoding: .utf8))
+            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        XCTAssertTrue(code.contains("let plan = DetailPageViewUsage.routeJump(force: force, didHandleInitialJump: didHandleInitialJump, selected: selectedPage, target: target)"))
+        XCTAssertTrue(code.contains("usageProgrammaticPageWrite = plan.reasserted selectedPage = page"))
+        XCTAssertTrue(code.contains("if DetailPageViewUsage.isView(page: page, reasserted: reasserted) { UsageProbe.view(.eventDetailReflection) }"))
     }
 }

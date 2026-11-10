@@ -600,7 +600,7 @@ final class UsageCenterTests: XCTestCase {
         UsageProbe.leave(.focus, via: .focusSwipe)
         UsageProbe.enter(.createReminderAI)
         UsageProbe.count(.createAIFallback)
-        UsageProbe.leave(.create, via: .createSwipe)
+        UsageProbe.leave(.create, via: .createDismiss)
         center.flushDaily()
         let real = try onlyUsageRecord()
 

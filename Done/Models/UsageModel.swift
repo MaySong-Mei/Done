@@ -77,7 +77,7 @@ enum UsageView: UInt16, CaseIterable {
 
 enum UsageRoute: UInt16, CaseIterable {
     case focusSwipe, focusRotate, focusSystem
-    case createCancel, createSwipe
+    case createCancel, createDismiss
 }
 
 /// Counts that belong to a feature but to no visit.
@@ -270,7 +270,7 @@ enum UsageFeature: UInt16, CaseIterable {
                 ],
                 routes: [
                     .init(tag: .createCancel, name: "cancel", what: "Cancel without Done"),
-                    .init(tag: .createSwipe, name: "swipe", what: "swiped down without Done"),
+                    .init(tag: .createDismiss, name: "dismiss", what: "dismissed without Done: swiped down, or a tap outside the half sheet"),
                 ],
                 routeStage: .abandon,
                 events: [

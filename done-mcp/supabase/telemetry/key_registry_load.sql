@@ -237,7 +237,7 @@ insert into public.key_registry (key, kind, family, value_schema, since_build, r
   ('usage.create.done.all_day', 'counter', 'usage', 'number', 31, null, 'sessions', 'usage-daily', 'Usage - New event - done: a done whose event is all-day (subset of done).'),
   ('usage.create.done.note', 'counter', 'usage', 'number', 31, null, 'sessions', 'usage-daily', 'Usage - New event - done: a done whose event has a note (subset of done).'),
   ('usage.create.abandon.cancel', 'counter', 'usage', 'number', 31, null, 'sessions', 'usage-daily', 'Usage - New event - abandoned (a visit with no done): Cancel without Done.'),
-  ('usage.create.abandon.swipe', 'counter', 'usage', 'number', 31, null, 'sessions', 'usage-daily', 'Usage - New event - abandoned (a visit with no done): swiped down without Done.'),
+  ('usage.create.abandon.dismiss', 'counter', 'usage', 'number', 31, null, 'sessions', 'usage-daily', 'Usage - New event - abandoned (a visit with no done): dismissed without Done: swiped down, or a tap outside the half sheet.'),
   ('usage.create.dwell', 'histogram', 'usage', 'fixed_string', 31, null, 'sessions', 'usage-daily', 'Usage - New event - foreground dwell per settled visit, buckets <3 s / <30 s / <300 s / >=300 s.'),
   ('usage.create.abandon.banner', 'counter', 'usage', 'number', 31, null, 'sessions', 'usage-daily', 'Usage - New event - a kept draft discarded from the resume banner, after its visit settled (not a visit settle).'),
   ('usage.create.ai_fallback', 'counter', 'usage', 'number', 31, null, 'sessions', 'usage-daily', 'Usage - New event - a reminder opened without AI prefill (AI off or failed).'),
