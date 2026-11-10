@@ -1093,8 +1093,10 @@ final class UsageQARound2CenterTests: XCTestCase {
 
     /// Uses of features that have no visits, and the repeat picked in an
     /// event form, are never late writes: a sibling visit having ended must
-    /// not swallow them. Positive control: a done after its own visit ended
-    /// is dropped (the guard is live in this rig).
+    /// not swallow them. A done is never a late write (round 3: it is the
+    /// user's action on a form still on screen, which can outlive the visit
+    /// it opened under). Positive control: a use after its own visit ended is
+    /// dropped (the guard is live in this rig).
     func testTheStrayGuardKeepsUsesThatBelongToNoVisit() throws {
         let made = UsageQARig.makeCenter(location: location, clock: QABox(UsageQARig.at(10, 0)), media: QABox(0),
                                          countsLaunchSession: true)
@@ -1104,16 +1106,20 @@ final class UsageQARound2CenterTests: XCTestCase {
         UsageProbe.leave(.create, via: .createCancel)
         UsageProbe.enter(.repeatRuleEditor)
         UsageProbe.leave(.repeatRule)
+        UsageProbe.enter(.eventDetailCanvas)
+        UsageProbe.leave(.eventDetail)
 
         UsageProbe.use(.allDayToggle)
         UsageProbe.use(.repeatForm)
         UsageProbe.switchToggled(.focus, isOn: true)
         UsageProbe.done(.create)
+        UsageProbe.use(.eventDetailPlan)
 
         XCTAssertEqual(made.usage.counts.count("usage.all_day.use"), 1, "the all-day switch belongs to no visit")
         XCTAssertEqual(made.usage.counts.count("usage.repeat.use.form"), 1, "a repeat picked in a form is not the rule editor's")
         XCTAssertEqual(made.usage.counts.count("usage.archived.use.focus_on"), 1)
-        XCTAssertEqual(made.usage.counts.count("usage.create.done"), 0, "positive control: a done after its visit ended is dropped")
+        XCTAssertEqual(made.usage.counts.count("usage.create.done"), 1, "a done is the user's action on a form still on screen")
+        XCTAssertEqual(made.usage.counts.count("usage.event_detail.use.plan"), 0, "positive control: a use after its visit ended is dropped")
     }
 
     /// The account changes while a detail is open; the change is noticed at
@@ -1246,5 +1252,216 @@ final class UsageQAEraseRaceTests: XCTestCase {
             let result = try await runBatch(erasingDuringTheRead: false)
             XCTAssertGreaterThan(result.rows, 0, "the rig's batch does upload (outcome \(result.outcome))")
         }
+    }
+}
+
+// MARK: - Round 3: rollover in the notification, the background edge, owner + consent, the gate after the read
+
+@MainActor
+final class UsageQARound3Tests: XCTestCase {
+    private var location: SpikeRunStorageLocation!
+    private var centers: [ResidentObservationCenter] = []
+    private var displacedSink: UsageSink?
+    private var displacedRecorder: FollowerTimingRecorder?
+
+    override func setUp() {
+        super.setUp()
+        location = .ephemeral(id: UUID())
+        displacedSink = UsageProbe.sink
+        displacedRecorder = FollowerTiming.recorder
+        FollowerTiming.recorder = nil
+    }
+
+    override func tearDown() {
+        for center in centers { center.deactivate() }
+        centers = []
+        UsageProbe.sink = displacedSink
+        FollowerTiming.recorder = displacedRecorder
+        try? FileManager.default.removeItem(at: location.directory)
+        super.tearDown()
+    }
+
+    private func center(clock: QABox<Date>, media: QABox<Double>, owner: QABox<String?>? = nil,
+                        countsLaunchSession: Bool = true) -> ResidentObservationCenter {
+        let made = UsageQARig.makeCenter(location: location, clock: clock, media: media,
+                                         countsLaunchSession: countsLaunchSession, owner: owner)
+        centers.append(made)
+        return made
+    }
+
+    /// Back after midnight, Control Center comes down before the app ever
+    /// became active, then it becomes active and the user leaves the detail.
+    /// One return, on the new day; Control Center time is foreground time.
+    func testAMidnightReturnThatResignsBeforeBecomingActiveIsOneSessionOnTheNewDay() throws {
+        let clock = QABox(UsageQARig.at(23, 50))
+        let media = QABox(0.0)
+        let made = center(clock: clock, media: media)
+        UsageProbe.enter(.eventDetailCanvas)
+        clock.value = UsageQARig.at(23, 51); media.value = 60
+        UsageQARig.post(UIApplication.willResignActiveNotification)
+        UsageQARig.post(UIApplication.didEnterBackgroundNotification)
+
+        clock.value = UsageQARig.at(0, 10, nextDay: true); media.value = 1260
+        UsageQARig.post(UIApplication.willEnterForegroundNotification)
+        media.value = 1262
+        UsageQARig.post(UIApplication.willResignActiveNotification)
+        media.value = 1264
+        UsageQARig.post(UIApplication.didBecomeActiveNotification)
+        media.value = 1270
+        UsageProbe.leave(.eventDetail)
+        made.flushDaily()
+
+        let records = UsageQARig.records(location)
+        XCTAssertEqual(records.count, 2)
+        guard records.count == 2 else { return }
+        let (old, new) = (records[0], records[1])
+        XCTAssertEqual(UsageQARig.number(old, "sessions"), 1)
+        XCTAssertNil(old.metrics["usage.event_detail.dwell"])
+        XCTAssertEqual(UsageQARig.number(new, "sessions"), 1, "one return, counted once, on the new day")
+        XCTAssertEqual(UsageQARig.histogram(new, "usage.event_detail.dwell"), UsageQARig.oneVisit(in: UsageQARig.specBucket(70)),
+                       "60 s before, 10 s after the return; Control Center is foreground time")
+        XCTAssertEqual(UsageQARig.number(new, "usage.event_detail.abandon"), 1)
+    }
+
+    /// The foreground session runs across midnight. Control Center at
+    /// 23:59:59 flushes (the resign edge); at 00:00:01 the detail is left
+    /// (held for the hop) and the app goes straight to the background, in
+    /// the same turn, before the hop runs. The new day still gets the
+    /// session that crossed midnight and the visit's settle.
+    func testTheBackgroundEdgeAfterAResignFlushRollsOverBeforeTheClockStops() throws {
+        let clock = QABox(UsageQARig.at(23, 59, 0))
+        let media = QABox(0.0)
+        let made = center(clock: clock, media: media)
+        UsageProbe.enter(.eventDetailCanvas)
+        clock.value = UsageQARig.at(23, 59, 59); media.value = 59
+        UsageQARig.post(UIApplication.willResignActiveNotification)
+        clock.value = UsageQARig.at(0, 0, 1, nextDay: true); media.value = 61
+        UsageProbe.leave(.eventDetail)
+        UsageQARig.post(UIApplication.didEnterBackgroundNotification)
+        UsageQARig.pump(0.2)
+        made.flushDaily()
+
+        let records = UsageQARig.records(location)
+        XCTAssertEqual(records.count, 2)
+        guard records.count == 2 else { return }
+        let new = records[1]
+        XCTAssertEqual(UsageQARig.number(new, "sessions"), 1, "the session that crossed midnight is the new day's denominator")
+        XCTAssertEqual(UsageQARig.number(new, "usage.event_detail.abandon"), 1)
+        XCTAssertEqual(UsageQARig.histogram(new, "usage.event_detail.dwell"), UsageQARig.oneVisit(in: UsageQARig.specBucket(61)))
+    }
+
+    /// Both daily files compact at the background edge and not at a resign
+    /// (Control Center keeps the app on screen). Nothing counted is lost by
+    /// the rewrite: a relaunch adopts exactly today's counts.
+    func testTheUsageFileCompactsAtTheBackgroundEdgeOnlyAndKeepsTodaysCounts() throws {
+        for i in 0..<520 {
+            let start = UsageQARig.at(10, 0).addingTimeInterval(-Double(30 + i) * 86_400)
+            var old = TelemetryFixtures.run(spikeID: UsageRecordIDs.spikeID, scenarioID: UsageRecordIDs.scenarioID,
+                                            startedAt: start, endedAt: start.addingTimeInterval(60), appBuild: "29",
+                                            metrics: ["sessions": .number(3), "usage.all_day.use": .number(1),
+                                                      "usage.create.dwell": .string("1 2 3 4")])
+            old.dayKey = "old-\(i)"
+            XCTAssertTrue(SpikeRunStore.finishRun(old, owner: .explicit(UsageQARig.uid), location: location, compactsWhenFull: false))
+        }
+        let url = SpikeRunStore.fileURL(spikeID: UsageRecordIDs.spikeID, location: location)
+        func size() -> Int { ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber)?.intValue ?? 0 }
+        XCTAssertGreaterThanOrEqual(size(), SpikeRunStore.compactAtBytes, "fixture: the file is past the compaction size")
+
+        let clock = QABox(UsageQARig.at(10, 0))
+        let media = QABox(0.0)
+        let made = center(clock: clock, media: media)
+        UsageProbe.enter(.createPlus)
+        media.value = 12
+        UsageProbe.leave(.create, via: .createDismiss)
+        UsageProbe.use(.allDayToggle)
+        UsageQARig.post(UIApplication.willResignActiveNotification)
+        XCTAssertGreaterThanOrEqual(size(), SpikeRunStore.compactAtBytes, "a resign (Control Center) does not rewrite the file")
+        let written = made.usage.counts.metrics
+        UsageQARig.post(UIApplication.didEnterBackgroundNotification)
+        XCTAssertLessThan(size(), SpikeRunStore.compactAtBytes, "the background edge compacts it")
+
+        made.deactivate()
+        let relaunched = center(clock: QABox(UsageQARig.at(10, 30)), media: QABox(0), countsLaunchSession: false)
+        XCTAssertEqual(relaunched.usage.counts.metrics, written, "the relaunch adopts today's line as written before the rewrite")
+    }
+
+    /// A visit is open, the account changes, and before any flush notices
+    /// it the user turns sharing on (the consent re-mint). The visit was the
+    /// first owner's: it settles in neither owner's record.
+    func testAnOwnerChangeThenConsentWithAVisitOpenSettlesItNowhere() throws {
+        let owner = QABox<String?>(UsageQARig.uid)
+        let clock = QABox(UsageQARig.at(10, 0))
+        let media = QABox(0.0)
+        let made = center(clock: clock, media: media, owner: owner)
+        UsageProbe.enter(.eventDetailCanvas)
+        media.value = 30
+        owner.value = "99999999-2222-4333-8444-555555555555"
+        clock.value = UsageQARig.at(10, 1)
+        made.remintDailyForConsent()
+        media.value = 40
+        UsageProbe.leave(.eventDetail)
+        made.flushDaily()
+
+        let records = UsageQARig.records(location)
+        let first = records.filter { $0.ownerUID == UsageQARig.uid }
+        let second = records.filter { $0.ownerUID == "99999999-2222-4333-8444-555555555555" }
+        XCTAssertEqual(first.compactMap { UsageQARig.number($0, "usage.event_detail.enter.canvas") }.reduce(0, +), 1,
+                       "the enter is the first owner's")
+        XCTAssertFalse(second.isEmpty, "fixture: the second owner has a line")
+        for record in first + second {
+            XCTAssertNil(record.metrics["usage.event_detail.abandon"], "the old visit settles nowhere (\(record.ownerUID ?? "nil"))")
+            XCTAssertNil(record.metrics["usage.event_detail.dwell"])
+        }
+        XCTAssertFalse(made.usage.isVisitOpen(.eventDetail))
+    }
+
+    /// The upload switch is turned off while a batch is reading the files:
+    /// zero requests. Positive control: the same batch with the switch left on.
+    private func batch(turningTheSwitchOffDuringTheRead: Bool) async throws -> (outcome: TelemetryUploadOutcome, rows: Int) {
+        let made = center(clock: QABox(UsageQARig.at(10, 0)), media: QABox(0))
+        UsageProbe.enter(.createPlus)
+        UsageProbe.leave(.create, via: .createCancel)
+        made.flushDaily()
+
+        let suite = "UsageQASwitchRace-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var deps = TelemetryUploader.Dependencies()
+        deps.defaults = defaults
+        deps.location = location
+        let later = UsageQARig.at(11, 0)
+        deps.now = { later }
+        deps.launchDelay = 0
+        deps.makeKeepAlive = { nil }
+        deps.bootstrapOwner = { nil }
+        let flip = turningTheSwitchOffDuringTheRead
+        let reads = QABox(0)
+        deps.readRecords = { urls, retention in
+            await MainActor.run {
+                reads.value += 1
+                if flip { defaults.set(false, forKey: AppSettingsKeys.telemetryUploadsEnabled) }
+            }
+            return urls.flatMap { SpikeRunStore.readRuns(at: $0, retention: retention) }
+        }
+        let uploader = TelemetryUploader(dependencies: deps)
+        let server = SyncFakeServer(userId: UsageQARig.uid)
+        let user = UsageQARig.uid
+        uploader.attach(TelemetryUploader.Attachment(gateway: server, isBlockedByBuild: { false },
+                                                     currentUserID: { user }, isSignedIn: { true }))
+        defaults.set(true, forKey: AppSettingsKeys.telemetryUploadsEnabled)
+        TelemetryConsentStore.recordGrant(defaults, at: UsageQARig.at(9, 0))
+        let outcome = await uploader.uploadNow(trigger: .deckOpen)
+        XCTAssertGreaterThanOrEqual(reads.value, 1, "readiness: the batch read the files through the seam")
+        return (outcome, server.telemetryRowCount())
+    }
+
+    func testTheSwitchTurnedOffDuringTheBatchReadSendsNothing() async throws {
+        let result = try await batch(turningTheSwitchOffDuringTheRead: true)
+        XCTAssertEqual(result.rows, 0, "switched off mid-read: zero requests (outcome \(result.outcome))")
+    }
+
+    func testPositiveControlTheSwitchLeftOnSends() async throws {
+        let result = try await batch(turningTheSwitchOffDuringTheRead: false)
+        XCTAssertGreaterThan(result.rows, 0, "outcome \(result.outcome)")
     }
 }
