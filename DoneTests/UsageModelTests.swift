@@ -277,10 +277,10 @@ final class UsageModelTests: XCTestCase {
         XCTAssertEqual(count(tracker, "usage.create.abandon.cancel"), 1)
     }
 
-    /// A use or done arriving after its visit settled — a write the surface
-    /// deferred until it was gone — is not counted: the visit was already
-    /// settled without it. A use declared as happening outside the feature's
-    /// visits (repeat picked in an event form) is not stray.
+    /// A use arriving after its visit settled — a write the surface deferred
+    /// until it was gone — is not counted: the visit was already settled
+    /// without it. A use declared as happening outside the feature's visits
+    /// (repeat picked in an event form) is not stray.
     func testAUseAfterTheVisitSettledIsStrayAndNotCounted() {
         var tracker = UsageTracker()
         tracker.enterForeground(at: 0)
@@ -291,11 +291,6 @@ final class UsageModelTests: XCTestCase {
         XCTAssertEqual(count(tracker, "usage.event_detail.use.todo"), 0, "after the settle: stray")
         XCTAssertEqual(count(tracker, "usage.event_detail.use.plan"), 0)
         XCTAssertEqual(count(tracker, "usage.event_detail.abandon"), 1)
-
-        tracker.enter(.createPlus, at: 2)
-        tracker.leave(.create, via: .createDismiss, at: 3)
-        tracker.done(.create)
-        XCTAssertEqual(count(tracker, "usage.create.done"), 0, "a done after the settle is stray too")
 
         tracker.enter(.repeatRuleEditor, at: 4)
         tracker.leave(.repeatRule, via: nil, at: 5)
@@ -310,6 +305,24 @@ final class UsageModelTests: XCTestCase {
         var fresh = UsageTracker()
         fresh.use(.focusExtend)
         XCTAssertEqual(count(fresh, "usage.focus.use.extend"), 1)
+    }
+
+    /// A done is recorded at a user action on a form that is on screen, and
+    /// the form can outlive the visit it opened under: the reminder AI opens
+    /// its visit at the tap and shows the form when the AI answers. Another
+    /// create opened and closed in that wait leaves the reminder's Done, and
+    /// its attributes, counted.
+    func testADoneOnAFormThatOutlivedItsVisitIsCounted() {
+        var tracker = UsageTracker()
+        tracker.enterForeground(at: 0)
+        tracker.enter(.createReminderAI, at: 0)
+        tracker.enter(.createPlus, at: 1)
+        tracker.leave(.create, via: .createCancel, at: 2)
+        tracker.done(.create)
+        tracker.done(.createRepeat)
+        XCTAssertEqual(count(tracker, "usage.create.done"), 1)
+        XCTAssertEqual(count(tracker, "usage.create.done.repeat"), 1)
+        XCTAssertEqual(count(tracker, "usage.create.abandon.cancel"), 1, "the create that closed is still the abandoned one")
     }
 
     func testDroppingTheOpenVisitsMakesTheirLateWritesStrayAndSettlesNothing() {

@@ -633,7 +633,7 @@ final class UsageEraseThroughTheEraserTests: XCTestCase {
         made.activate()
         center = made
         XCTAssertTrue(ResidentObservationCenter.shared === made, "fixture: the eraser reaches this center")
-        UsageProbe.enter(.createDrag)
+        UsageProbe.enter(.eventDetailCanvas)
         UsageProbe.use(.repeatForm)
         made.flushDaily()
         XCTAssertEqual(SpikeRunStore.loadRuns(spikeID: UsageRecordIDs.spikeID, location: pool).count, 1,
@@ -641,8 +641,8 @@ final class UsageEraseThroughTheEraserTests: XCTestCase {
 
         makeEraser().resetAllLocalData(keepingSession: true)
 
-        UsageProbe.done(.create)                         // a late write for the erased owner's visit
-        UsageProbe.leave(.create, via: .createCancel)    // and that visit's end
+        UsageProbe.use(.eventDetailPlan)                 // a late write for the erased owner's visit
+        UsageProbe.leave(.eventDetail)                   // and that visit's end
         made.flushDaily()
         let after = try XCTUnwrap(SpikeRunStore.loadRuns(spikeID: UsageRecordIDs.spikeID, location: pool).first)
         XCTAssertEqual(SpikeRunStore.loadRuns(spikeID: UsageRecordIDs.spikeID, location: pool).count, 1, "only the new day's line")

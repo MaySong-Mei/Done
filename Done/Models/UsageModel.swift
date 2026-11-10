@@ -666,9 +666,13 @@ struct UsageTracker: Equatable {
     /// current record — the "at most once per session" latch.
     private(set) var availableCounted: [Bool] = Array(repeating: false, count: UsageGate.allCases.count)
     /// Per feature: its last visit has ended (settled, or dropped on an owner
-    /// change or erase) and no new one has begun. A use or done arriving in
-    /// that gap is a late write from a surface that is already gone — the
-    /// visit it belonged to was settled without it — and is not counted.
+    /// change or erase) and no new one has begun. A use arriving in that gap
+    /// is a late write from a surface that is already gone — the visit it
+    /// belonged to was settled without it — and is not counted. A `done` is
+    /// not judged by it: it is recorded at a user action on a form that is
+    /// on screen, which can outlive the visit it opened under (the reminder
+    /// AI opens its visit at the tap, the form appears when the AI answers,
+    /// and another create can open and close in between).
     private(set) var closedAwaitingEnter: [Bool] = Array(repeating: false, count: UsageFeature.allCases.count)
 
     init() {}
@@ -707,12 +711,11 @@ struct UsageTracker: Equatable {
         let layout = UsageLayout.shared
         let i = Int(done.rawValue)
         let feature = layout.doneFeature[i]
-        guard !isStray(feature) else { return }
         bump(layout.doneSlot[i])
         touch(feature)
     }
 
-    /// A use or done for a feature whose visit has already ended.
+    /// A use for a feature whose visit has already ended.
     private func isStray(_ feature: UsageFeature) -> Bool {
         let f = Int(feature.rawValue)
         return visits[f] == nil && closedAwaitingEnter[f]

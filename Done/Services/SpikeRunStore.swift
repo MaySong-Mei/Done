@@ -251,9 +251,9 @@ enum SpikeRunStore {
     }
 
     /// `compactsWhenFull: false` leaves a file past `compactAtBytes` for a
-    /// later append that allows it — a writer on a path the user is looking
-    /// at defers the rewrite to one that is not (usage-daily: the lifecycle
-    /// edges). Readers apply the count cap either way.
+    /// later `compactIfNeeded` — a writer on a path the user is looking at
+    /// defers the rewrite to one that is not (the resident center: its
+    /// background edge). Readers apply the count cap either way.
     @discardableResult
     static func finishRun(_ run: SpikeRun, owner: OwnerStamp = .fromProvider, location: SpikeRunStorageLocation = .production,
                           compactsWhenFull: Bool = true) -> Bool {
@@ -484,7 +484,7 @@ enum SpikeRunStore {
     /// `maxRunsPerSpike` tiny lines until it crosses `compactAtBytes`;
     /// readers still see at most the cap (`loadRuns` applies retention),
     /// and the byte threshold bounds the file regardless.
-    private static func compactIfNeeded(spikeID: String, location: SpikeRunStorageLocation) {
+    static func compactIfNeeded(spikeID: String, location: SpikeRunStorageLocation) {
         let url = fileURL(spikeID: spikeID, location: location)
         let size = ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber)?.intValue ?? 0
         guard size >= compactAtBytes else { return }
