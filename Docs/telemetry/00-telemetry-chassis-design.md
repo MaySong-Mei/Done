@@ -444,7 +444,7 @@ RLS:authenticated `select / insert / update` 自己的行(`user_id = (select aut
 - `repeat.use.form` 发生在新建 / 编辑表单里,不在任何 rule_editor 访问内;`v_usage_suspicious` 的 `missing_enter` 对 repeat 要排除这个键,否则「只在表单里选了重复」的日子会被误标。
 - 预建选择器(confirm-before-tracking 打开时点类型)单独成一个功能 `focus_precreate`:入口 `pill`,Begin 为 `done`,Cancel(或预建还开着时离开 focus)为 `abandon`。这样「预建放弃」不会和「focus 一次访问没动手」混在同一个 `focus.abandon` 里。focus 本身没有 `done`。
 
-**`sessions`(分母)的确切定义**:一条记录的 `sessions` = 该记录存续期间开始的前台会话数 + 记录铸出时已经在前台运行的那个会话(1 或 0)。前台会话开始 = 冷启动时进程已在前台(激活中心那一刻 `applicationState != .background`),或 `didEnterBackground` 之后第一次 `willEnterForeground` / `didBecomeActive`(两个通知只算一次)。没有 `didEnterBackground` 在前的 `didBecomeActive`(控制中心、Face ID、系统弹窗)不算。「铸出时已在前台」覆盖午夜跨天、进程内换账号、同意重铸、擦除:那天 / 那个账号仍有分母,代价是跨午夜的一个会话两天各记一次。回到前台的那一下先做跨天检查,午夜后回来的会话记在新的一天。
+**`sessions`(分母)的确切定义**:一条记录的 `sessions` = 该记录存续期间开始的前台会话数 + 记录铸出时已经在前台运行、且本进程已计过数的那个会话(1 或 0;测试宿主那种本进程没计过的前台不带入)。前台会话开始 = 冷启动时进程已在前台(激活中心那一刻 `applicationState != .background`),或 `didEnterBackground` 之后第一次 `willEnterForeground` / `didBecomeActive`(两个通知只算一次)。没有 `didEnterBackground` 在前的 `didBecomeActive`(控制中心、Face ID、系统弹窗)不算。「铸出时已在前台」覆盖午夜跨天、进程内换账号、同意重铸、擦除:那天 / 那个账号仍有分母,代价是跨午夜的一个会话两天各记一次。回到前台的那一下先做跨天检查,午夜后回来的会话记在新的一天。
 
 **访问与停留**
 - 每个有入口的功能同一时刻最多一个打开的访问,只在内存里(进入时的媒体时钟、累计前台秒数、是否动过手)。离开时结算:停留档 + 没动过手则放弃(或放弃路线)+ focus 的离开路线。

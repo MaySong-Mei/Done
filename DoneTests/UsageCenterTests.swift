@@ -104,6 +104,22 @@ final class UsageCenterTests: XCTestCase {
 
     // MARK: The record
 
+    /// A center whose launch session was not counted (the test host's)
+    /// carries nothing into a re-minted record: the consent re-mint writes no
+    /// usage line of its own. Positive control: a counted launch is carried.
+    func testOnlyACountedSessionIsCarriedIntoAReMintedRecord() throws {
+        let uncounted = makeCenter(clock: Box(morning), media: Box(0))
+        uncounted.remintDailyForConsent()
+        XCTAssertEqual(usageRecords().count, 0, "no session was counted, so there is nothing to carry")
+        uncounted.deactivate()
+
+        let counted = makeCenter(clock: Box(morning.addingTimeInterval(60)), media: Box(0), countsLaunchSession: true)
+        counted.remintDailyForConsent()
+        let records = usageRecords()
+        XCTAssertEqual(records.count, 2, "the launch's line, closed, and the consent line")
+        XCTAssertTrue(records.allSatisfy { n($0, "sessions") == 1 }, "the running session is the re-minted line's denominator")
+    }
+
     func testTheUsageRecordRidesTheResidentsClaimDayAndFlush() throws {
         let clock = Box(morning)
         let media = Box(100.0)
@@ -313,7 +329,7 @@ final class UsageCenterTests: XCTestCase {
     func testRolloverClosesTheUsageLineAtTheDayEndAndTheNewDayStartsWithTheRunningSession() throws {
         let clock = Box(morning)
         let media = Box(0.0)
-        let center = makeCenter(clock: clock, media: media)
+        let center = makeCenter(clock: clock, media: media, countsLaunchSession: true)
         UsageProbe.use(.allDayToggle)
         UsageProbe.enter(.focusAuto)
         center.flushDaily()
@@ -352,7 +368,7 @@ final class UsageCenterTests: XCTestCase {
 
     /// The eraser's two calls for this, in its order (see `ResidentEraseTests`).
     func testTheEraseForgetsTheCountsAndTheOpenVisits() throws {
-        let center = makeCenter(clock: Box(morning), media: Box(0))
+        let center = makeCenter(clock: Box(morning), media: Box(0), countsLaunchSession: true)
         UsageProbe.enter(.createDrag)
         UsageProbe.use(.repeatForm)
         center.flushDaily()

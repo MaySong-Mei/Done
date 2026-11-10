@@ -555,6 +555,10 @@ struct UsageTracker: Equatable {
     /// Between a launch or a return from background and the next
     /// `didEnterBackground`. Starts false: the center decides at activation.
     private(set) var inForeground = false
+    /// Whether the foreground stretch running now was counted as a session.
+    /// Only such a session is carried into a newly minted record; one this
+    /// process never counted (a test host's launch) is not.
+    private(set) var runningSessionCounted = false
 
     init() {}
 
@@ -641,6 +645,7 @@ struct UsageTracker: Equatable {
     /// `didEnterBackground`: every open visit's clock stops.
     mutating func enterBackground(at now: Double) {
         inForeground = false
+        runningSessionCounted = false
         for f in visits.indices {
             guard var visit = visits[f], let since = visit.runningSince else { continue }
             visit.foregroundSeconds += max(0, now - since)
@@ -659,6 +664,7 @@ struct UsageTracker: Equatable {
     mutating func enterForeground(at now: Double) -> Bool {
         guard !inForeground else { return false }
         inForeground = true
+        runningSessionCounted = true
         bump(UsageLayout.sessionsSlot)
         for f in visits.indices where visits[f] != nil && visits[f]!.runningSince == nil {
             visits[f]!.runningSince = now
@@ -671,6 +677,7 @@ struct UsageTracker: Equatable {
     /// test host): the clock runs, no session is counted.
     mutating func assumeForeground() {
         inForeground = true
+        runningSessionCounted = false
     }
 
     /// A new record (day, owner, consent): the counts start over; open
@@ -680,7 +687,7 @@ struct UsageTracker: Equatable {
     mutating func resetCountsForNewRecord() {
         counts = UsageCounts()
         changeCount &+= 1
-        if inForeground { bump(UsageLayout.sessionsSlot) }
+        if runningSessionCounted { bump(UsageLayout.sessionsSlot) }
     }
 
     /// Relaunch seed: today's record as it was last written.
@@ -695,7 +702,7 @@ struct UsageTracker: Equatable {
         visits = Array(repeating: nil, count: UsageFeature.allCases.count)
         exitHints = Array(repeating: nil, count: UsageFeature.allCases.count)
         changeCount &+= 1
-        if inForeground { bump(UsageLayout.sessionsSlot) }
+        if runningSessionCounted { bump(UsageLayout.sessionsSlot) }
     }
 }
 

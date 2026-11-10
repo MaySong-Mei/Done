@@ -268,6 +268,11 @@ final class UsageModelTests: XCTestCase {
         tracker.enterBackground(at: 60)
         tracker.resetCountsForNewRecord()
         XCTAssertEqual(tracker.counts.metrics, [:], "nothing is running in the background")
+
+        var host = UsageTracker()
+        host.assumeForeground()
+        host.resetCountsForNewRecord()
+        XCTAssertEqual(host.counts.metrics, [:], "a foreground this process never counted is not carried")
     }
 
     func testForgetAllDropsTheOpenVisitsWithTheCounts() {
