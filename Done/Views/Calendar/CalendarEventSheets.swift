@@ -121,10 +121,16 @@ struct CreateCalendarEventView: View {
                     snapshot: pendingSnapshot
                 )
                 onDraftSlotSettled?()
+                // gh#273 §6.3: the form's session end is the create visit's
+                // end. Done and Cancel both end explicitly (no snapshot); a
+                // Done already marked the visit used, so only Cancel abandons.
+                // Any other end is a dismissal (a swipe down, a tap outside).
+                UsageProbe.leave(.create, via: pendingSnapshot == nil ? .createCancel : .createDismiss)
             }
         ) { form in
             let event = EventLogTemplateAdvisor().applySuggestion(to: form.toEvent())
             store.addCalendarEvent(event, creationMotion: .local)
+            CreateCalendarEventView.recordDoneUsage(of: event)
             // The event is committed — consume the draft NOW rather than
             // leaning on `onDisappear` to clear it. Without this, a crash in
             // the gap between Done and teardown would leave a rescue for an
@@ -157,6 +163,14 @@ struct CreateCalendarEventView: View {
                 )
             }
         }
+    }
+
+    /// gh#273 §6.3: Done, with what the saved event carries.
+    static func recordDoneUsage(of event: Event) {
+        UsageProbe.done(.create)
+        if event.isRecurringSeries { UsageProbe.done(.createRepeat) }
+        if event.isAllDay { UsageProbe.done(.createAllDay) }
+        if event.note.contains(where: { !$0.isWhitespace }) { UsageProbe.done(.createNote) }
     }
 
     /// Carries out a slot action decided by `calendarCreateDraftSlotAction` /

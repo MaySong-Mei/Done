@@ -643,6 +643,10 @@ struct CalendarSearchView: View {
             CalendarEventDetailView(route: route)
                 .environmentObject(store)
         }
+        // gh#273 §6.3: the detail's visit ends when it is popped back here.
+        .onChange(of: detailRoute) { oldValue, newValue in
+            if oldValue != nil, newValue == nil { UsageProbe.leave(.eventDetail) }
+        }
         .onChange(of: query) { _, newValue in
             applyQueryChange(newValue)
         }
@@ -894,10 +898,12 @@ struct CalendarSearchView: View {
     }
 
     private func openEvent(_ context: CalendarEventOccurrenceContext) {
+        UsageProbe.enter(.eventDetailSearch)
         detailRoute = CalendarEventDetailRoute(occurrence: context)
     }
 
     private func openOccurrenceLog(_ context: CalendarEventOccurrenceContext) {
+        UsageProbe.enter(.eventDetailSearch)
         detailRoute = CalendarEventDetailRoute(occurrence: context, initialJumpTarget: .log)
     }
 

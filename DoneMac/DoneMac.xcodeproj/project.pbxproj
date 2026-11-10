@@ -15,6 +15,7 @@
 		DAC1B000000000000000004E /* WristDay.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000004E /* WristDay.swift */; };
 		DAC1B000000000000000004D /* WristStatsRules.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000004D /* WristStatsRules.swift */; };
 		DAC1B000000000000000004C /* TelemetryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000004C /* TelemetryModel.swift */; };
+		DAC1B0000000000000000U01 /* UsageModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000U01 /* UsageModel.swift */; };
 		DAC1B000000000000000004B /* EventResizeTweenState.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000004B /* EventResizeTweenState.swift */; };
 		DAC1B000000000000000004A /* EventDeletionMotionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F000000000000000004A /* EventDeletionMotionState.swift */; };
 		DAC1B0000000000000000049 /* EventCreationMotionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC1F0000000000000000049 /* EventCreationMotionState.swift */; };
@@ -212,6 +213,7 @@
 		DAC1F000000000000000004E /* WristDay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WristDay.swift; path = "../Done/../Shared/WristDay.swift"; sourceTree = SOURCE_ROOT; };
 		DAC1F000000000000000004D /* WristStatsRules.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WristStatsRules.swift; path = "../Done/../Shared/WristStatsRules.swift"; sourceTree = SOURCE_ROOT; };
 		DAC1F000000000000000004C /* TelemetryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TelemetryModel.swift; path = "../Done/Models/TelemetryModel.swift"; sourceTree = SOURCE_ROOT; };
+		DAC1F0000000000000000U01 /* UsageModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = UsageModel.swift; path = "../Done/Models/UsageModel.swift"; sourceTree = SOURCE_ROOT; };
 		DAC1F000000000000000004B /* EventResizeTweenState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = EventResizeTweenState.swift; path = "../Done/Views/Calendar/Components/Timeline/EventResizeTweenState.swift"; sourceTree = SOURCE_ROOT; };
 		DAC1F000000000000000004A /* EventDeletionMotionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = EventDeletionMotionState.swift; path = "../Done/Views/Calendar/Components/Timeline/EventDeletionMotionState.swift"; sourceTree = SOURCE_ROOT; };
 		DAC1F0000000000000000049 /* EventCreationMotionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = EventCreationMotionState.swift; path = "../Done/Views/Calendar/Components/Timeline/EventCreationMotionState.swift"; sourceTree = SOURCE_ROOT; };
@@ -494,6 +496,7 @@ DAC2F0000000000000000001 /* MacTestStore.swift */ = {isa = PBXFileReference; las
 				DAC1F000000000000000004E /* WristDay.swift */,
 				DAC1F000000000000000004D /* WristStatsRules.swift */,
 				DAC1F000000000000000004C /* TelemetryModel.swift */,
+				DAC1F0000000000000000U01 /* UsageModel.swift */,
 				DAC1F000000000000000004B /* EventResizeTweenState.swift */,
 				DAC1F000000000000000004A /* EventDeletionMotionState.swift */,
 				DAC1F0000000000000000049 /* EventCreationMotionState.swift */,
@@ -818,6 +821,7 @@ DAC2F0000000000000000001 /* MacTestStore.swift */ = {isa = PBXFileReference; las
 				DAC1B000000000000000004E /* WristDay.swift in Sources */,
 				DAC1B000000000000000004D /* WristStatsRules.swift in Sources */,
 				DAC1B000000000000000004C /* TelemetryModel.swift in Sources */,
+				DAC1B0000000000000000U01 /* UsageModel.swift in Sources */,
 				DAC1B000000000000000004B /* EventResizeTweenState.swift in Sources */,
 				DAC1B000000000000000004A /* EventDeletionMotionState.swift in Sources */,
 				DAC1B0000000000000000049 /* EventCreationMotionState.swift in Sources */,

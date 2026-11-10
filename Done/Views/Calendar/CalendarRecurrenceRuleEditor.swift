@@ -222,6 +222,7 @@ struct CalendarRecurrenceRuleEditor: View {
     }
 
     private func save() {
+        UsageProbe.done(.repeatRule)
         let scope: Event.RecurrenceEditScope = followingSelected ? .following : .all
         store.applyRecurringEdit(
             seriesEvent: series,
@@ -276,6 +277,7 @@ struct CalendarRecurrenceRuleEditor: View {
     }
 
     private func deleteSeries() {
+        UsageProbe.use(.repeatDeleteSeries)
         store.deleteRecurringCalendarEvent(
             seriesEvent: series,
             occurrenceDate: occurrenceDate,

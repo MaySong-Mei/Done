@@ -567,14 +567,27 @@ struct ArchivedFeaturesView: View {
     var body: some View {
         settingsPage(L(.archivedFeatures)) {
             settingsCard(spacing: 14) {
-                Toggle(L(.focusMode), isOn: $focusEnabled)
-                Toggle(L(.archivedTodoStack), isOn: $todoStackEnabled)
-                Toggle(L(.tabWanna), isOn: $wannaEnabled)
-                Toggle(L(.tabReport), isOn: $reportEnabled)
+                Toggle(L(.focusMode), isOn: Self.userToggle($focusEnabled, .focus))
+                Toggle(L(.archivedTodoStack), isOn: Self.userToggle($todoStackEnabled, .todoStack))
+                Toggle(L(.tabWanna), isOn: Self.userToggle($wannaEnabled, .wanna))
+                Toggle(L(.tabReport), isOn: Self.userToggle($reportEnabled, .report))
 
                 settingsHintText(L(.hintArchivedFeatures))
             }
         }
+    }
+
+    /// gh#273 §6.3: the user's flip is counted in the Toggle's own setter —
+    /// the one writer that is the user. A reset or an erase writes the
+    /// switch straight into the defaults and never passes through here.
+    static func userToggle(_ binding: Binding<Bool>, _ gate: UsageGate) -> Binding<Bool> {
+        Binding(
+            get: { binding.wrappedValue },
+            set: { newValue in
+                if newValue != binding.wrappedValue { UsageProbe.switchToggled(gate, isOn: newValue) }
+                binding.wrappedValue = newValue
+            }
+        )
     }
 }
 

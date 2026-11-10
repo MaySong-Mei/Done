@@ -619,8 +619,14 @@ select pg_temp.rec('T23', 'v_metrickit_by_build over 4 release rows / 2 installs
 -- ============================================================
 \echo '--- T24'
 begin;
+-- `sessions` is a real registry key since the usage slice (key_registry.json):
+-- the bench row only fills in for a database loaded from an older JSON. The
+-- view reads the denominator from each row's metrics, not from the key's
+-- build range, so either row gives the same result below.
 insert into public.key_registry (key, kind, family, value_schema, since_build, retired_build, liveness_key, spike_id, description) values
-  ('sessions',  'counter', 'usage', 'number', 5, null, null,       'usage-daily', 'bench'),
+  ('sessions',  'counter', 'usage', 'number', 5, null, null,       'usage-daily', 'bench')
+on conflict (key) do nothing;
+insert into public.key_registry (key, kind, family, value_schema, since_build, retired_build, liveness_key, spike_id, description) values
   ('feature.a', 'counter', 'usage', 'number', 5, null, 'sessions', 'usage-daily', 'bench'),
   ('feature.b', 'counter', 'usage', 'number', 5, null, 'sessions', 'usage-daily', 'bench'),
   ('feature.c', 'counter', 'usage', 'number', 9, null, 'sessions', 'usage-daily', 'bench');

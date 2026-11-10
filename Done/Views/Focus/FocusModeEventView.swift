@@ -288,7 +288,7 @@ struct FocusModeEventView: View {
             TextField("What's happening?", text: $noteDraft)
                 .focused($noteFieldFocused)
                 .submitLabel(.send)
-                .onSubmit { commitNote() }
+                .onSubmit { commitNote(byUser: true) }
                 .onChange(of: noteFieldFocused) { _, focused in
                     if !focused && noteDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         isComposingNote = false
@@ -301,7 +301,7 @@ struct FocusModeEventView: View {
                         .fill(Color.secondary.opacity(0.10))
                 )
 
-            Button { commitNote() } label: {
+            Button { commitNote(byUser: true) } label: {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 30))
                     .foregroundStyle(
@@ -328,8 +328,11 @@ struct FocusModeEventView: View {
         }
     }
 
-    private func commitNote() {
+    /// `byUser`: the send button or the keyboard's send. The commits on
+    /// background and teardown save a typed draft; they are not a use.
+    private func commitNote(byUser: Bool = false) {
         guard let text = focusNoteCommitText(draft: noteDraft) else { return }
+        if byUser { UsageProbe.use(.focusNote) }
         onAddNote(text)
         noteCommitHaptic.selectionChanged()
         noteDraft = ""

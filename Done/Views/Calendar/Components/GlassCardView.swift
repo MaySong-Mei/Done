@@ -202,6 +202,12 @@ struct CalendarEffortScrubber: View {
     /// this can't carry the "untouched" nil -- non-optional on purpose
     /// (gh#162 W7).
     var onCommit: ((Int) -> Void)? = nil
+    /// The user's own end of a gesture — a release or a tap — with the
+    /// released value. Never for a cancellation: `.onEnded` does not run for
+    /// one (gh#162 W2), and this fires from `handleEnded` only. gh#273 §6.3
+    /// counts the effort use here, not at the commit, which a cancellation
+    /// and a backgrounding flush also reach.
+    var onRelease: ((Int) -> Void)? = nil
 
     private let stepCount = 5
 
@@ -340,6 +346,7 @@ struct CalendarEffortScrubber: View {
                 value = finalValue
             }
         }
+        onRelease?(finalValue)
     }
 
     /// THE single place `onCommit` fires -- for a normal release, a tap,

@@ -106,7 +106,8 @@ struct CalendarEffortQuickControl: View {
             CalendarEffortScrubber(
                 value: Binding(get: { liveEffort }, set: handleLiveValueChanged),
                 tint: tint,
-                onCommit: commitDrag
+                onCommit: commitDrag,
+                onRelease: handleRelease
             )
         }
         // Relocated from CalendarEventDetailView's own scenePhase handler
@@ -139,6 +140,15 @@ struct CalendarEffortQuickControl: View {
     /// actually matters: this call must never invoke `onCommit`.
     func handleLiveValueChanged(_ newValue: Int?) {
         dragValue = newValue
+    }
+
+    /// gh#273 §6.3: the user released the scrubber (`CalendarEffortScrubber.
+    /// onRelease`) — the one place the effort use is counted, and only when
+    /// the release moves the value off what is stored (a tap on the current
+    /// value changes nothing). `commitDrag` below never counts: a
+    /// cancellation and the backgrounding flush reach it too.
+    func handleRelease(_ releasedValue: Int) {
+        if releasedValue != storedEffort { UsageProbe.use(.eventDetailReflect) }
     }
 
     /// The single durable-write trigger this view has -- wired to

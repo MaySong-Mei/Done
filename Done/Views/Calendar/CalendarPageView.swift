@@ -1894,9 +1894,15 @@ struct CalendarPageView: View {
                 headerCapsulesVisible = true
             }
         }
-        .onChange(of: selectedEventDetailRoute) { _, newValue in
+        .onChange(of: selectedEventDetailRoute) { oldValue, newValue in
             if newValue != nil {
                 clearTimelineBoundaryExtensionState()
+            }
+            // gh#273 §6.3: the detail was popped (back, edge swipe, a dismiss
+            // from inside). Its own onDisappear is not the exit: it also
+            // fires when the detail pushes its chat page.
+            if oldValue != nil, newValue == nil {
+                UsageProbe.leave(.eventDetail)
             }
         }
         .onChange(of: dayRange) { oldRange, newRange in
@@ -2472,6 +2478,7 @@ private extension CalendarPageView {
                     anchorPoint: anchor.touchPointGlobal,
                     onViewDetails: {
                         if let occurrence = floatingMenuOccurrence {
+                            UsageProbe.enter(.eventDetailMenu)
                             selectedEventDetailRoute = CalendarEventDetailRoute(
                                 occurrence: occurrence,
                                 initialJumpTarget: .meta
@@ -2488,6 +2495,7 @@ private extension CalendarPageView {
                     } : nil,
                     onLogEvent: {
                         if let occurrence = floatingMenuOccurrence {
+                            UsageProbe.enter(.eventDetailMenu)
                             selectedEventDetailRoute = CalendarEventDetailRoute(
                                 occurrence: occurrence,
                                 initialJumpTarget: .log
@@ -3136,6 +3144,7 @@ private extension CalendarPageView {
             },
             onAddTap: {
                 clearFocus()
+                UsageProbe.enter(.createPlus)
                 let range = defaultQuickAddTimeRange()
                 pendingCreateTimeRange = PendingEventCreation(
                     date: range.start,
@@ -4743,6 +4752,7 @@ private extension CalendarPageView {
         cancelResizeGrace(reason: "timeline.tap")
         clearFocus(reason: "timeline.tap.openDetail")
         let source: CalendarEventOccurrenceContext.Source = event.isAllDay ? .allDayTap : .timelineTap
+        UsageProbe.enter(.eventDetailCanvas)
         selectedEventDetailRoute = CalendarEventDetailRoute(
             occurrence: makeOccurrenceContext(
                 event: event,
@@ -6079,6 +6089,7 @@ private extension CalendarPageView {
     func handleCreateEvent(on date: Date, timeRange: Event.TimeRange) {
         // Open create sheet - event will only be added when user saves
         // Preview will stay visible until sheet is dismissed
+        UsageProbe.enter(.createDrag)
         let anchorVisibleDate = visibleDate
         pendingCreateTimeRange = PendingEventCreation(
             date: date,
@@ -6165,6 +6176,8 @@ private extension CalendarPageView {
     func scheduleReminder(_ reminder: Reminder) {
         guard schedulingReminderID == nil else { return }
         schedulingReminderID = reminder.id
+        // The visit starts at the tap; the form opens after the AI answers.
+        UsageProbe.enter(.createReminderAI)
 
         // Default slot: the next top of the hour, one hour long.
         let calendar = Calendar.current
@@ -6180,6 +6193,7 @@ private extension CalendarPageView {
         let trimmedNote = reminder.note.trimmingCharacters(in: .whitespacesAndNewlines)
 
         func presentFallback() {
+            UsageProbe.count(.createAIFallback)
             pendingReminderSchedule = ReminderSchedulePrefill(
                 timeRange: baseRange,
                 title: reminder.title,
@@ -6889,6 +6903,7 @@ private extension CalendarPageView {
                         return
                     }
                     composerDraftBanner = nil
+                    UsageProbe.enter(.createResumeDraft)
                     pendingCreateTimeRange = PendingEventCreation(
                         date: fresh.startTime,
                         timeRange: Event.TimeRange(start: fresh.startTime, end: fresh.endTime),
@@ -6916,6 +6931,7 @@ private extension CalendarPageView {
                 .buttonStyle(.plain)
 
                 Button {
+                    UsageProbe.count(.createAbandonBanner)
                     CalendarComposerDraftStore.clear()
                     withAnimation(.easeOut(duration: 0.2)) {
                         composerDraftBanner = nil

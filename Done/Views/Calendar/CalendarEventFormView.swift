@@ -230,6 +230,15 @@ struct CalendarEventFormView: View {
         .onChange(of: title) {
             scheduleAutomaticTypeSelection()
         }
+        // gh#273 §6.3: the switch and the picker are these two states' only
+        // writers after init — a restored draft arrives through the initial
+        // values, which never fire onChange.
+        .onChange(of: isAllDay) {
+            UsageProbe.use(.allDayToggle)
+        }
+        .onChange(of: repeatUnit) { _, unit in
+            if unit != .none { UsageProbe.use(.repeatForm) }
+        }
         .onChange(of: note) {
             scheduleAutomaticTypeSelection()
         }

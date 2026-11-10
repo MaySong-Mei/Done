@@ -47,6 +47,7 @@ nonisolated enum TelemetryRecordKind: String, Codable, Equatable, CaseIterable {
     /// was a manual run.
     static func inferred(spikeID: String, scenarioID: String) -> TelemetryRecordKind {
         if spikeID == FixObservationRegistry.residentDailySpikeID { return .dailyRollup }
+        if spikeID == UsageRecordIDs.spikeID { return .dailyRollup }
         if scenarioID == FixObservationRegistry.windowScenarioID { return .window }
         return .manualRun
     }
@@ -495,6 +496,31 @@ enum TelemetryRedactor {
     static let observatoryFixedFormatStringKeys: Set<String> =
         ResidentCounterSet.fixedFormatStringKeys.union(ResidentWindowAggregates.fixedFormatStringKeys)
 
+    /// The usage dwell histograms (gh#273 §6.3): let through on `usage-daily`
+    /// rows only, never on another record's row.
+    static let usageFixedFormatStringKeys: Set<String> =
+        Set(UsageKey.all.filter { $0.kind == .histogram }.map(\.name))
+
+    /// A usage row's metrics, judged against the usage registry rather than
+    /// trusted: a key `UsageKey` does not declare is removed, a counter must
+    /// be a non-negative whole number, a dwell histogram must be exactly
+    /// four non-negative whole numbers. Applied to `usage-daily` rows on top
+    /// of the general metric rules.
+    static func usageMetricAllowed(key: String, value: Any) -> Bool {
+        guard let declared = UsageLayout.shared.keysByName[key] else { return false }
+        switch declared.kind {
+        case .counter:
+            guard let number = value as? NSNumber, !isBoolean(number) else { return false }
+            let n = number.doubleValue
+            return n >= 0 && n == n.rounded() && n < 1e12
+        case .histogram:
+            guard let text = value as? String else { return false }
+            let parts = text.split(separator: " ", omittingEmptySubsequences: false)
+            return parts.count == UsageDwell.bucketCount
+                && parts.allSatisfy { !$0.isEmpty && $0.count <= 12 && $0.allSatisfy { ("0"..."9").contains($0) } }
+        }
+    }
+
     /// Digits, dots and dashes: version strings and civil dates.
     private static let versionLike = CharacterSet(charactersIn: "0123456789.-")
     /// Hardware identifiers (`iPhone17,2`) and version-ish text.
@@ -510,6 +536,7 @@ enum TelemetryRedactor {
 
     static func redact(row: [String: Any], noteOptIn: Bool, allowedStringKeys: Set<String>) -> [String: Any] {
         var out: [String: Any] = [:]
+        let isUsageRow = (row["spike_id"] as? String) == UsageRecordIDs.spikeID
         for (key, value) in row {
             switch key {
             case "user_id", "run_id", "install_id":
@@ -534,7 +561,12 @@ enum TelemetryRedactor {
             case "day_tz_offset_min", "app_build", "revision":
                 if let number = value as? NSNumber, !isBoolean(number) { out[key] = number }
             case "metrics":
-                out[key] = redactMetrics(value as? [String: Any] ?? [:], allowedStringKeys: allowedStringKeys)
+                let allowed = isUsageRow ? allowedStringKeys.union(usageFixedFormatStringKeys) : allowedStringKeys
+                var metrics = redactMetrics(value as? [String: Any] ?? [:], allowedStringKeys: allowed)
+                if isUsageRow {
+                    metrics = metrics.filter { usageMetricAllowed(key: $0.key, value: $0.value) }
+                }
+                out[key] = metrics
             case "context":
                 out[key] = redactContext(value as? [String: Any] ?? [:])
             case "note":

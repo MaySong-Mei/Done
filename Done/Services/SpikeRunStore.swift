@@ -250,12 +250,26 @@ enum SpikeRunStore {
         return appendLine(run, spikeID: run.spikeID, owner: owner, location: location)
     }
 
+    /// `compactsWhenFull: false` leaves a file past `compactAtBytes` for a
+    /// later `compactIfNeeded` — a writer on a path the user is looking at
+    /// defers the rewrite to one that is not (the resident center: its
+    /// background edge). Readers apply the count cap either way.
     @discardableResult
-    static func finishRun(_ run: SpikeRun, owner: OwnerStamp = .fromProvider, location: SpikeRunStorageLocation = .production) -> Bool {
+    static func finishRun(_ run: SpikeRun, owner: OwnerStamp = .fromProvider, location: SpikeRunStorageLocation = .production,
+                          compactsWhenFull: Bool = true) -> Bool {
         precondition(run.endedAt != nil, "finishRun requires a closed record (endedAt set)")
         let wrote = appendLine(run, spikeID: run.spikeID, owner: owner, location: location)
-        compactIfNeeded(spikeID: run.spikeID, location: location)
+        if compactsWhenFull {
+            compactIfNeeded(spikeID: run.spikeID, location: location)
+        }
         return wrote
+    }
+
+    /// `loadRuns` for a file read off the main thread: the same whole-file
+    /// read, decode, collapse and count cap, touching no main-actor state.
+    nonisolated static func readRuns(at url: URL, retention: Int) -> [SpikeRun] {
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        return SpikeRunLog.applyRetention(SpikeRunLog.collapse(SpikeRunFileScan.records(in: data)), cap: retention)
     }
 
     /// Re-appends a run with an edited note. Legal on open or closed runs
@@ -470,7 +484,7 @@ enum SpikeRunStore {
     /// `maxRunsPerSpike` tiny lines until it crosses `compactAtBytes`;
     /// readers still see at most the cap (`loadRuns` applies retention),
     /// and the byte threshold bounds the file regardless.
-    private static func compactIfNeeded(spikeID: String, location: SpikeRunStorageLocation) {
+    static func compactIfNeeded(spikeID: String, location: SpikeRunStorageLocation) {
         let url = fileURL(spikeID: spikeID, location: location)
         let size = ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber)?.intValue ?? 0
         guard size >= compactAtBytes else { return }
