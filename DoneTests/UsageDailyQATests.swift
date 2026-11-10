@@ -764,6 +764,52 @@ final class UsageQADetailRealViewTests: XCTestCase {
         return found
     }
 
+    /// Editable text views on the pager page the window shows, wherever they
+    /// sit vertically: how much of the page fits above the fold depends on
+    /// the device's top safe area and on how full the record is (a set
+    /// completion and effort push the Note down). The pager's other page is
+    /// off to the side and is excluded.
+    private func editorsOnShownPage(text: String) -> [UITextView] {
+        guard let window else { return [] }
+        var found: [UITextView] = []
+        func walk(_ view: UIView) {
+            if let editor = view as? UITextView, editor.isEditable, !editor.isHidden, editor.window != nil {
+                let frame = editor.convert(editor.bounds, to: window)
+                if frame.maxX > window.bounds.minX, frame.minX < window.bounds.maxX, editor.text == text {
+                    found.append(editor)
+                }
+            }
+            view.subviews.forEach(walk)
+        }
+        walk(window)
+        return found
+    }
+
+    /// The one Note editor showing `text`, scrolled into view the way a user
+    /// reaches a Note below the fold (the page's own vertical scroll view,
+    /// never the pager), then required fully on screen.
+    private func noteEditor(showing text: String, _ what: String,
+                            file: StaticString = #filePath, line: UInt = #line) throws -> UITextView {
+        let window = try XCTUnwrap(window, file: file, line: line)
+        let candidates = editorsOnShownPage(text: text)
+        XCTAssertEqual(candidates.count, 1, "\(what): exactly one Note editor showing it on the shown page", file: file, line: line)
+        let editor = try XCTUnwrap(candidates.first, what, file: file, line: line)
+        var ancestor = editor.superview
+        while let view = ancestor {
+            if let scrollView = view as? UIScrollView, !scrollView.isPagingEnabled {
+                scrollView.scrollRectToVisible(editor.convert(editor.bounds, to: scrollView), animated: false)
+                break
+            }
+            ancestor = view.superview
+        }
+        window.layoutIfNeeded()
+        UsageQARig.pump(0.1)
+        XCTAssertTrue(window.bounds.contains(editor.convert(editor.bounds, to: window)),
+                      "\(what): the Note editor is fully on screen once scrolled to (frame \(editor.convert(editor.bounds, to: window)), window \(window.bounds))",
+                      file: file, line: line)
+        return editor
+    }
+
     private func makeCenter() -> ResidentObservationCenter {
         let made = ResidentObservationCenter(
             coordinator: SpikeSessionCoordinator(), store: nil, location: location,
@@ -801,8 +847,7 @@ final class UsageQADetailRealViewTests: XCTestCase {
         model.route = CalendarEventDetailRoute(occurrence: occ, initialJumpTarget: .log)
         UsageQARig.pump(1.2)
 
-        let editors = onScreen(UITextView.self).filter { $0.isEditable && $0.text == "first draft" }
-        XCTAssertEqual(editors.count, 1, "readiness: the reflection page's Note editor shows the loaded note")
+        _ = try noteEditor(showing: "first draft", "readiness: the reflection page's Note editor shows the loaded note")
         let opened = made.usage.counts.metrics
         let passesBefore = bodyPasses
         XCTAssertGreaterThan(passesBefore, 0, "readiness: the detail body ran")
@@ -832,8 +877,7 @@ final class UsageQADetailRealViewTests: XCTestCase {
         UsageProbe.enter(.eventDetailCanvas)
         model.route = CalendarEventDetailRoute(occurrence: occ, initialJumpTarget: .log)
         UsageQARig.pump(1.2)
-        let editor = try XCTUnwrap(onScreen(UITextView.self).first { $0.isEditable && $0.text == "rewritten by the agent" },
-                                   "the reopened detail loaded the agent's note")
+        let editor = try noteEditor(showing: "rewritten by the agent", "the reopened detail loaded the agent's note")
         _ = editor.becomeFirstResponder()
         editor.selectedRange = NSRange(location: (editor.text as NSString).length, length: 0)
         editor.insertText("!")
